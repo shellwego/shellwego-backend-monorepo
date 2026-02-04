@@ -44,7 +44,7 @@ impl OperatorManager {
 
     /// Watch for custom resource changes
     pub async fn watch_resources(&self) -> Result<(), OperatorError> {
-        // TODO: Subscribe to NATS for Database CRUD events
+        // TODO: Subscribe to QUIC for Database CRUD events
         // TODO: Trigger reconciliation
         unimplemented!("OperatorManager::watch_resources")
     }

@@ -177,8 +177,8 @@ helm install shellwego shellwego/shellwego \
 │                              │                                              │
 │                              ▼                                              │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                         Message Bus (NATS)                          │   │
-│  │                 Async command & state distribution                   │   │
+│  │                     Message Bus (QUIC/Quinn)                         │   │
+│  │              Secure multiplexed communication via QUIC               │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────────────┘
                                         │
@@ -222,7 +222,7 @@ helm install shellwego shellwego/shellwego \
 | **Storage** | ZFS + S3 | Copy-on-write for instant container cloning, compression |
 | **Control Plane** | Rust 1.75+ (Tokio) | Zero-cost async, memory safety, <50MB RSS for 10k containers |
 | **State Store** | SQLite (single node) / Postgres (HA) | ACID compliance for scheduler state |
-| **Queue** | NATS 2.10 | At-least-once delivery, 10M+ msgs/sec per node |
+| **Queue** | QUIC/Quinn | Native pub/sub with mTLS, 5M+ msgs/sec per node |
 | **API Gateway** | shellwego-edge (Rust) | High-performance Traefik replacement with ACME/Let's Encrypt |
 
 ### Data Flow: Deployment Sequence
@@ -237,8 +237,8 @@ POST /v1/deployments
   "env": {"DATABASE_URL": "encrypted(secret)"}
 }
 
-// 2. API Server validates JWT -> RBAC check -> Writes to NATS
-subject: "deploy.{region}.{node}"
+// 2. API Server validates JWT -> RBAC check -> Sends via QUIC
+channel: "deploy.{region}.{node}"
 payload: DeploymentSpec { ... }
 
 // 3. Worker Node receives -> Pulls image (if not cached)
@@ -477,8 +477,8 @@ For $10k+ MRR deployments:
                └──────────────┬───────────────────┘
                               │
                ┌──────────────▼──────────────┐
-               │         NATS Cluster        │
-               │    (3 nodes for HA)         │
+                │       QUIC/Quinn Cluster      │
+                │    (3 nodes for HA)         │
                └──────────────┬──────────────┘
                               │
         ┌─────────────────────┼─────────────────────┐
@@ -491,7 +491,7 @@ For $10k+ MRR deployments:
 
 **Consensus**: Raft for control plane state (who is leader)  
 **State Storage**: Postgres synchronous replication (RPO = 0)  
-**Message Queue**: NATS JetStream (durability guarantees)  
+**Message Queue**: QUIC/Quinn with native reliability (ACK-based, ordered delivery)  
 **Split-brain handling**: etcd-style lease mechanism (if leader dies, new election in <3s)
 
 ### Monitoring Stack

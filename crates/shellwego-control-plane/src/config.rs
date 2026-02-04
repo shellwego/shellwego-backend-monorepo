@@ -16,7 +16,7 @@ pub struct Config {
     pub database_url: String,
     
     #[serde(default)]
-    pub nats_url: Option<String>,
+    pub quic_url: Option<String>,
     
     #[serde(default = "default_log_level")]
     pub log_level: String,

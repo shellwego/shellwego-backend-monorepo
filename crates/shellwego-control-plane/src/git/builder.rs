@@ -6,7 +6,7 @@ use crate::git::{GitError, BuildId, BuildInfo, BuildStatus, Repository};
 
 /// Build queue processor
 pub struct BuildQueue {
-    // TODO: Add nats_client, worker_pool, active_builds
+    // TODO: Add quic_client, worker_pool, active_builds
 }
 
 impl BuildQueue {
@@ -19,7 +19,7 @@ impl BuildQueue {
     /// Submit build job
     pub async fn submit(&self, repo: &Repository, ref_name: &str) -> Result<BuildId, GitError> {
         // TODO: Generate build ID
-        // TODO: Publish to NATS subject "build.jobs"
+        // TODO: Publish to QUIC channel "build.jobs"
         // TODO: Store pending status
         unimplemented!("BuildQueue::submit")
     }

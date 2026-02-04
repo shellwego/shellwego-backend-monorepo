@@ -120,7 +120,7 @@ pub struct CorsConfig {
 /// Configuration source
 pub enum ConfigSource {
     File(String),           // Watch file for changes
-    Nats(String),           // Subscribe to NATS subject
+    Quic(String),           // Subscribe to QUIC channel
     Kubernetes,             // Read from K8s CRDs
     Static,                 // No changes
 }

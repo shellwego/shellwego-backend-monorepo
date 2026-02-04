@@ -75,7 +75,7 @@ pub async fn create_app(
 ) -> Result<(StatusCode, Json<App>), StatusCode> {
     // TODO: Validate request (name uniqueness, resource limits)
     // TODO: Create App entity
-    // TODO: Queue deployment via NATS
+    // TODO: Queue deployment via QUIC
     // TODO: Return 201 with Location header
     
     info!("Creating app: {}", req.name);

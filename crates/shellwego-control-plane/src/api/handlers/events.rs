@@ -16,7 +16,7 @@ pub async fn app_events_sse(
 ) -> Result<Response, StatusCode> {
     // TODO: Validate access to app
     // TODO: Create SSE stream
-    // TODO: Subscribe to app events from NATS
+    // TODO: Subscribe to app events via QUIC
     // TODO: Stream events as they arrive
     Err(StatusCode::NOT_IMPLEMENTED)
 }
@@ -28,7 +28,7 @@ pub async fn exec_websocket(
     ws: WebSocketUpgrade,
 ) -> Result<Response, StatusCode> {
     // TODO: Upgrade to WebSocket
-    // TODO: Proxy to agent via NATS
+    // TODO: Proxy to agent via QUIC
     // TODO: Handle stdin/stdout/stderr
     Err(StatusCode::NOT_IMPLEMENTED)
 }

@@ -153,6 +153,45 @@ impl Reconciler {
             host_ip: "10.0.4.1".to_string(),
         })
     }
+
+    /// Check for image updates and rolling restart
+    pub async fn check_image_updates(&self) -> anyhow::Result<()> {
+        // TODO: Poll registry for new digests
+        // TODO: Compare with running VMs
+        // TODO: Trigger rolling update if changed
+        unimplemented!("check_image_updates")
+    }
+
+    /// Handle volume attachment requests
+    pub async fn reconcile_volumes(&self) -> anyhow::Result<()> {
+        // TODO: List desired volumes from state
+        // TODO: Check current attachments
+        // TODO: Attach/detach as needed via ZFS
+        unimplemented!("reconcile_volumes")
+    }
+
+    /// Sync network policies
+    pub async fn reconcile_network_policies(&self) -> anyhow::Result<()> {
+        // TODO: Fetch policies from control plane
+        // TODO: Apply eBPF rules via Cilium
+        unimplemented!("reconcile_network_policies")
+    }
+
+    /// Health check all running VMs
+    pub async fn health_check_loop(&self) -> anyhow::Result<()> {
+        // TODO: Periodic health checks
+        // TODO: Restart failed VMs
+        // TODO: Report status to control plane
+        unimplemented!("health_check_loop")
+    }
+
+    /// Handle graceful shutdown signal
+    pub async fn prepare_shutdown(&self) -> anyhow::Result<()> {
+        // TODO: Stop accepting new work
+        // TODO: Wait for running VMs or migrate
+        // TODO: Flush state
+        unimplemented!("prepare_shutdown")
+    }
 }
 
 fn generate_mac(app_id: uuid::Uuid) -> String {

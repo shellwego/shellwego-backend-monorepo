@@ -1,0 +1,49 @@
+[package]
+name = "shellwego-observability"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Observability: metrics, logs, and distributed tracing"
+
+[dependencies]
+# Core async
+tokio = { workspace = true, features = ["sync", "time"] }
+
+# Prometheus metrics
+prometheus = "0.13"
+prometheus-static-metric = "0.5"
+
+# OpenTelemetry
+opentelemetry = { version = "0.21", features = ["trace"] }
+opentelemetry-otlp = { version = "0.14", features = ["tonic"] }
+opentelemetry-semantic-conventions = "0.13"
+
+# Loki client
+loki-api = "0.1"
+snap = "1.1"  # Compression for Loki
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# HTTP for exporters
+reqwest = { workspace = true }
+
+# Tracing integration
+tracing = { workspace = true }
+tracing-opentelemetry = "0.22"
+
+# Errors
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Utilities
+chrono = { workspace = true }
+lazy_static = "1.4"
+
+[dev-dependencies]
+tokio-test = "0.4"
+tempfile = "3.8"

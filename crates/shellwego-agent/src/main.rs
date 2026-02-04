@@ -13,6 +13,9 @@ use tracing::{info, warn, error};
 mod daemon;
 mod reconciler;
 mod vmm;
+mod wasm;        // WASM runtime support
+mod snapshot;    // VM snapshot management
+mod migration;   // Live migration support
 
 use daemon::Daemon;
 use vmm::VmmManager;
@@ -42,6 +45,9 @@ async fn main() -> anyhow::Result<()> {
     
     // Start reconciler (desired state enforcement)
     let reconciler = reconciler::Reconciler::new(vmm.clone(), daemon.state_client());
+    
+    // Additional initialization
+    additional_initialization().await?;
     
     // Spawn concurrent tasks
     let heartbeat_handle = tokio::spawn({
@@ -91,6 +97,14 @@ async fn main() -> anyhow::Result<()> {
     
     info!("Agent shutdown complete");
     Ok(())
+}
+
+/// Additional initialization for WASM, snapshots, and migration
+async fn additional_initialization() -> anyhow::Result<()> {
+    // TODO: Initialize WASM runtime if enabled
+    // TODO: Setup snapshot directory
+    // TODO: Register migration capabilities with control plane
+    unimplemented!("additional_initialization")
 }
 
 /// Agent configuration

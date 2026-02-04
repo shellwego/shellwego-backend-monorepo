@@ -1,0 +1,50 @@
+[package]
+name = "shellwego-billing"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Billing, metering, and payment processing"
+
+[dependencies]
+# Async runtime
+tokio = { workspace = true, features = ["time"] }
+
+# Database
+sqlx = { workspace = true, features = ["postgres"] }
+
+# Time-series (choose one)
+# influxdb = "0.7"
+# clickhouse-rs = "1.1"
+
+# Payment providers
+stripe-rust = "0.20"
+# paystack-rs = "0.1"
+
+# PDF generation
+headless_chrome = { version = "1.0", optional = true }
+tera = "1.19"
+
+# Currency
+rust_decimal = "1.33"
+iso_currency = "0.4"
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Time handling
+chrono = { workspace = true }
+
+# Errors
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Tracing
+tracing = { workspace = true }
+
+[features]
+default = []
+pdf = ["dep:headless_chrome"]

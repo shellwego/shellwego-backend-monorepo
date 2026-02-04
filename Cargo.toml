@@ -50,3 +50,16 @@ tracing-subscriber = "0.3"
 config = "0.14"
 strum = { version = "0.25", features = ["derive"] }
 validator = { version = "0.16", features = ["derive"] }
+
+# WASM runtime
+wasmtime = { version = "12.0", optional = true }
+
+# eBPF
+aya = { version = "0.11", optional = true }
+
+# Metrics & observability
+prometheus = "0.13"
+opentelemetry = "0.21"
+
+# Security
+rustls = "0.22"

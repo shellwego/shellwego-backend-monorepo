@@ -1,0 +1,45 @@
+[package]
+name = "shellwego-registry"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Container image registry cache and OCI pull operations"
+
+[dependencies]
+# Core async
+tokio = { workspace = true, features = ["process", "fs"] }
+
+# HTTP client for registry
+reqwest = { workspace = true, features = ["json", "stream"] }
+
+# OCI/Docker types
+oci-distribution = "0.10"
+
+# Async traits
+async-trait = "0.1"
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Image format handling
+tar = "0.4"
+flate2 = "1.0"
+
+# Crypto for verification
+sha2 = "0.10"
+hex = "0.4"
+
+# Errors
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Tracing
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.8"
+tokio-test = "0.4"

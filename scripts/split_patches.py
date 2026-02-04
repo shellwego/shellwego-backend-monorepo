@@ -3,7 +3,7 @@
 Script to split code blocks from docs/plan.patches.md into their correct file paths.
 """
 
-import re
+import re 
 import os
 import sys
 from pathlib import Path
@@ -24,22 +24,29 @@ def parse_patches_file(file_path):
         if not section:
             continue
         
-        # Extract file path from **`path`** pattern
-        file_match = re.search(r'\*\*`([^`]+)`\*\*', section)
-        if not file_match:
+        # Extract ALL file paths and their code blocks in this section
+        file_matches = list(re.finditer(r'\*\*`([^`]+)`\*\*', section))
+        
+        if not file_matches:
             continue
         
-        file_path = file_match.group(1)
+        # Find all code blocks and their positions
+        code_matches = list(re.finditer(r'```(\w*)\n(.*?)\n```', section, re.DOTALL))
         
-        # Extract code block content
-        # Look for ```lang ... ``` pattern
-        code_match = re.search(r'```(\w*)\n(.*?)\n```', section, re.DOTALL)
-        if not code_match:
-            continue
-        
-        code_content = code_match.group(2)
-        
-        files[file_path] = code_content
+        # Pair file paths with code blocks
+        for i, file_match in enumerate(file_matches):
+            file_path = file_match.group(1)
+            
+            # Find the code block that follows this file path
+            file_end = file_match.end()
+            
+            for code_match in code_matches:
+                code_start = code_match.start()
+                if code_start > file_end:
+                    # This code block follows the file path
+                    code_content = code_match.group(2)
+                    files[file_path] = code_content
+                    break
     
     return files
 
@@ -68,15 +75,15 @@ def create_files(files, base_dir='.'):
                 with open(full_path, 'w') as f:
                     f.write(content)
                 merged.append(file_path)
-                print(f"↔ Merged: {file_path}")
+                print(f"Merged: {file_path}")
             else:
                 with open(full_path, 'w') as f:
                     f.write(content)
                 created.append(file_path)
-                print(f"✓ Created: {file_path}")
+                print(f"Created: {file_path}")
         except Exception as e:
             errors.append((file_path, str(e)))
-            print(f"✗ Error processing {file_path}: {e}")
+            print(f"Error processing {file_path}: {e}")
     
     return created, merged, errors
 

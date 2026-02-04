@@ -14,6 +14,12 @@ tokio = { workspace = true, features = ["process", "rt", "net"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
+# QUIC for CP<->Agent communication (replaces NATS)
+quinn = { version = "0.11", optional = true }
+rustls = { version = "0.22", optional = true }
+webpki = { version = "0.102", optional = true }
+rcgen = { version = "0.11", optional = true }
+
 # Netlink for network interface management
 rtnetlink = "0.14"
 netlink-packet-route = "0.19"
@@ -37,5 +43,6 @@ nix = { version = "0.27", features = ["net"] }
 libc = "0.2"
 
 [features]
-default = []
+default = ["quinn"]
 ebpf = [] # TODO: Add aya dependency when ready
+quinn = ["dep:quinn", "dep:rustls", "dep:webpki", "dep:rcgen"]

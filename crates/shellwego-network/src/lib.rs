@@ -13,11 +13,13 @@ pub mod cni;
 pub mod bridge;
 pub mod tap;
 pub mod ipam;
+pub mod quinn;
 
 pub use cni::CniNetwork;
 pub use bridge::Bridge;
 pub use tap::TapDevice;
 pub use ipam::Ipam;
+pub use quinn::{QuinnClient, QuinnServer, Message, QuicConfig};
 
 /// Network configuration for a microVM
 #[derive(Debug, Clone)]

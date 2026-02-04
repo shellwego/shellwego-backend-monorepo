@@ -1,4 +1,9 @@
+lets make crates/shellwego-agent production ready by 
 
+1. finishing boilerplate of the src/
+2. making the crate cargo build having no problems
+
+===
 
 Give me the most comprehensive rust (e2e, integration, unit) test cases plan for crates/shellwego-agent . Everything should be real no mock. Make sure easily to run test in single Ubuntu vps... Your plan should be considered as production ready to proof that readme.md purpose achieved
 

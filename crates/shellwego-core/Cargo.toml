@@ -19,7 +19,10 @@ thiserror = { workspace = true }
 utoipa = { workspace = true, optional = true }
 schemars = { version = "0.8", optional = true }
 validator = { workspace = true }
+sea-orm = { version = "1.0", features = ["macros", "with-json"], optional = true }
+sea-query = { version = "0.31", optional = true }
 
 [features]
-default = ["openapi"]
+default = ["openapi", "orm"]
 openapi = ["dep:utoipa", "dep:schemars"]
+orm = ["dep:sea-orm", "dep:sea-query"]

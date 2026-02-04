@@ -7,8 +7,10 @@ use crate::prelude::*;
 pub type NodeId = Uuid;
 
 /// Node operational status
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, strum::Display, strum::EnumString)]
 #[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "orm", derive(sea_orm::entity::prelude::DeriveActiveEnum, sea_query::IdenStatic))]
+#[cfg_attr(feature = "orm", sea_orm(rs_type = "String", db_type = "String(StringLen::N(20))"))]
 #[serde(rename_all = "snake_case")]
 pub enum NodeStatus {
     Registering,
@@ -22,6 +24,7 @@ pub enum NodeStatus {
 /// Hardware/OS capabilities
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "orm", derive(sea_orm::FromQueryResult))]
 pub struct NodeCapabilities {
     pub kvm: bool,
     pub nested_virtualization: bool,
@@ -33,6 +36,7 @@ pub struct NodeCapabilities {
 /// Resource capacity and current usage
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "orm", derive(sea_orm::FromQueryResult))]
 pub struct NodeCapacity {
     pub cpu_cores: u32,
     pub memory_total_gb: u64,
@@ -44,6 +48,7 @@ pub struct NodeCapacity {
 /// Node networking configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "orm", derive(sea_orm::FromQueryResult))]
 pub struct NodeNetwork {
     pub internal_ip: String,
     #[serde(default)]

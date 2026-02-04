@@ -13,7 +13,7 @@ name = "shellwego-control-plane"
 path = "src/main.rs"
 
 [dependencies]
-shellwego-core = { path = "../shellwego-core", features = ["openapi"] }
+shellwego-core = { path = "../shellwego-core", features = ["openapi", "orm"] }
 
 # Async runtime
 tokio = { workspace = true }

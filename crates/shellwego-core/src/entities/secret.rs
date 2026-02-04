@@ -8,7 +8,7 @@ pub type SecretId = Uuid;
 
 /// Secret visibility scope
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum SecretScope {
     Organization,  // Shared across org
@@ -18,7 +18,7 @@ pub enum SecretScope {
 
 /// Individual secret version
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct SecretVersion {
     pub version: u32,
     pub created_at: DateTime<Utc>,
@@ -28,7 +28,7 @@ pub struct SecretVersion {
 
 /// Secret entity (metadata only, never exposes value)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct Secret {
     pub id: SecretId,
     pub name: String,
@@ -48,7 +48,7 @@ pub struct Secret {
 
 /// Create secret request
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct CreateSecretRequest {
     pub name: String,
     pub value: String,
@@ -61,14 +61,14 @@ pub struct CreateSecretRequest {
 
 /// Rotate secret request (create new version)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct RotateSecretRequest {
     pub value: String,
 }
 
 /// Secret reference (how apps consume secrets)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct SecretRef {
     pub secret_id: SecretId,
     #[serde(default)]

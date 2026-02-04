@@ -38,8 +38,11 @@ sea-orm-migration = { version = "1.0", features = ["sqlx-postgres", "runtime-tok
 async-nats = { workspace = true }
 
 # Documentation/OpenAPI
-utoipa = { workspace = true }
-utoipa-swagger-ui = { version = "4.0", features = ["axum"] }
+aide = "0.13"
+schemars = "0.8"
+
+# HTTP client for static file proxy
+reqwest = { version = "0.11", features = ["json"] }
 
 # Config & logging
 config = { workspace = true }

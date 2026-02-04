@@ -8,7 +8,7 @@ pub type DatabaseId = Uuid;
 
 /// Supported database engines
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum DatabaseEngine {
     Postgres,
@@ -20,7 +20,7 @@ pub enum DatabaseEngine {
 
 /// Database operational status
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum DatabaseStatus {
     Creating,
@@ -35,7 +35,7 @@ pub enum DatabaseStatus {
 
 /// Connection endpoint
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct DatabaseEndpoint {
     pub host: String,
     pub port: u16,
@@ -48,7 +48,7 @@ pub struct DatabaseEndpoint {
 
 /// Resource allocation
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct DatabaseResources {
     pub storage_gb: u64,
     pub memory_gb: u64,
@@ -57,7 +57,7 @@ pub struct DatabaseResources {
 
 /// Current usage stats
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct DatabaseUsage {
     pub storage_used_gb: u64,
     pub connections_active: u32,
@@ -67,7 +67,7 @@ pub struct DatabaseUsage {
 
 /// High availability config
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct HighAvailability {
     pub enabled: bool,
     pub mode: String, // "synchronous", "asynchronous"
@@ -77,7 +77,7 @@ pub struct HighAvailability {
 
 /// Backup configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct DatabaseBackupConfig {
     pub enabled: bool,
     pub frequency: String,
@@ -88,7 +88,7 @@ pub struct DatabaseBackupConfig {
 
 /// Database entity
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct Database {
     pub id: DatabaseId,
     pub name: String,
@@ -107,7 +107,7 @@ pub struct Database {
 
 /// Create database request
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct CreateDatabaseRequest {
     pub name: String,
     pub engine: DatabaseEngine,
@@ -126,7 +126,7 @@ fn default_version() -> Option<String> {
 
 /// Backup metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct DatabaseBackup {
     pub id: Uuid,
     pub database_id: DatabaseId,

@@ -1,19 +1,20 @@
 //! HTTP API layer
-//! 
+//!
 //! Route definitions, middleware stack, and handler dispatch.
 //! All business logic lives in `services/`, this is just the HTTP glue.
+
+use std::sync::Arc;
 
 use axum::{
     routing::{get, post, patch, delete},
     Router,
-    middleware,
 };
+
 use tower_http::{
     cors::CorsLayer,
     trace::TraceLayer,
     compression::CompressionLayer,
 };
-use std::sync::Arc;
 
 use crate::state::AppState;
 
@@ -33,15 +34,18 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/health", get(health::health_check))
         // OpenAPI docs
         .merge(docs::swagger_ui())
-        // Middleware stack (order matters - outer to inner)
+        // ReDoc alternative
+        .merge(docs::redoc_ui())
+        // OpenAPI JSON endpoint
+        .route("/api-docs/openapi.json", get(docs::openapi_json))
+        // Middleware stack
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
-        .layer(CorsLayer::permissive()) // TODO: Restrict in production
-        // TODO: Add auth middleware layer
-        // TODO: Add rate limiting middleware
+        .layer(CorsLayer::permissive())
         .with_state(state)
 }
 
+/// API v1 routes
 fn api_routes() -> Router<Arc<AppState>> {
     Router::new()
         // Apps
@@ -120,8 +124,4 @@ fn api_routes() -> Router<Arc<AppState>> {
         .route("/user", get(auth::get_current_user))
         .route("/user/tokens", get(auth::list_tokens).post(auth::generate_api_token))
         .route("/user/tokens/:token_id", delete(auth::revoke_api_token))
-        
-        // Organizations
-        // TODO: Add org routes
-        // TODO: Add events streaming endpoint
 }

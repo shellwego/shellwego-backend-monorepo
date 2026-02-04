@@ -8,7 +8,7 @@ pub type DomainId = Uuid;
 
 /// Domain verification status
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum DomainStatus {
     Pending,
@@ -20,7 +20,7 @@ pub enum DomainStatus {
 
 /// TLS certificate status
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum TlsStatus {
     Pending,
@@ -33,7 +33,7 @@ pub enum TlsStatus {
 
 /// TLS certificate details
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct TlsCertificate {
     pub issuer: String,
     pub subject: String,
@@ -45,7 +45,7 @@ pub struct TlsCertificate {
 
 /// DNS validation record (for ACME)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct DnsValidation {
     pub record_type: String, // CNAME, TXT, A
     pub name: String,
@@ -54,7 +54,7 @@ pub struct DnsValidation {
 
 /// Routing configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct RoutingConfig {
     pub app_id: Uuid,
     pub port: u16,
@@ -68,7 +68,7 @@ pub struct RoutingConfig {
 
 /// CDN/WAF features
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct EdgeFeatures {
     #[serde(default)]
     pub cdn_enabled: bool,
@@ -82,7 +82,7 @@ pub struct EdgeFeatures {
 
 /// Domain entity
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct Domain {
     pub id: DomainId,
     pub hostname: String,
@@ -101,7 +101,7 @@ pub struct Domain {
 
 /// Create domain request
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct CreateDomainRequest {
     #[validate(hostname)]
     pub hostname: String,
@@ -115,7 +115,7 @@ pub struct CreateDomainRequest {
 
 /// Upload custom certificate request
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct UploadCertificateRequest {
     pub certificate: String,
     pub private_key: String,

@@ -8,7 +8,7 @@ pub type NodeId = Uuid;
 
 /// Node operational status
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum NodeStatus {
     Registering,
@@ -21,7 +21,7 @@ pub enum NodeStatus {
 
 /// Hardware/OS capabilities
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct NodeCapabilities {
     pub kvm: bool,
     pub nested_virtualization: bool,
@@ -32,7 +32,7 @@ pub struct NodeCapabilities {
 
 /// Resource capacity and current usage
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct NodeCapacity {
     pub cpu_cores: u32,
     pub memory_total_gb: u64,
@@ -43,7 +43,7 @@ pub struct NodeCapacity {
 
 /// Node networking configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct NodeNetwork {
     pub internal_ip: String,
     #[serde(default)]
@@ -55,7 +55,7 @@ pub struct NodeNetwork {
 
 /// Worker Node entity
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct Node {
     pub id: NodeId,
     pub hostname: String,
@@ -80,7 +80,7 @@ pub struct Node {
 
 /// Request to register a new node
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct RegisterNodeRequest {
     pub hostname: String,
     pub region: String,
@@ -92,7 +92,7 @@ pub struct RegisterNodeRequest {
 
 /// Node join response with token
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct NodeJoinResponse {
     pub node_id: NodeId,
     pub join_token: String,

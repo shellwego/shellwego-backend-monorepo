@@ -8,7 +8,7 @@ pub type VolumeId = Uuid;
 
 /// Volume operational status
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum VolumeStatus {
     Creating,
@@ -22,7 +22,7 @@ pub enum VolumeStatus {
 
 /// Volume type (performance characteristics)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum VolumeType {
     Persistent,  // Default, survives app deletion
@@ -32,7 +32,7 @@ pub enum VolumeType {
 
 /// Filesystem type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum FilesystemType {
     Ext4,
@@ -43,7 +43,7 @@ pub enum FilesystemType {
 
 /// Volume snapshot metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct Snapshot {
     pub id: Uuid,
     pub name: String,
@@ -54,7 +54,7 @@ pub struct Snapshot {
 
 /// Backup policy configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct BackupPolicy {
     pub enabled: bool,
     pub frequency: String, // "daily", "hourly", cron expression
@@ -64,7 +64,7 @@ pub struct BackupPolicy {
 
 /// Volume entity
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct Volume {
     pub id: VolumeId,
     pub name: String,
@@ -90,7 +90,7 @@ pub struct Volume {
 
 /// Create volume request
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct CreateVolumeRequest {
     pub name: String,
     pub size_gb: u64,

@@ -12,7 +12,7 @@ pub type AppId = Uuid;
 
 /// Application deployment status
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum AppStatus {
     Creating,
@@ -26,7 +26,7 @@ pub enum AppStatus {
 
 /// Resource allocation for an App
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct ResourceSpec {
     /// Memory limit (e.g., "512m", "2g")
     // TODO: Validate format with regex
@@ -42,7 +42,7 @@ pub struct ResourceSpec {
 
 /// Environment variable with optional encryption
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct EnvVar {
     pub name: String,
     pub value: String,
@@ -52,7 +52,7 @@ pub struct EnvVar {
 
 /// Domain configuration attached to an App
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct DomainConfig {
     pub hostname: String,
     #[serde(default)]
@@ -62,7 +62,7 @@ pub struct DomainConfig {
 
 /// Persistent volume mount
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct VolumeMount {
     pub volume_id: Uuid,
     pub mount_path: String,
@@ -72,7 +72,7 @@ pub struct VolumeMount {
 
 /// Health check configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct HealthCheck {
     pub path: String,
     pub port: u16,
@@ -90,7 +90,7 @@ fn default_retries() -> u32 { 3 }
 
 /// Source code origin for deployment
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SourceSpec {
     Git {
@@ -112,7 +112,7 @@ pub enum SourceSpec {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct RegistryAuth {
     pub username: String,
     // TODO: This should be a secret reference, not inline
@@ -121,7 +121,7 @@ pub struct RegistryAuth {
 
 /// Main Application entity
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct App {
     pub id: AppId,
     pub name: String,
@@ -149,7 +149,7 @@ pub struct App {
 
 /// Request to create a new App
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct CreateAppRequest {
     #[validate(length(min = 1, max = 64))]
     pub name: String,
@@ -171,7 +171,7 @@ pub struct CreateAppRequest {
 
 /// Request to update an App (partial)
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Validate)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct UpdateAppRequest {
     #[validate(length(min = 1, max = 64))]
     pub name: Option<String>,
@@ -184,7 +184,7 @@ pub struct UpdateAppRequest {
 
 /// App instance (runtime representation)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct AppInstance {
     pub id: Uuid,
     pub app_id: AppId,
@@ -197,7 +197,7 @@ pub struct AppInstance {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum InstanceStatus {
     Starting,

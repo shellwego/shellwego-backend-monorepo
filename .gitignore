@@ -16,3 +16,4 @@ Cargo.lock
 /var
 *.db
 *.db-journal
+node_modules

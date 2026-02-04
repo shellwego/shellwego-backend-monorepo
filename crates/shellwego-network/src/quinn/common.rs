@@ -36,7 +36,7 @@ pub enum Message {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourceLimits {
     pub cpu_milli: u32,
-    pub mem_mb: u64,
+    pub memory_bytes: u64,
 }
 
 #[derive(Debug, Clone)]

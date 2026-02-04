@@ -48,6 +48,8 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 config = { workspace = true }
 dashmap = "6.1"
+async-trait = "0.1"
+tempfile = "3.8"
 
 [features]
 default = []

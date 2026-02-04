@@ -196,7 +196,7 @@ impl Reconciler {
     /// Sync network policies
     pub async fn reconcile_network_policies(&self) -> anyhow::Result<()> {
         // TODO: Fetch policies from control plane
-        // TODO: Apply eBPF rules via Cilium
+        // TODO: Apply eBPF rules via Aya
         unimplemented!("reconcile_network_policies")
     }
 

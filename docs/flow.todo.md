@@ -1,3 +1,6 @@
+Give me diff patches for 7. Missing "Sovereign" Safety . how many parts? Give me the 1/x first
+
+Understand readme.md then spot any misalignment, non DRYness etc in codebase. Note; we are in skeletons scaffolding phase with //TODOs comments across methods ... Make sure to mentions corresponding paths files while explaining 
 
 ===
 

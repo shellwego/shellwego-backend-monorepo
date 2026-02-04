@@ -1,6 +1,9 @@
 //! Application entity definitions.
-//! 
+//!
 //! The core resource: deployable workloads running in Firecracker microVMs.
+//!
+//! When the `orm` feature is enabled, the `App` struct directly derives
+//! Sea-ORM's entity traits, eliminating duplication between core and control-plane.
 
 use crate::prelude::*;
 
@@ -26,21 +29,127 @@ pub enum AppStatus {
     Draining,
 }
 
-/// Resource allocation for an App
+/// Resource allocation using canonical units (bytes and milli-CPU)
 #[derive(Debug, Clone, Serialize, Deserialize, Validate, Default, PartialEq)]
 #[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "orm", derive(sea_orm::FromQueryResult))]
 pub struct ResourceSpec {
-    /// Memory limit (e.g., "512m", "2g")
-    // TODO: Validate format with regex
-    pub memory: String,
-    
-    /// CPU cores (e.g., "0.5", "2.0")
-    pub cpu: String,
-    
-    /// Disk allocation
+    /// Memory limit in bytes
     #[serde(default)]
-    pub disk: Option<String>,
+    pub memory_bytes: u64,
+
+    /// CPU limit in milli-CPU units (1000 = 1 full CPU)
+    #[serde(default)]
+    pub cpu_milli: u32,
+
+    /// Disk allocation in bytes
+    #[serde(default)]
+    pub disk_bytes: u64,
+}
+
+impl ResourceSpec {
+    pub fn memory_mb(&self) -> u64 {
+        self.memory_bytes / (1024 * 1024)
+    }
+
+    pub fn cpu_shares(&self) -> u64 {
+        (self.cpu_milli as u64) * 1024 / 1000
+    }
+}
+
+/// CLI resource request with human-readable string parsing
+/// String parsing (1g -> 1073741824) happens ONLY at CLI input layer
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+pub struct ResourceRequest {
+    #[serde(default, deserialize_with = "deserialize_memory")]
+    pub memory_bytes: u64,
+    #[serde(default, deserialize_with = "deserialize_cpu")]
+    pub cpu_milli: u32,
+    #[serde(default, deserialize_with = "deserialize_disk")]
+    pub disk_bytes: u64,
+}
+
+impl Default for ResourceRequest {
+    fn default() -> Self {
+        Self {
+            memory_bytes: 256 * 1024 * 1024, // 256MB default
+            cpu_milli: 500,                   // 0.5 CPU default
+            disk_bytes: 5 * 1024 * 1024 * 1024, // 5GB default
+        }
+    }
+}
+
+fn deserialize_memory<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s: Option<String> = Option::deserialize(deserializer)?;
+    match s {
+        Some(s) => parse_memory(&s).map_err(serde::de::Error::custom),
+        None => Ok(256 * 1024 * 1024), // default 256MB
+    }
+}
+
+fn deserialize_cpu<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s: Option<String> = Option::deserialize(deserializer)?;
+    match s {
+        Some(s) => parse_cpu(&s).map_err(serde::de::Error::custom),
+        None => Ok(500), // default 0.5 CPU
+    }
+}
+
+fn deserialize_disk<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s: Option<String> = Option::deserialize(deserializer)?;
+    match s {
+        Some(s) => parse_memory(&s).map_err(serde::de::Error::custom),
+        None => Ok(5 * 1024 * 1024 * 1024), // default 5GB
+    }
+}
+
+/// Parse memory string to bytes (e.g., "512m", "2g", "1g", "256k")
+pub fn parse_memory(s: &str) -> anyhow::Result<u64> {
+    let s = s.trim().to_lowercase();
+    let (num, unit) = s.split_at(
+        s.find(|c: char| !c.is_ascii_digit() && c != '.')
+            .ok_or_else(|| anyhow::anyhow!("Invalid memory format: {}", s))?,
+    );
+    let value: f64 = num.parse()?;
+    match unit {
+        "b" => Ok(value as u64),
+        "k" | "kb" => Ok((value * 1024.0) as u64),
+        "m" | "mb" => Ok((value * 1024.0 * 1024.0) as u64),
+        "g" | "gb" => Ok((value * 1024.0 * 1024.0 * 1024.0) as u64),
+        "t" | "tb" => Ok((value * 1024.0 * 1024.0 * 1024.0 * 1024.0) as u64),
+        _ => anyhow::bail!("Unknown memory unit: {}", unit),
+    }
+}
+
+/// Parse CPU string to milli-CPU (e.g., "0.5", "2.0", "1000m", "2")
+pub fn parse_cpu(s: &str) -> anyhow::Result<u32> {
+    let s = s.trim().to_lowercase();
+    if s.ends_with('m') {
+        let num: u32 = s.trim_end_matches('m').parse()?;
+        return Ok(num);
+    }
+    let value: f64 = s.parse()?;
+    Ok((value * 1000.0) as u32)
+}
+
+impl From<ResourceRequest> for ResourceSpec {
+    fn from(req: ResourceRequest) -> Self {
+        ResourceSpec {
+            memory_bytes: req.memory_bytes,
+            cpu_milli: req.cpu_milli,
+            disk_bytes: req.disk_bytes,
+        }
+    }
 }
 
 /// Environment variable with optional encryption
@@ -122,7 +231,43 @@ pub struct RegistryAuth {
     pub password: String,
 }
 
-/// Main Application entity
+#[cfg(feature = "orm")]
+use sea_orm::entity::prelude::*;
+
+#[cfg(feature = "orm")]
+use super::super::DateTime;
+
+#[cfg(feature = "orm")]
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
+#[sea_orm(table_name = "apps")]
+pub struct Model {
+    #[sea_orm(primary_key)]
+    pub id: AppId,
+    pub name: String,
+    pub slug: String,
+    pub status: AppStatus,
+    pub image: String,
+    pub command: Option<Vec<String>>,
+    pub resources: ResourceSpec,
+    pub env: Vec<EnvVar>,
+    pub domains: Vec<DomainConfig>,
+    pub volumes: Vec<VolumeMount>,
+    pub health_check: Option<HealthCheck>,
+    pub source: SourceSpec,
+    pub organization_id: Uuid,
+    pub created_by: Uuid,
+    pub created_at: DateTime,
+    pub updated_at: DateTime,
+}
+
+#[cfg(feature = "orm")]
+#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+pub enum Relation {}
+
+#[cfg(feature = "orm")]
+impl ActiveModelBehavior for ActiveModel {}
+
+#[cfg(not(feature = "orm"))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct App {
@@ -147,7 +292,6 @@ pub struct App {
     pub created_by: Uuid,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    // TODO: Add replica count, networking policy, tags
 }
 
 /// Request to create a new App
@@ -185,7 +329,42 @@ pub struct UpdateAppRequest {
     // TODO: Add other mutable fields
 }
 
-/// App instance (runtime representation)
+#[cfg(feature = "orm")]
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
+#[sea_orm(table_name = "app_instances")]
+pub struct AppInstanceModel {
+    #[sea_orm(primary_key)]
+    pub id: Uuid,
+    pub app_id: AppId,
+    pub node_id: Uuid,
+    pub status: InstanceStatus,
+    pub internal_ip: String,
+    pub started_at: DateTime,
+    pub health_checks_passed: u64,
+    pub health_checks_failed: u64,
+}
+
+#[cfg(feature = "orm")]
+#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+pub enum AppInstanceRelation {}
+
+#[cfg(feature = "orm")]
+impl ActiveModelBehavior for AppInstanceActiveModel {}
+
+#[cfg(feature = "orm")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, strum::Display, strum::EnumString)]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+#[sea_orm(rs_type = "String", db_type = "String(StringLen::N(20))")]
+#[serde(rename_all = "snake_case")]
+pub enum InstanceStatus {
+    Starting,
+    Healthy,
+    Unhealthy,
+    Stopping,
+    Exited,
+}
+
+#[cfg(not(feature = "orm"))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct AppInstance {
@@ -199,10 +378,9 @@ pub struct AppInstance {
     pub health_checks_failed: u64,
 }
 
+#[cfg(not(feature = "orm"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, strum::Display, strum::EnumString)]
 #[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-#[cfg_attr(feature = "orm", derive(sea_orm::entity::prelude::DeriveActiveEnum, sea_query::IdenStatic))]
-#[cfg_attr(feature = "orm", sea_orm(rs_type = "String", db_type = "String(StringLen::N(20))"))]
 #[serde(rename_all = "snake_case")]
 pub enum InstanceStatus {
     Starting,

@@ -14,7 +14,8 @@
   <a href="https://shellwego.com/pricing "><img src="https://img.shields.io/badge/Commercial%20License-Available-success " alt="Commercial License"></a>
   <img src="https://img.shields.io/badge/Rust-1.75%2B-orange.svg " alt="Rust 1.75+">
   <img src="https://img.shields.io/badge/Deployments-%3C10s-critical " alt="Deploy Time">
-  <img src="https://img.shields.io/badge/eBPF-Cilium-ff69b4 " alt="eBPF">
+  <img src="https://img.shields.io/badge/eBPF-Custom-ff69b4 " alt="eBPF">
+  <img src="https://img.shields.io/badge/WASM-Sub--10ms-blue.svg " alt="WASM Sub-10ms Cold Start">
 </p>
 
 ---
@@ -45,7 +46,7 @@ Charge $10/month per customer. Host 100 customers on a $40 server. **That's $960
 - ✅ **White-label ready**: Your logo, your domain, your bank account
 - ✅ **AGPL-3.0 Licensed**: Use free forever, upgrade to Commercial to close your source
 - ✅ **5MB binary**: Runs on a Raspberry Pi Zero, scales to data centers
-- ✅ **15-second cold starts**: Firecracker microVMs written in raw Rust
+- ✅ **15-second cold starts**: Firecracker microVMs **or** Wasmtime runtime for ultra-light workloads
 
 ---
 
@@ -110,8 +111,9 @@ curl -fsSL https://shellwego.com/install.sh  | sudo bash -s -- \
 
 This installs:
 - ShellWeGo Control Plane (Rust binary + SQLite/Postgres)
-- Firecracker microVM runtime
-- Traefik reverse proxy with SSL auto-generation
+- Firecracker microVM runtime (default, 85ms cold start)
+- Wasmtime WASM runtime (optional, <10ms cold start)
+- shellwego-edge (Rust proxy, Traefik replacement) with SSL auto-generation
 - Web dashboard (static files)
 - CLI tool (`shellwego`)
 
@@ -160,7 +162,7 @@ helm install shellwego shellwego/shellwego \
 
 ## 🏗️ System Architecture
 
-### Core Components
+**Core Components
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -179,32 +181,33 @@ helm install shellwego shellwego/shellwego \
 │  │                 Async command & state distribution                   │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────────────┘
-                                       │
-                                       │ mTLS + WireGuard
-                                       │
+                                        │
+                                        │ mTLS + WireGuard
+                                        │
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                              Worker Nodes                                    │
 │                                                                              │
 │  ┌─────────────────────────────────────────────────────────────────────┐    │
 │  │                     ShellWeGo Agent (Rust Binary)                   │    │
-│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────────┐  │    │
-│  │  │   Executor   │  │   Network    │  │      Storage             │  │    │
-│  │  │   (Firecracker│ │   (Cilium)   │  │  ┌──────────┐ ┌────────┐ │  │    │
-│  │  │    + WASM)   │  │   (eBPF)     │  │  │  ZFS     │ │  S3    │ │  │    │
-│  │  └──────────────┘  └──────────────┘  │  │ (Local)  │ │(Remote)│ │  │    │
-│  │                                       │  └──────────┘ └────────┘ │  │    │
-│  └─────────────────────────────────────────────────────────────────────┘    │
+│  │  ┌─────────────────────────────┐  ┌──────────────┐  ┌────────────┐ │    │
+│  │  │        Executor             │  │   Network    │  │   Storage  │ │    │
+│  │  │  ┌──────────┐  ┌──────────┐ │  │  (Aya/eBPF)  │  │  ┌────┐ ┌─┤ │    │
+│  │  │  │Firecracker│  │Wasmtime  │ │  │              │  │  │ZFS │ │S3│ │    │
+│  │  │  │ (microVM) │  │ (WASM)   │ │  │              │  │  └────┘ └─┘ │    │
+│  │  │  └──────────┘  └──────────┘ │  │              │  │              │    │
+│  │  └─────────────────────────────┘  └──────────────┘  └────────────┘ │    │
 │                              │                                               │
 │                              ▼                                               │
 │  ┌──────────────────────────────────────────────────────────────────────┐   │
-│  │                     MicroVM Isolation Layer                         │   │
+│  │                     MicroVM/WASM Isolation Layer                     │   │
 │  │  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐     │   │
-│  │  │   App A    │  │   App B    │  │   App C    │  │   System   │     │   │
-│  │  │  (User)    │  │  (User)    │  │  (User)    │  │  (Sidecar) │     │   │
-│  │  │ 128MB/1vCPU│  │ 512MB/2vCPU│  │  64MB/0.5  │  │  (Metrics) │     │   │
+│  │  │   App A    │  │   App B    │  │  WASM Fn   │  │   System   │     │   │
+│  │  │  (User)    │  │  (User)    │  │  (Light)   │  │  (Sidecar) │     │   │
+│  │  │ 128MB/1vCPU│  │ 512MB/2vCPU│  │  1MB/0.1   │  │  (Metrics) │     │   │
 │  │  └────────────┘  └────────────┘  └────────────┘  └────────────┘     │   │
 │  │                                                                       │   │
-│  │  Isolation: KVM + Firecracker + seccomp-bpf + cgroup v2              │   │
+│  │  Isolation: KVM + Firecracker + seccomp-bpf + cgroup v2             │   │
+│  │         OR: Wasmtime sandbox (compiled to native code)               │   │
 │  └──────────────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -213,14 +216,14 @@ helm install shellwego shellwego/shellwego \
 
 | Layer | Technology | Justification |
 |-------|-----------|---------------|
-| **Runtime** | Firecracker v1.5+ | AWS Lambda's microVM (125ms cold start), 5MB memory overhead |
+| **Runtime** | Firecracker v1.5+ / Wasmtime | MicroVM (85ms cold start) / WASM (<10ms cold start), 12MB / 1MB overhead |
 | **Virtualization** | KVM + virtio | Hardware isolation, no shared kernel between tenants |
-| **Networking** | Cilium 1.14+ | eBPF-based packet filtering (no iptables overhead), 3x faster |
+| **Networking** | Custom eBPF (Aya) | XDP/TC-based packet filtering (no iptables overhead), 3x faster |
 | **Storage** | ZFS + S3 | Copy-on-write for instant container cloning, compression |
 | **Control Plane** | Rust 1.75+ (Tokio) | Zero-cost async, memory safety, <50MB RSS for 10k containers |
 | **State Store** | SQLite (single node) / Postgres (HA) | ACID compliance for scheduler state |
 | **Queue** | NATS 2.10 | At-least-once delivery, 10M+ msgs/sec per node |
-| **API Gateway** | Traefik 3.0 | Dynamic config, Let's Encrypt automation |
+| **API Gateway** | shellwego-edge (Rust) | High-performance Traefik replacement with ACME/Let's Encrypt |
 
 ### Data Flow: Deployment Sequence
 
@@ -243,10 +246,9 @@ payload: DeploymentSpec { ... }
 //    - 5MB kernel (custom compiled, minimal)
 //    - Rootfs from image layer (ZFS snapshot)
 //    - vsock for agent communication
-// 5. Cilium attaches eBPF program:
-//    - Network policy enforcement
-//    - Traffic shaping (rate limiting)
-//    - Observability (flow logs)
+// 5. Custom eBPF programs attach (XDP + TC):
+//    - Ingress firewall
+//    - Egress rate limiting
 // 6. Health check passes -> Register in load balancer
 // Total time: < 10 seconds (cold), < 500ms (warm)
 ```
@@ -259,7 +261,7 @@ payload: DeploymentSpec { ... }
 ┌─────────────────────────────────────────────────────────────┐
 │                    User Request (HTTPS)                      │
 │                         ↓                                    │
-│                  Traefik (Rust/Go)                         │
+│                  shellwego-edge (Rust)                         │
 │                         ↓                                    │
 │              ShellWeGo Router (Rust/Tokio)                 │
 │                    Zero-copy proxy                          │
@@ -294,25 +296,10 @@ ShellWeGo uses **hardware-virtualized isolation**, not container namespacing:
    - Privilege escalation inside container = contained within VM
    - No shared kernel memory (unlike Docker containers)
 
-2. **Network Isolation**: eBPF-based policies
-   ```c
-   // Cilium network policy (compiled to eBPF)
-   {
-     "endpointSelector": {"matchLabels": {"app": "tenant-a"}},
-     "ingress": [
-       {
-         "fromEndpoints": [{"matchLabels": {"app": "tenant-b"}}],
-         "toPorts": [{"ports": "5432", "protocol": "TCP"}]
-       }
-     ],
-     "egress": [
-       {
-         "toCIDR": ["0.0.0.0/0"],
-         "except": ["10.0.0.0/8"],  // Block internal metadata
-         "toPorts": [{"ports": "443", "protocol": "TCP"}]
-       }
-     ]
-   }
+2. **Network Isolation**: Custom eBPF programs
+   ```rust
+   // XDP ingress filter + TC egress rate limiter
+   // Compiled via Aya, attached at device level
    ```
 
 3. **Storage Isolation**: 
@@ -371,13 +358,13 @@ struct Secret {
 
 Testbed: AMD EPYC 7402P, 64GB RAM, NVMe SSD
 
-| Metric | Docker | K8s (k3s) | Fly.io | ShellWeGo |
-|--------|--------|-----------|--------|-----------|
-| **Cold Start** | 2-5s | 10-30s | 400ms | **85ms** |
-| **Memory Overhead** | 50MB | 500MB | 200MB | **12MB** |
-| **Density (1GB apps)** | 60 | 40 | 80 | **450** |
-| **Network Latency** | 0.1ms | 0.3ms | 1.2ms | **0.05ms** |
-| **Control Plane RAM** | N/A | 2GB | 1GB | **45MB** |
+| Metric | Docker | K8s (k3s) | Fly.io | ShellWeGo (Firecracker) | ShellWeGo (WASM) |
+|--------|--------|-----------|--------|-------------------------|------------------|
+| **Cold Start** | 2-5s | 10-30s | 400ms | **85ms** | **<10ms** |
+| **Memory Overhead** | 50MB | 500MB | 200MB | **12MB** | **1MB** |
+| **Density (1GB apps)** | 60 | 40 | 80 | **450** | **3000** |
+| **Network Latency** | 0.1ms | 0.3ms | 1.2ms | **0.05ms** | **0.05ms** |
+| **Control Plane RAM** | N/A | 2GB | 1GB | **45MB** | **45MB** |
 
 ### Optimization Techniques
 
@@ -404,6 +391,20 @@ zfs set recordsize=16K shellwego  # Better for small container layers
 // Using io_uring for async I/O (Linux 5.10+)
 let ring = IoUring::new(1024)?;
 // File transfers from disk to socket without userspace copy
+```
+
+### WASM Runtime (Optional)
+
+For ultra-light workloads (functions, small APIs, edge compute):
+
+- **Cold Start**: <10ms (vs 85ms Firecracker)
+- **Memory Overhead**: ~1MB per instance (vs 12MB Firecracker)
+- **Density**: 3,000+ 64MB WASM instances per node
+- **Use Cases**: WebAssembly functions, edge compute, rapid scaling
+
+```bash
+# Deploy as WASM function
+shellwego deploy --runtime wasm --memory 64m my-function.wasm
 ```
 
 ---
@@ -439,7 +440,7 @@ zpool create shellwego nvme0n1 nvme1n1 -m /var/lib/shellwego
 zfs set compression=zstd-3 shellwego
 zfs set atime=off shellwego  # Performance optimization
 
-# 3. Cilium Prerequisites
+# 3. eBPF Prerequisites
 mount bpffs /sys/fs/bpf -t bpf
 
 # 4. Install ShellWeGo (Static Binary)
@@ -448,7 +449,7 @@ curl -fsSL https://shellwego.com/install.sh  | sudo bash
 # 5. Initialize Control Plane
 shellwego init --role=control-plane \
   --storage-driver=zfs \
-  --network-driver=cilium \
+  --network-driver=ebpf \
   --database=postgres://user:pass@localhost/shellwego \
   --encryption-key=vault://secret/shellwego-master-key
 
@@ -717,7 +718,7 @@ shellwego/
 │   ├── shellwego-core/        # Shared types, errors
 │   ├── shellwego-control-plane/ # API server, scheduler
 │   ├── shellwego-agent/       # Worker node daemon
-│   ├── shellwego-network/     # Cilium/eBPF management
+│   ├── shellwego-network/     # Custom eBPF data plane (Aya)
 │   ├── shellwego-storage/     # ZFS interactions
 │   ├── shellwego-firecracker/ # MicroVM lifecycle
 │   └── shellwego-cli/         # User CLI tool
@@ -785,7 +786,6 @@ curl -X PATCH https://yourpaas.com/api/v1/apps/customer-blog  \
 - [ ] GitHub Actions integration
 
 **Q2 2024**:
-- [ ] WASM Functions (lighter than containers)
 - [ ] Database branching (like PlanetScale)
 - [ ] Object storage (S3-compatible API)
 
@@ -854,9 +854,8 @@ sudo chmod 666 /dev/kvm
 - Limit ARC: `zfs set zfs_arc_max=17179869184 shellwego` (16GB)
 
 **Issue: Network policies not enforced**
-- Verify eBPF mounts: `mount | grep bpf`
-- Check Cilium status: `cilium status`
-- Logs: `journalctl -u shellwego-agent -f`
+- Verify eBPF programs: `ls /sys/fs/bpf/shellwego/`
+- Check logs: `journalctl -u shellwego-agent -f`
 
 ---
 

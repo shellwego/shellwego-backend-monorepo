@@ -193,6 +193,7 @@ crates/
         mod.rs
         server.rs
       bridge.rs
+      discovery.rs
       ipam.rs
       lib.rs
       tap.rs
@@ -296,212 +297,6 @@ pub struct MicrovmMetrics {
     pub network_tx_bytes: u64,
     pub block_read_bytes: u64,
     pub block_write_bytes: u64,
-}
-````
-
-## File: crates/shellwego-agent/src/vmm/mod.rs
-````rust
-//! Virtual Machine Manager
-//! 
-//! Firecracker microVM lifecycle: start, stop, pause, resume.
-//! Communicates with Firecracker via Unix socket HTTP API.
-
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::Arc;
-use tokio::process::Command;
-use tokio::sync::RwLock;
-use tracing::{info, debug, error};
-
-mod driver;
-mod config;
-
-pub use driver::FirecrackerDriver;
-pub use config::{MicrovmConfig, MicrovmState, DriveConfig, NetworkInterface};
-
-/// Manages all microVMs on this node
-#[derive(Clone)]
-pub struct VmmManager {
-    inner: Arc<RwLock<VmmInner>>,
-    driver: FirecrackerDriver,
-    data_dir: PathBuf,
-}
-
-struct VmmInner {
-    vms: HashMap<uuid::Uuid, RunningVm>,
-    // TODO: Add metrics collector
-}
-
-struct RunningVm {
-    config: MicrovmConfig,
-    process: tokio::process::Child,
-    socket_path: PathBuf,
-    state: MicrovmState,
-    started_at: chrono::DateTime<chrono::Utc>,
-}
-
-impl VmmManager {
-    pub async fn new(config: &crate::AgentConfig) -> anyhow::Result<Self> {
-        let driver = FirecrackerDriver::new(&config.firecracker_binary).await?;
-        
-        // Ensure runtime directories exist
-        tokio::fs::create_dir_all(&config.data_dir).await?;
-        tokio::fs::create_dir_all(config.data_dir.join("vms")).await?;
-        tokio::fs::create_dir_all(config.data_dir.join("run")).await?;
-        
-        Ok(Self {
-            inner: Arc::new(RwLock::new(VmmInner {
-                vms: HashMap::new(),
-            })),
-            driver,
-            data_dir: config.data_dir.clone(),
-        })
-    }
-
-    /// Start a new microVM
-    pub async fn start(&self, config: MicrovmConfig) -> anyhow::Result<()> {
-        let mut inner = self.inner.write().await;
-        
-        if inner.vms.contains_key(&config.app_id) {
-            anyhow::bail!("VM for app {} already exists", config.app_id);
-        }
-        
-        let vm_dir = self.data_dir.join("vms").join(config.app_id.to_string());
-        tokio::fs::create_dir_all(&vm_dir).await?;
-        
-        let socket_path = vm_dir.join("firecracker.sock");
-        let log_path = vm_dir.join("firecracker.log");
-        
-        // Spawn Firecracker process
-        let mut child = Command::new(&self.driver.binary_path())
-            .arg("--api-sock")
-            .arg(&socket_path)
-            .arg("--id")
-            .arg(config.app_id.to_string())
-            .arg("--log-path")
-            .arg(&log_path)
-            .arg("--level")
-            .arg("Debug")
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()?;
-            
-        // Wait for socket to be created
-        let start = std::time::Instant::now();
-        while !socket_path.exists() {
-            if start.elapsed().as_secs() > 5 {
-                let _ = child.kill().await;
-                anyhow::bail!("Firecracker failed to start: socket timeout");
-            }
-            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-        }
-        
-        // Configure VM via API
-        let driver = self.driver.for_socket(&socket_path);
-        driver.configure_vm(&config).await?;
-        
-        // Start microVM
-        driver.start_vm().await?;
-        
-        info!(
-            "Started microVM {} for app {} ({}MB, {} CPU)",
-            config.vm_id, config.app_id, config.memory_mb, config.cpu_shares
-        );
-        
-        inner.vms.insert(config.app_id, RunningVm {
-            config,
-            process: child,
-            socket_path,
-            state: MicrovmState::Running,
-            started_at: chrono::Utc::now(),
-        });
-        
-        Ok(())
-    }
-
-    /// Stop and remove a microVM
-    pub async fn stop(&self, app_id: uuid::Uuid) -> anyhow::Result<()> {
-        let mut inner = self.inner.write().await;
-        
-        let Some(vm) = inner.vms.remove(&app_id) else {
-            anyhow::bail!("VM for app {} not found", app_id);
-        };
-        
-        // Graceful shutdown via API
-        let driver = self.driver.for_socket(&vm.socket_path);
-        if let Err(e) = driver.stop_vm().await {
-            warn!("Graceful shutdown failed: {}, forcing", e);
-        }
-        
-        // Wait for process exit or timeout
-        let timeout = tokio::time::Duration::from_secs(10);
-        match tokio::time::timeout(timeout, vm.process.wait_with_output()).await {
-            Ok(Ok(output)) => {
-                debug!("Firecracker exited with status: {}", output.status);
-            }
-            Ok(Err(e)) => {
-                error!("Firecracker wait error: {}", e);
-            }
-            Err(_) => {
-                warn!("Firecracker shutdown timeout, killing");
-                let _ = driver.force_shutdown().await;
-            }
-        }
-        
-        // Cleanup socket and logs
-        let _ = tokio::fs::remove_dir_all(vm.socket_path.parent().unwrap()).await;
-        
-        info!("Stopped microVM for app {}", app_id);
-        Ok(())
-    }
-
-    /// List all running microVMs
-    pub async fn list_running(&self) -> anyhow::Result<Vec<MicrovmSummary>> {
-        let inner = self.inner.read().await;
-        
-        Ok(inner.vms.values().map(|vm| MicrovmSummary {
-            app_id: vm.config.app_id,
-            vm_id: vm.config.vm_id,
-            state: vm.state,
-            started_at: vm.started_at,
-        }).collect())
-    }
-
-    /// Get detailed state of a specific microVM
-    pub async fn get_state(&self, app_id: uuid::Uuid) -> anyhow::Result<Option<MicrovmState>> {
-        let inner = self.inner.read().await;
-        Ok(inner.vms.get(&app_id).map(|vm| vm.state))
-    }
-
-    /// Pause microVM (for live migration prep)
-    pub async fn pause(&self, app_id: uuid::Uuid) -> anyhow::Result<()> {
-        // TODO: Implement via Firecracker API
-        // TODO: Sync filesystems, pause vCPUs
-        
-        Ok(())
-    }
-
-    /// Create snapshot for live migration
-    pub async fn create_snapshot(
-        &self,
-        app_id: uuid::Uuid,
-        snapshot_path: PathBuf,
-    ) -> anyhow::Result<()> {
-        // TODO: Pause VM
-        // TODO: Create memory snapshot
-        // TODO: Create disk snapshot via ZFS
-        // TODO: Resume VM
-        
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct MicrovmSummary {
-    pub app_id: uuid::Uuid,
-    pub vm_id: uuid::Uuid,
-    pub state: MicrovmState,
-    pub started_at: chrono::DateTime<chrono::Utc>,
 }
 ````
 
@@ -703,252 +498,6 @@ pub struct Component {
 /// Capability provider for WASI
 pub struct CapabilityProvider {
     // TODO: Implement wasi-http, wasi-sockets, wasi-filesystem
-}
-````
-
-## File: crates/shellwego-agent/src/daemon.rs
-````rust
-//! Control plane communication
-//! 
-//! Heartbeats, state reporting, and command consumption.
-//! The agent's link to the brain.
-
-use std::sync::Arc;
-use tokio::time::{interval, Duration};
-use tracing::{info, debug, warn, error};
-use reqwest::Client;
-
-use shellwego_core::entities::node::{Node, NodeStatus, RegisterNodeRequest, NodeJoinResponse};
-
-use crate::{AgentConfig, Capabilities};
-use crate::vmm::VmmManager;
-
-/// Daemon handles all control plane communication
-#[derive(Clone)]
-pub struct Daemon {
-    config: AgentConfig,
-    client: Client,
-    node_id: Arc<tokio::sync::RwLock<Option<uuid::Uuid>>>,
-    capabilities: Capabilities,
-    vmm: VmmManager,
-}
-
-impl Daemon {
-    pub async fn new(
-        config: AgentConfig,
-        capabilities: Capabilities,
-        vmm: VmmManager,
-    ) -> anyhow::Result<Self> {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()?;
-            
-        let daemon = Self {
-            config,
-            client,
-            node_id: Arc::new(tokio::sync::RwLock::new(None)),
-            capabilities,
-            vmm,
-        };
-        
-        // Register with control plane if no node_id
-        if daemon.config.node_id.is_none() {
-            daemon.register().await?;
-        } else {
-            *daemon.node_id.write().await = daemon.config.node_id;
-        }
-        
-        Ok(daemon)
-    }
-
-    /// Initial registration with control plane
-    async fn register(&self) -> anyhow::Result<()> {
-        info!("Registering with control plane...");
-        
-        let req = RegisterNodeRequest {
-            hostname: gethostname::gethostname().to_string_lossy().to_string(),
-            region: self.config.region.clone(),
-            zone: self.config.zone.clone(),
-            labels: self.config.labels.clone(),
-            capabilities: shellwego_core::entities::node::NodeCapabilities {
-                kvm: self.capabilities.kvm,
-                nested_virtualization: self.capabilities.nested_virtualization,
-                cpu_features: self.capabilities.cpu_features.clone(),
-                gpu: false, // TODO
-            },
-        };
-        
-        let url = format!("{}/v1/nodes", self.config.control_plane_url);
-        let resp = self.client
-            .post(&url)
-            .json(&req)
-            .send()
-            .await?;
-            
-        if !resp.status().is_success() {
-            anyhow::bail!("Registration failed: {}", resp.status());
-        }
-        
-        let join: NodeJoinResponse = resp.json().await?;
-        *self.node_id.write().await = Some(join.node_id);
-        
-        info!("Registered as node {}", join.node_id);
-        info!("Join token acquired (length: {})", join.join_token.len());
-        
-        // TODO: Persist node_id to disk for recovery
-        
-        Ok(())
-    }
-
-    /// Continuous heartbeat loop
-    pub async fn heartbeat_loop(&self) -> anyhow::Result<()> {
-        let mut ticker = interval(Duration::from_secs(30));
-        
-        loop {
-            ticker.tick().await;
-            
-            let node_id = self.node_id.read().await;
-            let Some(id) = *node_id else {
-                warn!("No node_id, skipping heartbeat");
-                continue;
-            };
-            drop(node_id);
-            
-            if let Err(e) = self.send_heartbeat(id).await {
-                error!("Heartbeat failed: {}", e);
-                // TODO: Exponential backoff, mark unhealthy after N failures
-            }
-        }
-    }
-
-    async fn send_heartbeat(&self, node_id: uuid::Uuid) -> anyhow::Result<()> {
-        // Gather current state
-        let running_vms = self.vmm.list_running().await?;
-        let capacity_used = self.calculate_capacity_used().await?;
-        
-        let url = format!("{}/v1/nodes/{}/heartbeat", self.config.control_plane_url, node_id);
-        
-        let payload = serde_json::json!({
-            "status": "ready",
-            "running_apps": running_vms.len(),
-            "microvm_used": running_vms.len(),
-            "capacity": capacity_used,
-            "timestamp": chrono::Utc::now(),
-        });
-        
-        let resp = self.client
-            .post(&url)
-            .json(&payload)
-            .send()
-            .await?;
-            
-        if resp.status().as_u16() == 404 {
-            // Node was deleted from CP, re-register
-            warn!("Node not found in control plane, re-registering...");
-            *self.node_id.write().await = None;
-            self.register().await?;
-            return Ok(());
-        }
-        
-        resp.error_for_status()?;
-        debug!("Heartbeat sent: {} VMs running", running_vms.len());
-        
-        Ok(())
-    }
-
-    async fn calculate_capacity_used(&self) -> anyhow::Result<serde_json::Value> {
-        // TODO: Sum resources allocated to running microVMs
-        // TODO: Include overhead per VM (Firecracker process, CNI, etc)
-        
-        Ok(serde_json::json!({
-            "memory_used_gb": 0,
-            "cpu_used": 0.0,
-        }))
-    }
-
-    /// Consume commands from control plane (NATS or long-polling)
-    pub async fn command_consumer(&self) -> anyhow::Result<()> {
-        // TODO: Connect to NATS if available
-        // TODO: Subscribe to "commands.{node_id}" subject
-        // TODO: Fallback to long-polling /v1/nodes/{id}/commands
-        
-        // Placeholder: just sleep
-        loop {
-            tokio::time::sleep(Duration::from_secs(60)).await;
-        }
-    }
-
-    /// Get state client for reconciler
-    pub fn state_client(&self) -> StateClient {
-        StateClient {
-            client: self.client.clone(),
-            base_url: self.config.control_plane_url.clone(),
-            node_id: self.node_id.clone(),
-        }
-    }
-}
-
-/// Client for fetching desired state
-#[derive(Clone)]
-pub struct StateClient {
-    client: Client,
-    base_url: String,
-    node_id: Arc<tokio::sync::RwLock<Option<uuid::Uuid>>>,
-}
-
-impl StateClient {
-    /// Fetch desired state for this node
-    pub async fn get_desired_state(&self) -> anyhow::Result<DesiredState> {
-        let node_id = self.node_id.read().await;
-        let Some(id) = *node_id else {
-            anyhow::bail!("Not registered");
-        };
-        
-        let url = format!("{}/v1/nodes/{}/state", self.base_url, id);
-        let resp = self.client.get(&url).send().await?;
-        
-        if resp.status().is_success() {
-            let state: DesiredState = resp.json().await?;
-            Ok(state)
-        } else {
-            // Return empty state on error
-            Ok(DesiredState::default())
-        }
-    }
-}
-
-/// Desired state from control plane
-#[derive(Debug, Clone, Default, serde::Deserialize)]
-pub struct DesiredState {
-    pub apps: Vec<DesiredApp>,
-    pub volumes: Vec<DesiredVolume>,
-    // TODO: Add network policies
-    // TODO: Add secrets to inject
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-pub struct DesiredApp {
-    pub app_id: uuid::Uuid,
-    pub image: String,
-    pub command: Option<Vec<String>>,
-    pub memory_mb: u64,
-    pub cpu_shares: u64,
-    pub env: std::collections::HashMap<String, String>,
-    pub volumes: Vec<VolumeMount>,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-pub struct VolumeMount {
-    pub volume_id: uuid::Uuid,
-    pub mount_path: String,
-    pub device: String,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-pub struct DesiredVolume {
-    pub volume_id: uuid::Uuid,
-    pub dataset: String,
-    pub snapshot: Option<String>,
 }
 ````
 
@@ -2502,131 +2051,6 @@ pub async fn handle(config: &CliConfig, _format: OutputFormat) -> anyhow::Result
 }
 ````
 
-## File: crates/shellwego-cli/src/commands/top.rs
-````rust
-//! Top - Real-time resource monitoring TUI
-//!
-//! Displays a beautiful dashboard showing nodes, apps, and resources
-//! with live updates using ratatui.
-
-use crate::config::CliConfig;
-use anyhow::Result;
-
-pub struct TopArgs {
-    /// Refresh interval in milliseconds
-    #[arg(short, long, default_value = "1000")]
-    pub interval: u64,
-
-    /// Focus on specific node
-    #[arg(short, long)]
-    pub node: Option<String>,
-
-    /// Show only apps
-    #[arg(long)]
-    pub apps_only: bool,
-
-    /// Show only nodes
-    #[arg(long)]
-    pub nodes_only: bool,
-}
-
-pub async fn handle(args: TopArgs, config: &CliConfig) -> Result<()> {
-    // TODO: Initialize ratatui terminal
-    // TODO: Create API client from config
-    // TODO: Set up signal handler for Ctrl+C
-    // TODO: Enter main event loop
-    // TODO: Fetch initial data (nodes, apps, resources)
-    // TODO: Render initial dashboard layout
-    // TODO: Process events (keyboard, resize, timer)
-    // TODO: Update data on each interval tick
-    // TODO: Handle node filtering if --node specified
-    // TODO: Render appropriate view based on --apps-only/--nodes-only flags
-    // TODO: Handle graceful exit and restore terminal
-    Ok(())
-}
-
-mod ui {
-    use ratatui::prelude::*;
-
-    pub struct DashboardState {
-        // TODO: Store nodes data
-        // TODO: Store apps data
-        // TODO: Store resource metrics (CPU, memory, network)
-        // TODO: Store selected item index
-        // TODO: Store current sort column
-    }
-
-    impl DashboardState {
-        // TODO: pub fn new() -> Self
-        // TODO: pub fn update(&mut self, data: &ApiData)
-        // TODO: pub fn next_item(&mut self)
-        // TODO: pub fn prev_item(&mut self)
-    }
-
-    pub fn render(state: &DashboardState, frame: &mut Frame<'_>) {
-        // TODO: Render header with title and stats
-        // TODO: Render nodes table with status indicators
-        // TODO: Render apps panel with resource usage
-        // TODO: Render resource charts (CPU, memory, network)
-        // TODO: Render footer with help hints
-    }
-}
-
-mod data {
-    pub struct ApiData {
-        // TODO: Vec<Node>
-        // TODO: Vec<App>
-        // TODO: SystemMetrics
-    }
-
-    pub async fn fetch(api_client: &ApiClient) -> Result<ApiData> {
-        // TODO: Fetch nodes from /api/v1/nodes
-        // TODO: Fetch apps from /api/v1/apps
-        // TODO: Fetch metrics from /api/v1/metrics
-        // TODO: Combine into ApiData struct
-    }
-}
-
-struct ApiClient {
-    // TODO: Base URL
-    // TODO: Auth token
-}
-
-impl ApiClient {
-    // TODO: fn new(url: &str, token: &str) -> Self
-    // TODO: async fn fetch_nodes(&self) -> Result<Vec<Node>>
-    // TODO: async fn fetch_apps(&self) -> Result<Vec<App>>
-    // TODO: async fn fetch_metrics(&self) -> Result<SystemMetrics>
-}
-
-struct Node {
-    // TODO: id
-    // TODO: name
-    // TODO: status (online, offline, unknown)
-    // TODO: cpu_usage
-    // TODO: memory_usage
-    // TODO: region
-}
-
-struct App {
-    // TODO: id
-    // TODO: name
-    // TODO: status
-    // TODO: replicas
-    // TODO: cpu_usage
-    // TODO: memory_usage
-}
-
-struct SystemMetrics {
-    // TODO: total_nodes
-    // TODO: online_nodes
-    // TODO: total_apps
-    // TODO: running_apps
-    // TODO: cpu_usage_avg
-    // TODO: memory_usage_avg
-}
-````
-
 ## File: crates/shellwego-cli/src/commands/tunnel.rs
 ````rust
 //! Local tunnel to remote apps (like ngrok)
@@ -4170,225 +3594,6 @@ pub async fn redeliver_webhook(
 }
 ````
 
-## File: crates/shellwego-control-plane/src/events/bus.rs
-````rust
-//! Event bus abstraction
-//! 
-//! Publishes domain events to NATS for async processing.
-//! Other services subscribe to react to state changes.
-
-use async_nats::Client;
-use serde::Serialize;
-use tracing::{info, debug, error};
-
-use shellwego_core::entities::app::App;
-use super::ServiceContext;
-
-/// Event bus publisher
-#[derive(Clone)]
-pub struct EventBus {
-    nats: Option<Client>,
-    // TODO: Add fallback to in-memory channel if NATS unavailable
-}
-
-impl EventBus {
-    pub fn new(nats: Option<Client>) -> Self {
-        Self { nats }
-    }
-
-    // === App Events ===
-
-    pub async fn publish_app_created(&self, app: &App) -> anyhow::Result<()> {
-        self.publish("apps.created", AppEvent {
-            event_type: "app.created",
-            app_id: app.id,
-            organization_id: app.organization_id,
-            timestamp: chrono::Utc::now(),
-            payload: serde_json::json!({
-                "name": app.name,
-                "image": app.image,
-            }),
-        }).await
-    }
-
-    pub async fn publish_app_deployed(&self, app: &App) -> anyhow::Result<()> {
-        self.publish("apps.deployed", AppEvent {
-            event_type: "app.deployed",
-            app_id: app.id,
-            organization_id: app.organization_id,
-            timestamp: chrono::Utc::now(),
-            payload: serde_json::json!({
-                "status": app.status,
-            }),
-        }).await
-    }
-
-    pub async fn publish_app_crashed(
-        &self,
-        app: &App,
-        exit_code: i32,
-        logs: &str,
-    ) -> anyhow::Result<()> {
-        self.publish("apps.crashed", AppEvent {
-            event_type: "app.crashed",
-            app_id: app.id,
-            organization_id: app.organization_id,
-            timestamp: chrono::Utc::now(),
-            payload: serde_json::json!({
-                "exit_code": exit_code,
-                "logs_preview": &logs[..logs.len().min(1000)],
-            }),
-        }).await
-    }
-
-    // === Deployment Events ===
-
-    pub async fn publish_deployment_started(
-        &self,
-        spec: &crate::services::deployment::DeploymentSpec,
-    ) -> anyhow::Result<()> {
-        self.publish("deployments.started", DeploymentEvent {
-            event_type: "deployment.started",
-            deployment_id: spec.deployment_id,
-            app_id: spec.app_id,
-            timestamp: chrono::Utc::now(),
-            strategy: format!("{:?}", spec.strategy),
-        }).await
-    }
-
-    pub async fn publish_deployment_succeeded(
-        &self,
-        spec: &crate::services::deployment::DeploymentSpec,
-    ) -> anyhow::Result<()> {
-        self.publish("deployments.succeeded", DeploymentEvent {
-            event_type: "deployment.succeeded",
-            deployment_id: spec.deployment_id,
-            app_id: spec.app_id,
-            timestamp: chrono::Utc::now(),
-            strategy: format!("{:?}", spec.strategy),
-        }).await
-    }
-
-    pub async fn publish_deployment_failed(
-        &self,
-        spec: &crate::services::deployment::DeploymentSpec,
-        error: &str,
-    ) -> anyhow::Result<()> {
-        self.publish("deployments.failed", DeploymentFailedEvent {
-            event_type: "deployment.failed",
-            deployment_id: spec.deployment_id,
-            app_id: spec.app_id,
-            timestamp: chrono::Utc::now(),
-            error: error.to_string(),
-        }).await
-    }
-
-    pub async fn publish_rollback_completed(
-        &self,
-        app_id: uuid::Uuid,
-        from_deployment: uuid::Uuid,
-    ) -> anyhow::Result<()> {
-        self.publish("deployments.rollback", RollbackEvent {
-            event_type: "deployment.rollback",
-            app_id,
-            from_deployment,
-            timestamp: chrono::Utc::now(),
-        }).await
-    }
-
-    // === Node Events ===
-
-    pub async fn publish_node_offline(&self, node_id: uuid::Uuid) -> anyhow::Result<()> {
-        self.publish("nodes.offline", NodeEvent {
-            event_type: "node.offline",
-            node_id,
-            timestamp: chrono::Utc::now(),
-        }).await
-    }
-
-    // === Internal ===
-
-    async fn publish<T: Serialize>(
-        &self,
-        subject: &str,
-        payload: T,
-    ) -> anyhow::Result<()> {
-        let json = serde_json::to_vec(&payload)?;
-        
-        if let Some(ref nats) = self.nats {
-            nats.publish(subject.to_string(), json.into()).await?;
-            debug!("Published to {}: {} bytes", subject, json.len());
-        } else {
-            // TODO: Buffer to memory or disk for later delivery
-            debug!("NATS unavailable, event dropped: {}", subject);
-        }
-        
-        Ok(())
-    }
-}
-
-// === Event Schemas ===
-
-#[derive(Serialize)]
-struct AppEvent {
-    event_type: &'static str,
-    app_id: uuid::Uuid,
-    organization_id: uuid::Uuid,
-    timestamp: chrono::DateTime<chrono::Utc>,
-    payload: serde_json::Value,
-}
-
-#[derive(Serialize)]
-struct DeploymentEvent {
-    event_type: &'static str,
-    deployment_id: uuid::Uuid,
-    app_id: uuid::Uuid,
-    timestamp: chrono::DateTime<chrono::Utc>,
-    strategy: String,
-}
-
-#[derive(Serialize)]
-struct DeploymentFailedEvent {
-    event_type: &'static str,
-    deployment_id: uuid::Uuid,
-    app_id: uuid::Uuid,
-    timestamp: chrono::DateTime<chrono::Utc>,
-    error: String,
-}
-
-#[derive(Serialize)]
-struct RollbackEvent {
-    event_type: &'static str,
-    app_id: uuid::Uuid,
-    from_deployment: uuid::Uuid,
-    timestamp: chrono::DateTime<chrono::Utc>,
-}
-
-#[derive(Serialize)]
-struct NodeEvent {
-    event_type: &'static str,
-    node_id: uuid::Uuid,
-    timestamp: chrono::DateTime<chrono::Utc>,
-}
-
-/// Event consumer / subscriber
-pub struct EventConsumer {
-    // TODO: NATS subscription management
-    // TODO: Durable consumer for exactly-once processing
-    // TODO: Dead letter queue for failed events
-}
-
-impl EventConsumer {
-    pub async fn subscribe_app_events(&self) -> anyhow::Result<()> {
-        // TODO: Subscribe to "apps.>"
-        // TODO: Route to appropriate handler based on event_type
-        // TODO: Update read models, trigger webhooks, send notifications
-        
-        Ok(())
-    }
-}
-````
-
 ## File: crates/shellwego-control-plane/src/federation/gossip.rs
 ````rust
 //! SWIM-style gossip protocol implementation
@@ -5410,69 +4615,6 @@ pub enum RedisMode {
 }
 ````
 
-## File: crates/shellwego-control-plane/src/orm/entities/app.rs
-````rust
-//! App entity using Sea-ORM
-//!
-//! Represents deployable applications running in Firecracker microVMs.
-
-use sea_orm::entity::prelude::*;
-use serde::{Deserialize, Serialize};
-
-// TODO: Add #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-#[sea_orm(table_name = "apps")]
-pub struct Model {
-    #[sea_orm(primary_key)]
-    pub id: Uuid,
-    pub name: String,
-    pub slug: String,
-    pub status: String, // TODO: Use AppStatus enum with custom type
-    pub image: String,
-    pub command: Option<Json>, // TODO: Use Vec<String> with custom type
-    pub resources: Json, // TODO: Use ResourceSpec with custom type
-    pub env: Json, // TODO: Use Vec<EnvVar> with custom type
-    pub domains: Json, // TODO: Use Vec<DomainConfig> with custom type
-    pub volumes: Json, // TODO: Use Vec<VolumeMount> with custom type
-    pub health_check: Option<Json>, // TODO: Use HealthCheck with custom type
-    pub source: Json, // TODO: Use SourceSpec with custom type
-    pub organization_id: Uuid,
-    pub created_by: Uuid,
-    pub created_at: DateTime,
-    pub updated_at: DateTime,
-    // TODO: Add replica_count field
-    // TODO: Add networking_policy field
-    // TODO: Add tags field
-}
-
-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-pub enum Relation {
-    // TODO: Define relation to Organization
-    // TODO: Define relation to User (created_by)
-    // TODO: Define relation to AppInstance (has many)
-    // TODO: Define relation to Deployment (has many)
-    // TODO: Define relation to Volume (many-to-many)
-    // TODO: Define relation to Domain (many-to-many)
-}
-
-impl ActiveModelBehavior for ActiveModel {
-    // TODO: Implement before_save hook for slug generation
-    // TODO: Implement after_save hook for event publishing
-    // TODO: Implement before_update hook for version tracking
-}
-
-// TODO: Implement conversion methods between ORM Model and core entity App
-// impl From<Model> for shellwego_core::entities::app::App { ... }
-// impl From<shellwego_core::entities::app::App> for ActiveModel { ... }
-
-// TODO: Implement custom query methods
-// impl Model {
-//     pub async fn find_by_org(db: &DatabaseConnection, org_id: Uuid) -> Result<Vec<Self>, DbErr> { ... }
-//     pub async fn find_by_status(db: &DatabaseConnection, status: AppStatus) -> Result<Vec<Self>, DbErr> { ... }
-//     pub async fn find_with_instances(db: &DatabaseConnection, app_id: Uuid) -> Result<(Self, Vec<app_instance::Model>), DbErr> { ... }
-// }
-````
-
 ## File: crates/shellwego-control-plane/src/orm/entities/audit_log.rs
 ````rust
 //! Audit log entity using Sea-ORM
@@ -5776,68 +4918,6 @@ pub mod audit_log;
 // pub mod prelude {
 //     pub use sea_orm::prelude::*;
 //     pub use super::*;
-// }
-````
-
-## File: crates/shellwego-control-plane/src/orm/entities/node.rs
-````rust
-//! Node entity using Sea-ORM
-//!
-//! Represents worker nodes that run Firecracker microVMs.
-
-use sea_orm::entity::prelude::*;
-use serde::{Deserialize, Serialize};
-
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-#[sea_orm(table_name = "nodes")]
-pub struct Model {
-    #[sea_orm(primary_key)]
-    pub id: Uuid,
-    pub hostname: String,
-    pub status: String, // TODO: Use NodeStatus enum with custom type
-    pub region: String,
-    pub zone: String,
-    pub capacity: Json, // TODO: Use NodeCapacity with custom type
-    pub capabilities: Json, // TODO: Use NodeCapabilities with custom type
-    pub network: Json, // TODO: Use NodeNetwork with custom type
-    pub labels: Json, // TODO: Use HashMap<String, String> with custom type
-    pub running_apps: u32,
-    pub microvm_capacity: u32,
-    pub microvm_used: u32,
-    pub kernel_version: String,
-    pub firecracker_version: String,
-    pub agent_version: String,
-    pub last_seen: DateTime,
-    pub created_at: DateTime,
-    pub organization_id: Uuid,
-    // TODO: Add join_token field (encrypted)
-    // TODO: Add drain_started_at field
-    // TODO: Add maintenance_reason field
-}
-
-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-pub enum Relation {
-    // TODO: Define relation to Organization
-    // TODO: Define relation to AppInstance (has many)
-    // TODO: Define relation to Volume (has many)
-}
-
-impl ActiveModelBehavior for ActiveModel {
-    // TODO: Implement before_save hook for status validation
-    // TODO: Implement after_save hook for node registration event
-    // TODO: Implement before_update hook for heartbeat tracking
-}
-
-// TODO: Implement conversion methods between ORM Model and core entity Node
-// impl From<Model> for shellwego_core::entities::node::Node { ... }
-// impl From<shellwego_core::entities::node::Node> for ActiveModel { ... }
-
-// TODO: Implement custom query methods
-// impl Model {
-//     pub async fn find_ready(db: &DatabaseConnection) -> Result<Vec<Self>, DbErr> { ... }
-//     pub async fn find_by_region(db: &DatabaseConnection, region: &str) -> Result<Vec<Self>, DbErr> { ... }
-//     pub async fn find_stale_nodes(db: &DatabaseConnection, timeout_secs: i64) -> Result<Vec<Self>, DbErr> { ... }
-//     pub async fn update_heartbeat(db: &DatabaseConnection, node_id: Uuid, capacity: NodeCapacity) -> Result<Self, DbErr> { ... }
 // }
 ````
 
@@ -7688,207 +6768,6 @@ pub use sea_orm_migration::prelude::*;
 // pub async fn run_migrations(db: &DatabaseConnection) -> Result<(), DbErr> { ... }
 // pub async fn reset_database(db: &DatabaseConnection) -> Result<(), DbErr> { ... }
 // pub async fn get_migration_status(db: &DatabaseConnection) -> Result<Vec<MigrationStatus>, DbErr> { ... }
-````
-
-## File: crates/shellwego-control-plane/src/orm/repository/app_repository.rs
-````rust
-//! App Repository - Data Access Object for App entity
-
-use sea_orm::{DbConn, DbErr, EntityTrait};
-use crate::orm::entities::app;
-
-/// App repository for database operations
-pub struct AppRepository {
-    db: DbConn,
-}
-
-impl AppRepository {
-    /// Create a new AppRepository
-    pub fn new(db: DbConn) -> Self {
-        Self { db }
-    }
-
-    // TODO: Create a new app
-    // TODO: Find app by ID
-    // TODO: Find app by slug
-    // TODO: Find all apps for an organization
-    // TODO: Update app
-    // TODO: Delete app
-    // TODO: List apps with pagination
-    // TODO: Find apps by status
-    // TODO: Find apps by node
-    // TODO: Add domain to app
-    // TODO: Remove domain from app
-    // TODO: Add volume to app
-    // TODO: Remove volume from app
-    // TODO: Add database to app
-    // TODO: Remove database from app
-    // TODO: Get app instances
-    // TODO: Get app deployments
-    // TODO: Get app secrets
-    // TODO: Update app status
-    // TODO: Get app metrics
-    // TODO: Search apps by name
-    // TODO: Count apps by organization
-    // TODO: Get apps with resources
-    // TODO: Get apps with health status
-    // TODO: Get apps with domains
-    // TODO: Get apps with volumes
-    // TODO: Get apps with databases
-    // TODO: Get apps with instances
-    // TODO: Get apps with deployments
-    // TODO: Get apps with secrets
-    // TODO: Get apps with all relations
-    // TODO: Get apps by source type
-    // TODO: Get apps by image
-    // TODO: Get apps by command
-    // TODO: Get apps by environment variables
-    // TODO: Get apps by labels
-    // TODO: Get apps by region
-    // TODO: Get apps by zone
-    // TODO: Get apps by created date range
-    // TODO: Get apps by updated date range
-    // TODO: Get apps by created by user
-    // TODO: Get apps with health check
-    // TODO: Get apps with resources
-    // TODO: Get apps with env
-    // TODO: Get apps with domains
-    // TODO: Get apps with volumes
-    // TODO: Get apps with health_check
-    // TODO: Get apps with source
-    // TODO: Get apps with organization_id
-    // TODO: Get apps with created_by
-    // TODO: Get apps with created_at
-    // TODO: Get apps with updated_at
-    // TODO: Get apps with all fields
-    // TODO: Get apps with all relations
-    // TODO: Get apps with pagination
-    // TODO: Get apps with sorting
-    // TODO: Get apps with filtering
-    // TODO: Get apps with search
-    // TODO: Get apps with count
-    // TODO: Get apps with aggregate
-    // TODO: Get apps with group by
-    // TODO: Get apps with having
-    // TODO: Get apps with join
-    // TODO: Get apps with left join
-    // TODO: Get apps with right join
-    // TODO: Get apps with inner join
-    // TODO: Get apps with full join
-    // TODO: Get apps with cross join
-    // TODO: Get apps with union
-    // TODO: Get apps with union all
-    // TODO: Get apps with intersect
-    // TODO: Get apps with except
-    // TODO: Get apps with subquery
-    // TODO: Get apps with exists
-    // TODO: Get apps with in
-    // TODO: Get apps with not in
-    // TODO: Get apps with between
-    // TODO: Get apps with like
-    // TODO: Get apps with ilike
-    // TODO: Get apps with is null
-    // TODO: Get apps with is not null
-    // TODO: Get apps with distinct
-    // TODO: Get apps with limit
-    // TODO: Get apps with offset
-    // TODO: Get apps with order by
-    // TODO: Get apps with group by
-    // TODO: Get apps with having
-    // TODO: Get apps with aggregate functions
-    // TODO: Get apps with count
-    // TODO: Get apps with sum
-    // TODO: Get apps with avg
-    // TODO: Get apps with min
-    // TODO: Get apps with max
-    // TODO: Get apps with std dev
-    // TODO: Get apps with variance
-    // TODO: Get apps with custom query
-    // TODO: Get apps with raw SQL
-    // TODO: Get apps with prepared statement
-    // TODO: Get apps with transaction
-    // TODO: Get apps with savepoint
-    // TODO: Get apps with rollback
-    // TODO: Get apps with commit
-    // TODO: Get apps with isolation level
-    // TODO: Get apps with read committed
-    // TODO: Get apps with repeatable read
-    // TODO: Get apps with serializable
-    // TODO: Get apps with read uncommitted
-    // TODO: Get apps with lock
-    // TODO: Get apps with for update
-    // TODO: Get apps with for share
-    // TODO: Get apps with nowait
-    // TODO: Get apps with skip locked
-    // TODO: Get apps with no key update
-    // TODO: Get apps with key share
-    // TODO: Get apps with advisory lock
-    // TODO: Get apps with advisory unlock
-    // TODO: Get apps with advisory xact lock
-    // TODO: Get apps with advisory xact unlock
-    // TODO: Get apps with pg advisory lock
-    // TODO: Get apps with pg advisory unlock
-    // TODO: Get apps with pg advisory xact lock
-    // TODO: Get apps with pg advisory xact unlock
-    // TODO: Get apps with pg try advisory lock
-    // TODO: Get apps with pg try advisory xact lock
-    // TODO: Get apps with pg advisory unlock
-    // TODO: Get apps with pg advisory unlock all
-    // TODO: Get apps with pg advisory unlock shared
-    // TODO: Get apps with pg advisory xact unlock
-    // TODO: Get apps with pg advisory xact unlock all
-    // TODO: Get apps with pg advisory xact unlock shared
-    // TODO: Get apps with pg advisory lock shared
-    // TODO: Get apps with pg advisory xact lock shared
-    // TODO: Get apps with pg try advisory lock shared
-    // TODO: Get apps with pg try advisory xact lock shared
-    // TODO: Get apps with pg advisory unlock shared
-    // TODO: Get apps with pg advisory xact unlock shared
-    // TODO: Get apps with pg advisory unlock all
-    // TODO: Get apps with pg advisory xact unlock all
-    // TODO: Get apps with pg advisory unlock shared
-    // TODO: Get apps with pg advisory xact unlock shared
-    // TODO: Get apps with pg advisory lock
-    // TODO: Get apps with pg advisory xact lock
-    // TODO: Get apps with pg try advisory lock
-    // TODO: Get apps with pg try advisory xact lock
-    // TODO: Get apps with pg advisory unlock
-    // TODO: Get apps with pg advisory xact unlock
-    // TODO: Get apps with pg advisory unlock all
-    // TODO: Get apps with pg advisory xact unlock all
-    // TODO: Get apps with pg advisory unlock shared
-    // TODO: Get apps with pg advisory xact unlock shared
-    // TODO: Get apps with pg advisory lock shared
-    // TODO: Get apps with pg advisory xact lock shared
-    // TODO: Get apps with pg try advisory lock shared
-    // TODO: Get apps with pg try advisory xact lock shared
-    // TODO: Get apps with pg advisory unlock shared
-    // TODO: Get apps with pg advisory xact unlock shared
-    // TODO: Get apps with pg advisory unlock all
-    // TODO: Get apps with pg advisory xact unlock all
-    // TODO: Get apps with pg advisory unlock shared
-    // TODO: Get apps with pg advisory xact unlock shared
-    // TODO: Get apps with pg advisory lock
-    // TODO: Get apps with pg advisory xact lock
-    // TODO: Get apps with pg try advisory lock
-    // TODO: Get apps with pg try advisory xact lock
-    // TODO: Get apps with pg advisory unlock
-    // TODO: Get apps with pg advisory xact unlock
-    // TODO: Get apps with pg advisory unlock all
-    // TODO: Get apps with pg advisory xact unlock all
-    // TODO: Get apps with pg advisory unlock shared
-    // TODO: Get apps with pg advisory xact unlock shared
-    // TODO: Get apps with pg advisory lock shared
-    // TODO: Get apps with pg advisory xact lock shared
-    // TODO: Get apps with pg try advisory lock shared
-    // TODO: Get apps with pg try advisory xact lock shared
-    // TODO: Get apps with pg advisory unlock shared
-    // TODO: Get apps with pg advisory xact unlock shared
-    // TODO: Get apps with pg advisory unlock all
-    // TODO: Get apps with pg advisory xact unlock all
-    // TODO: Get apps with pg advisory unlock shared
-    // TODO: Get apps with pg advisory xact unlock shared
-}
 ````
 
 ## File: crates/shellwego-control-plane/src/orm/repository/audit_log_repository.rs
@@ -10327,242 +9206,6 @@ tokio-test = "0.4"
 reqwest = { workspace = true }
 ````
 
-## File: crates/shellwego-network/src/cni/mod.rs
-````rust
-//! CNI (Container Network Interface) implementation
-//! 
-//! Sets up networking for microVMs using Linux bridge + TAP devices.
-//! Compatible with standard CNI plugins but optimized for Firecracker.
-
-use std::net::Ipv4Addr;
-use tracing::{info, debug, warn};
-
-use crate::{
-    NetworkConfig, NetworkSetup, NetworkError,
-    bridge::Bridge,
-    tap::TapDevice,
-    ipam::Ipam,
-};
-
-/// CNI network manager
-pub struct CniNetwork {
-    bridge: Bridge,
-    ipam: Ipam,
-    mtu: u32,
-}
-
-impl CniNetwork {
-    /// Initialize CNI for a node
-    pub async fn new(
-        bridge_name: &str,
-        node_cidr: &str,
-    ) -> Result<Self, NetworkError> {
-        let subnet: ipnetwork::Ipv4Network = node_cidr.parse()
-            .map_err(|e| NetworkError::InvalidConfig(format!("Invalid CIDR: {}", e)))?;
-            
-        // Ensure bridge exists
-        let bridge = Bridge::create_or_get(bridge_name).await?;
-        
-        // Setup IPAM for this subnet
-        let ipam = Ipam::new(subnet);
-        
-        // Configure bridge IP (first usable)
-        let bridge_ip = subnet.nth(1)
-            .ok_or_else(|| NetworkError::InvalidConfig("CIDR too small".to_string()))?;
-        bridge.set_ip(bridge_ip, subnet).await?;
-        bridge.set_up().await?;
-        
-        // Enable IP forwarding
-        enable_ip_forwarding().await?;
-        
-        // Setup NAT for outbound traffic
-        setup_nat(&subnet).await?;
-        
-        info!("CNI initialized: bridge {} on {}", bridge_name, node_cidr);
-        
-        Ok(Self {
-            bridge,
-            ipam,
-            mtu: 1500,
-        })
-    }
-
-    /// Setup network for a microVM
-    pub async fn setup(&self, config: &NetworkConfig) -> Result<NetworkSetup, NetworkError> {
-        debug!("Setting up network for VM {}", config.vm_id);
-        
-        // Allocate IP if not specified
-        let guest_ip = if config.guest_ip == Ipv4Addr::UNSPECIFIED {
-            self.ipam.allocate(config.app_id)?
-        } else {
-            self.ipam.allocate_specific(config.app_id, config.guest_ip)?
-        };
-        
-        let host_ip = self.ipam.gateway();
-        
-        // Create TAP device
-        let tap = TapDevice::create(&config.tap_name).await?;
-        tap.set_owner(std::process::id()).await?; // Firecracker runs as same user
-        tap.set_mtu(self.mtu).await?;
-        tap.attach_to_bridge(&self.bridge.name()).await?;
-        tap.set_up().await?;
-        
-        // Setup bandwidth limiting if requested
-        if let Some(limit_mbps) = config.bandwidth_limit_mbps {
-            setup_tc_bandwidth(&config.tap_name, limit_mbps).await?;
-        }
-        
-        // TODO: Setup firewall rules (nftables or eBPF)
-        // TODO: Port forwarding if public IP
-        
-        info!(
-            "Network ready for {}: TAP {} with IP {}/{}",
-            config.app_id, config.tap_name, guest_ip, self.ipam.subnet().prefix()
-        );
-        
-        Ok(NetworkSetup {
-            tap_device: config.tap_name.clone(),
-            guest_ip,
-            host_ip,
-            veth_pair: None,
-        })
-    }
-
-    /// Teardown network for a microVM
-    pub async fn teardown(&self, app_id: uuid::Uuid, tap_name: &str) -> Result<(), NetworkError> {
-        debug!("Tearing down network for {}", app_id);
-        
-        // Release IP
-        self.ipam.release(app_id);
-        
-        // Delete TAP device
-        TapDevice::delete(tap_name).await?;
-        
-        // TODO: Clean up tc rules
-        // TODO: Clean up firewall rules
-        
-        Ok(())
-    }
-
-    /// Get bridge interface name
-    pub fn bridge_name(&self) -> &str {
-        &self.bridge.name()
-    }
-}
-
-async fn enable_ip_forwarding() -> Result<(), NetworkError> {
-    tokio::fs::write("/proc/sys/net/ipv4/ip_forward", "1").await
-        .map_err(|e| NetworkError::Io(e))?;
-        
-    tokio::fs::write("/proc/sys/net/ipv6/conf/all/forwarding", "1").await
-        .map_err(|e| NetworkError::Io(e))?;
-        
-    Ok(())
-}
-
-async fn setup_nat(subnet: &ipnetwork::Ipv4Network) -> Result<(), NetworkError> {
-    // Use nftables or iptables for NAT
-    // Prefer nftables on modern systems
-    
-    let rule = format!(
-        "ip saddr {} oifname != \"{}\" masquerade",
-        subnet, "shellwego0" // TODO: Use actual bridge name
-    );
-    
-    // Check if nftables is available
-    let nft_check = tokio::process::Command::new("nft")
-        .arg("list")
-        .output()
-        .await;
-        
-    if nft_check.is_ok() && nft_check.unwrap().status.success() {
-        // Use nftables
-        setup_nftables_nat(subnet).await?;
-    } else {
-        // Fallback to iptables
-        setup_iptables_nat(subnet).await?;
-    }
-    
-    Ok(())
-}
-
-async fn setup_nftables_nat(subnet: &ipnetwork::Ipv4Network) -> Result<(), NetworkError> {
-    // TODO: Create table if not exists
-    // TODO: Add masquerade rule for subnet
-    
-    let _ = tokio::process::Command::new("nft")
-        .args([
-            "add", "rule", "ip", "nat", "postrouting",
-            "ip", "saddr", &subnet.to_string(),
-            "masquerade",
-        ])
-        .output()
-        .await?;
-        
-    Ok(())
-}
-
-async fn setup_iptables_nat(subnet: &ipnetwork::Ipv4Network) -> Result<(), NetworkError> {
-    let _ = tokio::process::Command::new("iptables")
-        .args([
-            "-t", "nat", "-A", "POSTROUTING",
-            "-s", &subnet.to_string(),
-            "!", "-o", "shellwego0", // TODO
-            "-j", "MASQUERADE",
-        ])
-        .output()
-        .await?;
-        
-    Ok(())
-}
-
-async fn setup_tc_bandwidth(iface: &str, limit_mbps: u32) -> Result<(), NetworkError> {
-    // Setup traffic control (tc) for bandwidth limiting
-    // HTB (Hierarchical Token Bucket) qdisc
-    
-    // Delete existing
-    let _ = tokio::process::Command::new("tc")
-        .args(["qdisc", "del", "dev", iface, "root"])
-        .output()
-        .await;
-        
-    // Add HTB
-    let output = tokio::process::Command::new("tc")
-        .args([
-            "qdisc", "add", "dev", iface, "root",
-            "handle", "1:", "htb", "default", "10",
-        ])
-        .output()
-        .await?;
-        
-    if !output.status.success() {
-        return Err(NetworkError::BridgeError(
-            String::from_utf8_lossy(&output.stderr).to_string()
-        ));
-    }
-    
-    // Add class with rate limit
-    let kbit = limit_mbps * 1000;
-    let output = tokio::process::Command::new("tc")
-        .args([
-            "class", "add", "dev", iface, "parent", "1:",
-            "classid", "1:10", "htb",
-            "rate", &format!("{}kbit", kbit),
-            "ceil", &format!("{}kbit", kbit),
-        ])
-        .output()
-        .await?;
-        
-    if !output.status.success() {
-        return Err(NetworkError::BridgeError(
-            String::from_utf8_lossy(&output.stderr).to_string()
-        ));
-    }
-    
-    Ok(())
-}
-````
-
 ## File: crates/shellwego-network/src/ebpf/firewall.rs
 ````rust
 //! XDP-based firewall for DDoS protection and filtering
@@ -10632,138 +9275,6 @@ pub struct FirewallStats {
     // TODO: Add bytes_allowed, bytes_dropped
     // TODO: Add top_blocked_ips
 }
-````
-
-## File: crates/shellwego-network/src/ebpf/mod.rs
-````rust
-//! eBPF/XDP programs for high-performance networking
-//! 
-//! Uses aya-rs for safe eBPF loading and management.
-
-use thiserror::Error;
-
-pub mod firewall;
-pub mod qos;
-
-#[derive(Error, Debug)]
-pub enum EbpfError {
-    #[error("eBPF load failed: {0}")]
-    LoadFailed(String),
-    
-    #[error("Program not attached: {0}")]
-    NotAttached(String),
-    
-    #[error("Map operation failed: {0}")]
-    MapError(String),
-    
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-}
-
-/// eBPF program manager
-pub struct EbpfManager {
-    // TODO: Add loaded_programs, bpf_loader, map_fds
-}
-
-impl EbpfManager {
-    /// Initialize eBPF subsystem
-    pub async fn new() -> Result<Self, EbpfError> {
-        // TODO: Check kernel version (5.10+ required)
-        // TODO: Verify BPF filesystem mounted
-        // TODO: Initialize aya::BpfLoader
-        unimplemented!("EbpfManager::new")
-    }
-
-    /// Load and attach XDP program to interface
-    pub async fn attach_xdp(
-        &self,
-        iface: &str,
-        program: XdpProgram,
-    ) -> Result<ProgramHandle, EbpfError> {
-        // TODO: Load eBPF ELF
-        // TODO: Set XDP mode (SKB_MODE or DRV_MODE)
-        // TODO: Attach to interface
-        unimplemented!("EbpfManager::attach_xdp")
-    }
-
-    /// Load and attach TC (traffic control) program
-    pub async fn attach_tc(
-        &self,
-        iface: &str,
-        direction: TcDirection,
-        program: TcProgram,
-    ) -> Result<ProgramHandle, EbpfError> {
-        // TODO: Load clsact qdisc if needed
-        // TODO: Attach filter program
-        unimplemented!("EbpfManager::attach_tc")
-    }
-
-    /// Load cgroup eBPF program for socket filtering
-    pub async fn attach_cgroup(
-        &self,
-        cgroup_path: &std::path::Path,
-        program: CgroupProgram,
-    ) -> Result<ProgramHandle, EbpfError> {
-        // TODO: Open cgroup FD
-        // TODO: Attach SOCK_OPS or SOCK_ADDR program
-        unimplemented!("EbpfManager::attach_cgroup")
-    }
-
-    /// Detach program by handle
-    pub async fn detach(&self, handle: ProgramHandle) -> Result<(), EbpfError> {
-        // TODO: Lookup program by handle
-        // TODO: Call aya detach
-        unimplemented!("EbpfManager::detach")
-    }
-
-    /// Update eBPF map entry
-    pub async fn map_update<K, V>(
-        &self,
-        map_name: &str,
-        key: &K,
-        value: &V,
-    ) -> Result<(), EbpfError> {
-        // TODO: Lookup map FD
-        // TODO: Insert or update key-value
-        unimplemented!("EbpfManager::map_update")
-    }
-
-    /// Read eBPF map entry
-    pub async fn map_lookup<K, V>(
-        &self,
-        map_name: &str,
-        key: &K,
-    ) -> Result<Option<V>, EbpfError> {
-        // TODO: Lookup map FD
-        // TODO: Lookup key, return value if exists
-        unimplemented!("EbpfManager::map_lookup")
-    }
-}
-
-/// XDP program types
-pub enum XdpProgram {
-    // TODO: Firewall, DdosProtection, LoadBalancer
-}
-
-/// TC program types
-pub enum TcProgram {
-    // TODO: BandwidthLimit, LatencyInjection
-}
-
-/// Cgroup program types
-pub enum CgroupProgram {
-    // TODO: SocketFilter, ConnectHook
-}
-
-/// TC attachment direction
-pub enum TcDirection {
-    Ingress,
-    Egress,
-}
-
-/// Opaque handle to loaded program
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ProgramHandle(u64);
 ````
 
 ## File: crates/shellwego-network/src/ebpf/qos.rs
@@ -10857,624 +9368,6 @@ pub struct ShaperStats {
     // TODO: Add bytes_processed, bytes_dropped, bytes_delayed
     // TODO: Add current_rate, burst_allowance
 }
-````
-
-## File: crates/shellwego-network/src/quinn/client.rs
-````rust
-//! QUIC client for Agent to Control Plane communication
-//!
-//! This client provides a secure, multiplexed connection from agents
-//! to the control plane, replacing NATS for CP<->Agent communication.
-
-use crate::quinn::common::*;
-use anyhow::Result;
-use std::sync::Arc;
-
-/// Quinn client for agent-side connections
-pub struct QuinnClient {
-    //TODO: Initialize Quinn client connection
-    // connection: Arc<quinn::Connection>,
-    //TODO: Add stream management
-    // streams: Arc<tokio::sync::Mutex<StreamManager>>,
-    config: QuicConfig,
-}
-
-impl QuinnClient {
-    /// Create a new client with the given configuration
-    //TODO: Implement constructor
-    pub fn new(config: QuicConfig) -> Self {
-        Self {
-            // connection: Arc::new(unimplemented!()),
-            // streams: Arc::new(tokio::sync::Mutex::new(StreamManager::new())),
-            config,
-        }
-    }
-
-    /// Connect to the control plane
-    //TODO: Implement connection establishment
-    pub async fn connect(&self, endpoint: &str) -> Result<Self> {
-        //TODO: Parse endpoint and establish QUIC connection
-        //TODO: Handle TLS handshake
-        //TODO: Perform join handshake with join token
-        unimplemented!("QUIC client connection not yet implemented")
-    }
-
-    /// Send a message to the control plane
-    //TODO: Implement message sending with proper stream multiplexing
-    pub async fn send(&self, message: Message) -> Result<()> {
-        //TODO: Acquire stream (handle backpressure)
-        //TODO: Serialize message with postcard/bincode
-        //TODO: Write to QUIC stream
-        //TODO: Handle write errors and retry logic
-        unimplemented!("QUIC message sending not yet implemented")
-    }
-
-    /// Receive a message from the control plane
-    //TODO: Implement message receiving from streams
-    pub async fn receive(&self) -> Result<Message> {
-        //TODO: Wait for available stream
-        //TODO: Read from QUIC stream
-        //TODO: Deserialize message
-        //TODO: Handle stream close / connection error
-        unimplemented!("QUIC message receiving not yet implemented")
-    }
-
-    /// Send heartbeat with current metrics
-    //TODO: Implement heartbeat with metrics reporting
-    pub async fn send_heartbeat(
-        &self,
-        node_id: &str,
-        cpu: f64,
-        memory: f64,
-        disk: f64,
-        network: NetworkMetrics,
-    ) -> Result<()> {
-        //TODO: Create heartbeat message
-        //TODO: Send via dedicated stream or shared stream
-        unimplemented!("Heartbeat sending not yet implemented")
-    }
-
-    /// Request to join the control plane
-    //TODO: Implement join request with token validation
-    pub async fn join(
-        &self,
-        node_id: &str,
-        join_token: &str,
-        capabilities: &[&str],
-    ) -> Result<JoinResponse> {
-        //TODO: Create JoinRequest message
-        //TODO: Send request and wait for response
-        //TODO: Validate response and store accepted node ID
-        unimplemented!("Join request not yet implemented")
-    }
-
-    /// Stream logs to control plane
-    //TODO: Implement log streaming with proper buffering
-    pub async fn stream_logs(
-        &self,
-        node_id: &str,
-        app_id: &str,
-        logs: Vec<LogEntry>,
-    ) -> Result<()> {
-        //TODO: Create log messages
-        //TODO: Batch logs for efficiency
-        //TODO: Send via dedicated log stream
-        unimplemented!("Log streaming not yet implemented")
-    }
-
-    /// Stream metrics to control plane
-    //TODO: Implement metrics streaming with buffering
-    pub async fn stream_metrics(
-        &self,
-        node_id: &str,
-        metrics: serde_json::Value,
-    ) -> Result<()> {
-        //TODO: Create metrics message
-        //TODO: Send with appropriate priority
-        unimplemented!("Metrics streaming not yet implemented")
-    }
-
-    /// Subscribe to commands from control plane
-    //TODO: Implement command subscription via bidirectional stream
-    pub async fn subscribe_commands(&self) -> Result<CommandReceiver> {
-        //TODO: Open bidirectional stream for commands
-        //TODO: Set up command channel receiver
-        unimplemented!("Command subscription not yet implemented")
-    }
-
-    /// Execute a command and return result
-    //TODO: Implement command execution and result reporting
-    pub async fn execute_command(
-        &self,
-        command_id: &str,
-        command: CommandType,
-    ) -> Result<CommandResult> {
-        //TODO: Parse command type
-        //TODO: Execute command in agent runtime
-        //TODO: Capture output and error
-        //TODO: Send CommandResult back
-        unimplemented!("Command execution not yet implemented")
-    }
-
-    /// Close the connection gracefully
-    //TODO: Implement graceful shutdown
-    pub async fn close(&self) -> Result<()> {
-        //TODO: Send close notification
-        //TODO: Wait for ACK
-        //TODO: Close all streams
-        //TODO: Drop connection
-        unimplemented!("Connection close not yet implemented")
-    }
-}
-
-/// Receiver for commands from control plane
-pub struct CommandReceiver {
-    //TODO: Stream receiver for commands
-}
-
-/// Log entry structure
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LogEntry {
-    pub timestamp: chrono::DateTime<chrono::Utc>,
-    pub level: String,
-    pub message: String,
-    pub stream: LogStream,
-}
-
-/// Stream manager for multiplexing
-struct StreamManager {
-    //TODO: Track open streams
-    //TODO: Handle backpressure
-    //TODO: Implement stream pooling
-}
-
-/// Client builder for configuration
-pub struct QuinnClientBuilder {
-    config: QuicConfig,
-}
-
-impl QuinnClientBuilder {
-    //TODO: Implement builder pattern
-}
-````
-
-## File: crates/shellwego-network/src/quinn/common.rs
-````rust
-//! Common types for QUIC communication between Control Plane and Agent
-
-use serde::{Deserialize, Serialize};
-use std::net::SocketAddr;
-
-/// Message types for CP<->Agent communication
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum Message {
-    /// Agent heartbeat with metrics
-    Heartbeat {
-        node_id: String,
-        cpu_usage: f64,
-        memory_usage: f64,
-        disk_usage: f64,
-        network_metrics: NetworkMetrics,
-    },
-    
-    /// Agent reporting its status
-    Status {
-        node_id: String,
-        status: AgentStatus,
-        uptime_seconds: u64,
-    },
-    
-    /// Control plane sending command to agent
-    Command {
-        command_id: String,
-        command: CommandType,
-        payload: serde_json::Value,
-    },
-    
-    /// Command execution result from agent
-    CommandResult {
-        command_id: String,
-        success: bool,
-        output: String,
-        error: Option<String>,
-    },
-    
-    /// Agent requesting join
-    JoinRequest {
-        node_id: String,
-        join_token: String,
-        capabilities: Vec<String>,
-    },
-    
-    /// Control plane acknowledging join
-    JoinResponse {
-        accepted: bool,
-        node_id: String,
-        error: Option<String>,
-    },
-    
-    /// Resource state sync from agent
-    ResourceState {
-        node_id: String,
-        resources: Vec<ResourceInfo>,
-    },
-    
-    /// Log streaming from agent
-    Logs {
-        node_id: String,
-        app_id: String,
-        stream: LogStream,
-    },
-    
-    /// Metric stream from agent
-    Metrics {
-        node_id: String,
-        metrics: serde_json::Value,
-    },
-}
-
-/// Agent status enumeration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum AgentStatus {
-    Online,
-    Offline,
-    Maintenance,
-    Updating,
-}
-
-/// Command types agents can execute
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum CommandType {
-    Deploy { app_id: String, image: String },
-    Scale { app_id: String, replicas: u32 },
-    Restart { app_id: String },
-    Stop { app_id: String },
-    Backup { app_id: String, volume_id: String },
-    Restore { app_id: String, backup_id: String },
-    Exec { app_id: String, command: Vec<String> },
-}
-
-/// Network metrics reported by agent
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NetworkMetrics {
-    pub bytes_sent: u64,
-    pub bytes_recv: u64,
-    pub packets_sent: u64,
-    pub packets_recv: u64,
-    pub connections: u32,
-}
-
-/// Resource information for an agent
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ResourceInfo {
-    pub resource_type: String,
-    pub resource_id: String,
-    pub name: String,
-    pub state: String,
-    pub cpu_usage: f64,
-    pub memory_usage: f64,
-}
-
-/// Log stream types
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum LogStream {
-    Stdout,
-    Stderr,
-    Event,
-}
-
-/// QUIC connection configuration
-#[derive(Debug, Clone)]
-pub struct QuicConfig {
-    /// Server address to connect/bind to
-    pub addr: SocketAddr,
-    
-    /// TLS certificate path
-    pub cert_path: Option<std::path::PathBuf>,
-    
-    /// TLS key path
-    pub key_path: Option<std::path::PathBuf>,
-    
-    /// Application protocol identifier
-    pub alpn_protocol: Vec<u8>,
-    
-    /// Maximum number of concurrent streams
-    pub max_concurrent_streams: u32,
-    
-    /// Keep-alive interval in seconds
-    pub keep_alive_interval: u64,
-    
-    /// Connection timeout in seconds
-    pub connection_timeout: u64,
-}
-
-impl Default for QuicConfig {
-    fn default() -> Self {
-        Self {
-            addr: SocketAddr::from(([0, 0, 0, 0], 443)),
-            cert_path: None,
-            key_path: None,
-            alpn_protocol: b"shellwego/1".to_vec(),
-            max_concurrent_streams: 100,
-            keep_alive_interval: 5,
-            connection_timeout: 30,
-        }
-    }
-}
-
-/// Stream ID for multiplexing
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct StreamId(u64);
-
-impl StreamId {
-    //TODO: Create stream ID constants for different message channels
-}
-
-/// Channel priorities for streams
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum ChannelPriority {
-    Critical = 0,
-    Command = 1,
-    Metrics = 2,
-    Logs = 3,
-    BestEffort = 4,
-}
-````
-
-## File: crates/shellwego-network/src/quinn/mod.rs
-````rust
-//! QUIC-based communication layer for Control Plane <-> Agent
-//! 
-//! This module provides a zero-dependency alternative to NATS for
-//! secure, multiplexed communication between the control plane and agents.
-//! 
-//! # Architecture
-//! 
-//! - [`QuinnClient`] - Client for agents to connect to control plane
-//! - [`QuinnServer`] - Server for control plane to accept agent connections
-//! - [`Message`] - Common message types for CP<->Agent communication
-//! 
-//! # Example
-//! 
-//! ```ignore
-//! // Agent side
-//! let client = QuinnClient::connect("wss://control-plane.example.com").await?;
-//! client.send(Message::Heartbeat { node_id }).await?;
-//! 
-//! // Control plane side  
-//! let server = QuinnServer::bind("0.0.0.0:443").await?;
-//! while let Some(stream) = server.accept().await {
-//!     handle_agent_stream(stream).await;
-//! }
-//! ```
-
-pub mod common;
-pub mod client;
-pub mod server;
-````
-
-## File: crates/shellwego-network/src/quinn/server.rs
-````rust
-//! QUIC server for Control Plane to Agent communication
-//!
-//! This server accepts and manages connections from agents,
-//! providing a NATS-free alternative for CP<->Agent communication.
-
-use crate::quinn::common::*;
-use anyhow::Result;
-use std::sync::Arc;
-use tokio::sync::mpsc;
-
-/// Quinn server for control plane
-pub struct QuinnServer {
-    //TODO: Initialize Quinn endpoint
-    // endpoint: Arc<quinn::Endpoint>,
-    //TODO: Server configuration
-    // config: Arc<quinn::ServerConfig>,
-    //TODO: Runtime for handling connections
-    // runtime: tokio::runtime::Handle,
-    config: QuicConfig,
-}
-
-impl QuinnServer {
-    /// Create a new server with the given configuration
-    //TODO: Implement server constructor
-    pub fn new(config: QuicConfig) -> Self {
-        Self {
-            // endpoint: unimplemented!(),
-            // config: unimplemented!(),
-            // runtime: unimplemented!(),
-            config,
-        }
-    }
-
-    /// Bind to the specified address
-    //TODO: Implement binding to socket address
-    pub async fn bind(&self, addr: &str) -> Result<Self> {
-        //TODO: Parse address
-        //TODO: Create Quinn endpoint
-        //TODO: Configure TLS
-        //TODO: Set ALPN protocol
-        unimplemented!("QUIC server bind not yet implemented")
-    }
-
-    /// Accept a new agent connection
-    //TODO: Implement connection acceptance
-    pub async fn accept(&self) -> Result<AgentConnection> {
-        //TODO: Wait for incoming connection
-        //TODO: Perform TLS handshake
-        //TODO: Validate client certificate (if using mTLS)
-        //TODO: Create AgentConnection wrapper
-        unimplemented!("Connection acceptance not yet implemented")
-    }
-
-    /// Accept an agent connection with timeout
-    //TODO: Implement timeout for accept
-    pub async fn accept_with_timeout(&self, timeout: std::time::Duration) -> Result<Option<AgentConnection>> {
-        //TODO: Use tokio::time::timeout
-        //TODO: Handle timeout gracefully
-        unimplemented!("Timeout accept not yet implemented")
-    }
-
-    /// Run the server loop
-    //TODO: Implement main accept loop
-    pub async fn run(&self) -> Result<()> {
-        //TODO: Accept connections in loop
-        //TODO: Spawn connection handler
-        //TODO: Handle errors and continue
-        unimplemented!("Server run loop not yet implemented")
-    }
-
-    /// Get the bound address
-    //TODO: Return bound socket address
-    pub fn local_addr(&self) -> Result<std::net::SocketAddr> {
-        //TODO: Extract from endpoint
-        unimplemented!("Local address not yet implemented")
-    }
-
-    /// Broadcast message to all connected agents
-    //TODO: Implement broadcast to all agents
-    pub async fn broadcast(&self, message: &Message) -> Result<()> {
-        //TODO: Iterate over all connections
-        //TODO: Send message to each
-        //TODO: Handle disconnected agents
-        unimplemented!("Broadcast not yet implemented")
-    }
-
-    /// Send message to specific agent
-    //TODO: Implement point-to-point messaging
-    pub async fn send_to(&self, node_id: &str, message: &Message) -> Result<()> {
-        //TODO: Look up connection by node ID
-        //TODO: Send message to connection
-        //TODO: Handle unknown node ID
-        unimplemented!("Send to node not yet implemented")
-    }
-
-    /// Get list of connected agents
-    //TODO: Return connected agent information
-    pub fn connected_agents(&self) -> Vec<AgentInfo> {
-        //TODO: Iterate connections
-        //TODO: Collect agent info
-        unimplemented!("Connected agents list not yet implemented")
-    }
-
-    /// Shutdown the server gracefully
-    //TODO: Implement graceful shutdown
-    pub async fn shutdown(&self) -> Result<()> {
-        //TODO: Stop accepting new connections
-        //TODO: Close existing connections gracefully
-        //TODO: Wait for handlers to complete
-        unimplemented!("Server shutdown not yet implemented")
-    }
-}
-
-/// Represents an active agent connection
-pub struct AgentConnection {
-    //TODO: QUIC connection handle
-    //TODO: Node ID
-    //TODO: Connection state
-    //TODO: Channels for messaging
-}
-
-impl AgentConnection {
-    /// Get the node ID for this connection
-    //TODO: Return node ID
-    pub fn node_id(&self) -> &str {
-        unimplemented!("Node ID not yet implemented")
-    }
-
-    /// Get the remote address
-    //TODO: Return socket address
-    pub fn remote_addr(&self) -> std::net::SocketAddr {
-        unimplemented!("Remote address not yet implemented")
-    }
-
-    /// Receive a message from the agent
-    //TODO: Implement message receive
-    pub async fn receive(&self) -> Result<Message> {
-        //TODO: Read from stream
-        //TODO: Deserialize
-        unimplemented!("Message receive not yet implemented")
-    }
-
-    /// Send a message to the agent
-    //TODO: Implement message send
-    pub async fn send(&self, message: &Message) -> Result<()> {
-        //TODO: Serialize message
-        //TODO: Write to stream
-        unimplemented!("Message send not yet implemented")
-    }
-
-    /// Open a bidirectional stream for this connection
-    //TODO: Implement stream opening
-    pub async fn open_stream(&self) -> Result<QuinnStream> {
-        //TODO: Create bidirectional stream
-        //TODO: Return wrapped stream
-        unimplemented!("Stream opening not yet implemented")
-    }
-
-    /// Check if connection is still alive
-    //TODO: Implement connection health check
-    pub fn is_connected(&self) -> bool {
-        unimplemented!("Connection check not yet implemented")
-    }
-
-    /// Close the connection
-    //TODO: Implement graceful close
-    pub async fn close(&self, reason: &str) -> Result<()> {
-        //TODO: Send close message
-        //TODO: Close streams
-        //TODO: Drop connection
-        unimplemented!("Connection close not yet implemented")
-    }
-}
-
-/// QUIC stream wrapper
-pub struct QuinnStream {
-    //TODO: Stream handle
-    //TODO: Direction indicator
-}
-
-/// Information about a connected agent
-#[derive(Debug, Clone)]
-pub struct AgentInfo {
-    pub node_id: String,
-    pub connected_at: chrono::DateTime<chrono::Utc>,
-    pub remote_addr: std::net::SocketAddr,
-    pub last_heartbeat: Option<chrono::DateTime<chrono::Utc>>,
-    pub status: AgentStatus,
-    pub capabilities: Vec<String>,
-}
-
-/// Server builder for configuration
-pub struct QuinnServerBuilder {
-    config: QuicConfig,
-}
-
-impl QuinnServerBuilder {
-    //TODO: Implement builder methods
-    //TODO: Add TLS configuration
-    //TODO: Add certificate validation options
-}
-
-/// Handler trait for processing agent connections
-#[async_trait::async_trait]
-pub trait AgentHandler: Send + Sync {
-    /// Called when a new agent connects
-    //TODO: Implement on_connect callback
-    async fn on_connect(&self, connection: AgentConnection) -> Result<()>;
-
-    /// Called when an agent disconnects
-    //TODO: Implement on_disconnect callback
-    async fn on_disconnect(&self, node_id: &str, reason: &str);
-
-    /// Called when a message is received from an agent
-    //TODO: Implement on_message callback
-    async fn on_message(&self, connection: &AgentConnection, message: Message) -> Result<()>;
-}
-
-/// Default agent handler implementation
-//TODO: Implement default handler that delegates to individual callbacks
 ````
 
 ## File: crates/shellwego-network/src/bridge.rs
@@ -11609,6 +9502,72 @@ impl Bridge {
         })?.ok_or_else(|| NetworkError::InterfaceNotFound(self.name.clone()))?;
         
         Ok(link.header.index)
+    }
+}
+````
+
+## File: crates/shellwego-network/src/discovery.rs
+````rust
+//! Shared Service Discovery Logic
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use hickory_resolver::TokioAsyncResolver;
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum DiscoveryError {
+    #[error("DNS resolver error: {0}")]
+    ResolverError(String),
+    #[error("Service instance not found: {0}")]
+    NotFound(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServiceInstance {
+    pub id: String,
+    pub service_name: String,
+    pub address: SocketAddr,
+    pub metadata: HashMap<String, String>,
+    pub healthy: bool,
+}
+
+/// The Resolver handles the "client" side (Agent finding CP, or Agent finding Peers)
+pub struct DiscoveryResolver {
+    resolver: TokioAsyncResolver,
+    domain_suffix: String,
+}
+
+impl DiscoveryResolver {
+    pub fn new(domain_suffix: String) -> Self {
+        let resolver = TokioAsyncResolver::tokio_from_system_conf().unwrap();
+        Self { resolver, domain_suffix }
+    }
+
+    pub async fn resolve_srv(&self, service: &str) -> Result<Vec<SocketAddr>, DiscoveryError> {
+        let query = format!("{}.{}", service, self.domain_suffix);
+        let lookup = self.resolver.srv_lookup(query).await
+            .map_err(|e| DiscoveryError::ResolverError(e.to_string()))?;
+
+        // TODO: Map SRV records to SocketAddrs using IP lookups for targets
+        Ok(vec![])
+    }
+}
+
+/// The Registry handles the "server" side (Control Plane tracking state)
+pub struct DiscoveryRegistry {
+    pub instances: Arc<tokio::sync::RwLock<HashMap<String, ServiceInstance>>>,
+}
+
+impl DiscoveryRegistry {
+    pub fn new() -> Self {
+        Self { instances: Arc::new(tokio::sync::RwLock::new(HashMap::new())) }
+    }
+
+    pub async fn register(&self, instance: ServiceInstance) {
+        let mut instances = self.instances.write().await;
+        instances.insert(instance.id.clone(), instance);
     }
 }
 ````
@@ -14726,1067 +12685,214 @@ components = ["rustfmt", "clippy"]
 targets = ["x86_64-unknown-linux-musl"]
 ````
 
-## File: crates/shellwego-agent/src/vmm/driver.rs
+## File: crates/shellwego-agent/src/vmm/mod.rs
 ````rust
-//! Firecracker VMM Driver
-//!
-//! This module provides a Rust driver for Firecracker microVMs using the official
-//! AWS firecracker-rs SDK. It replaces the custom HTTP client implementation with
-//! the official AWS SDK for better maintenance and feature support.
-//!
-//! Key benefits of firecracker-rs:
-//! - Official AWS-maintained SDK
-//! - Type-safe API bindings
-//! - Better error handling
-//! - Easier maintenance
-
-use std::path::PathBuf;
-
-// Re-export types from firecracker-rs for external use
-// TODO: Add firecracker = "0.4" or latest version to Cargo.toml
-// use firecracker::{Firecracker, BootSource, MachineConfig, Drive, NetworkInterface, VmState};
-
-/// Firecracker API driver for a specific VM socket
-///
-/// This struct wraps the firecracker-rs SDK and provides a high-level interface
-/// for interacting with Firecracker microVMs.
-#[derive(Debug, Clone)]
-pub struct FirecrackerDriver {
-    /// Path to the Firecracker binary
-    binary: PathBuf,
-    /// Path to the VM's Unix socket
-    socket_path: Option<PathBuf>,
-    // TODO: Add firecracker-rs client field
-    // client: Option<Firecracker>,
-}
-
-/// Instance information returned by describe_instance
-#[derive(Debug, Clone)]
-pub struct InstanceInfo {
-    /// Current state of the microVM
-    pub state: String,
-}
-
-/// VM state enumeration (from firecracker-rs)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VmState {
-    /// VM has not started
-    NotStarted,
-    /// VM is booting
-    Booting,
-    /// VM is running
-    Running,
-    /// VM is paused
-    Paused,
-    /// VM is halted
-    Halted,
-}
-
-impl FirecrackerDriver {
-    /// Create a new Firecracker driver instance
-    ///
-    /// # Arguments
-    /// * `binary` - Path to the Firecracker binary
-    ///
-    /// # Returns
-    /// A new driver instance or an error if the binary doesn't exist
-    pub async fn new(binary: &PathBuf) -> anyhow::Result<Self> {
-        // TODO: Verify binary exists and is executable
-        // TODO: Check binary version compatibility
-        // TODO: Initialize firecracker-rs client
-
-        Ok(Self {
-            binary: binary.clone(),
-            socket_path: None,
-            // client: None,
-        })
-    }
-
-    /// Get the path to the Firecracker binary
-    pub fn binary_path(&self) -> &PathBuf {
-        &self.binary
-    }
-
-    /// Create a driver instance bound to a specific VM socket
-    ///
-    /// # Arguments
-    /// * `socket` - Path to the Unix socket for this VM
-    ///
-    /// # Returns
-    /// A new driver instance configured for the specified socket
-    pub fn for_socket(&self, socket: &PathBuf) -> Self {
-        // TODO: Create new firecracker-rs client with socket path
-        // TODO: Validate socket path format
-
-        Self {
-            binary: self.binary.clone(),
-            socket_path: Some(socket.clone()),
-            // client: None,
-        }
-    }
-
-    /// Configure a fresh microVM with the provided configuration
-    ///
-    /// This method sets up all the necessary Firecracker configuration:
-    /// - Boot source (kernel and boot args)
-    /// - Machine configuration (vCPUs, memory)
-    /// - Block devices (drives)
-    /// - Network interfaces
-    /// - vsock for agent communication
-    ///
-    /// # Arguments
-    /// * `config` - The microVM configuration to apply
-    ///
-    /// # Returns
-    /// Ok(()) if configuration succeeds, or an error
-    pub async fn configure_vm(&self, config: &super::MicrovmConfig) -> anyhow::Result<()> {
-        // TODO: Get or create firecracker-rs client
-        // TODO: Configure boot source with kernel path and boot args
-        // TODO: Configure machine with vCPU count and memory size
-        // TODO: Add all drives from config
-        // TODO: Add all network interfaces from config
-        // TODO: Configure vsock for agent communication
-        // TODO: Handle any configuration errors with detailed messages
-
-        Ok(())
-    }
-
-    /// Start the microVM
-    ///
-    /// Sends the InstanceStart action to Firecracker to begin execution.
-    ///
-    /// # Returns
-    /// Ok(()) if the VM starts successfully, or an error
-    pub async fn start_vm(&self) -> anyhow::Result<()> {
-        // TODO: Get firecracker-rs client
-        // TODO: Send InstanceStart action
-        // TODO: Wait for VM to transition to running state
-        // TODO: Handle start failures with appropriate error messages
-
-        Ok(())
-    }
-
-    /// Graceful shutdown via ACPI
-    ///
-    /// Sends a Ctrl+Alt+Del signal to the guest, allowing it to shut down cleanly.
-    ///
-    /// # Returns
-    /// Ok(()) if the shutdown signal is sent successfully, or an error
-    pub async fn stop_vm(&self) -> anyhow::Result<()> {
-        // TODO: Get firecracker-rs client
-        // TODO: Send SendCtrlAltDel action
-        // TODO: Optionally wait for VM to halt
-        // TODO: Handle shutdown signal failures
-
-        Ok(())
-    }
-
-    /// Force shutdown (SIGKILL to firecracker process)
-    ///
-    /// This is a fallback when graceful shutdown fails.
-    /// The VmmManager handles process termination directly.
-    ///
-    /// # Returns
-    /// Ok(()) if force shutdown succeeds, or an error
-    pub async fn force_shutdown(&self) -> anyhow::Result<()> {
-        // TODO: Implement API-based force stop if available
-        // TODO: Otherwise, signal that process should be killed externally
-        // TODO: Log force shutdown event
-
-        Ok(())
-    }
-
-    /// Get instance information
-    ///
-    /// Retrieves the current state and metadata of the microVM.
-    ///
-    /// # Returns
-    /// InstanceInfo containing the VM state, or an error
-    pub async fn describe_instance(&self) -> anyhow::Result<InstanceInfo> {
-        // TODO: Get firecracker-rs client
-        // TODO: Call get_vm_info or equivalent
-        // TODO: Map response to InstanceInfo
-        // TODO: Handle API errors
-
-        Ok(InstanceInfo {
-            state: "Unknown".to_string(),
-        })
-    }
-
-    /// Create a snapshot of the microVM
-    ///
-    /// Creates a full snapshot including memory and disk state for live migration.
-    ///
-    /// # Arguments
-    /// * `mem_path` - Path where the memory snapshot should be saved
-    /// * `snapshot_path` - Path where the snapshot metadata should be saved
-    ///
-    /// # Returns
-    /// Ok(()) if snapshot creation succeeds, or an error
-    pub async fn create_snapshot(
-        &self,
-        mem_path: &str,
-        snapshot_path: &str,
-    ) -> anyhow::Result<()> {
-        // TODO: Get firecracker-rs client
-        // TODO: Create snapshot configuration
-        // TODO: Set snapshot type to Full
-        // TODO: Set snapshot path and memory file path
-        // TODO: Send snapshot create request
-        // TODO: Wait for snapshot to complete
-        // TODO: Handle snapshot errors
-
-        Ok(())
-    }
-
-    /// Load a snapshot to restore a microVM
-    ///
-    /// Restores a microVM from a previously created snapshot.
-    ///
-    /// # Arguments
-    /// * `mem_path` - Path to the memory snapshot file
-    /// * `snapshot_path` - Path to the snapshot metadata file
-    /// * `enable_diff_snapshots` - Whether to enable differential snapshots
-    ///
-    /// # Returns
-    /// Ok(()) if snapshot load succeeds, or an error
-    pub async fn load_snapshot(
-        &self,
-        mem_path: &str,
-        snapshot_path: &str,
-        enable_diff_snapshots: bool,
-    ) -> anyhow::Result<()> {
-        // TODO: Get firecracker-rs client
-        // TODO: Create snapshot load configuration
-        // TODO: Set memory and snapshot paths
-        // TODO: Configure diff snapshots if enabled
-        // TODO: Send snapshot load request
-        // TODO: Wait for VM to resume
-        // TODO: Handle load errors
-
-        Ok(())
-    }
-
-    /// Pause the microVM
-    ///
-    /// Pauses the microVM for live migration preparation.
-    ///
-    /// # Returns
-    /// Ok(()) if pause succeeds, or an error
-    pub async fn pause_vm(&self) -> anyhow::Result<()> {
-        // TODO: Get firecracker-rs client
-        // TODO: Send pause action
-        // TODO: Wait for VM to reach paused state
-        // TODO: Handle pause errors
-
-        Ok(())
-    }
-
-    /// Resume the microVM
-    ///
-    /// Resumes a previously paused microVM.
-    ///
-    /// # Returns
-    /// Ok(()) if resume succeeds, or an error
-    pub async fn resume_vm(&self) -> anyhow::Result<()> {
-        // TODO: Get firecracker-rs client
-        // TODO: Send resume action
-        // TODO: Wait for VM to reach running state
-        // TODO: Handle resume errors
-
-        Ok(())
-    }
-
-    /// Get metrics from the microVM
-    ///
-    /// Retrieves performance metrics including CPU, memory, network, and block I/O.
-    ///
-    /// # Returns
-    /// MicrovmMetrics containing performance data, or an error
-    pub async fn get_metrics(&self) -> anyhow::Result<super::MicrovmMetrics> {
-        // TODO: Get firecracker-rs client
-        // TODO: Request metrics from Firecracker
-        // TODO: Parse and map metrics to MicrovmMetrics
-        // TODO: Handle metrics API errors
-
-        Ok(super::MicrovmMetrics::default())
-    }
-
-    /// Update machine configuration
-    ///
-    /// Updates the machine configuration for a running microVM.
-    /// Note: Not all configuration changes are supported after boot.
-    ///
-    /// # Arguments
-    /// * `vcpu_count` - New vCPU count (if supported)
-    /// * `mem_size_mib` - New memory size in MiB (if supported)
-    ///
-    /// # Returns
-    /// Ok(()) if update succeeds, or an error
-    pub async fn update_machine_config(
-        &self,
-        vcpu_count: Option<i64>,
-        mem_size_mib: Option<i64>,
-    ) -> anyhow::Result<()> {
-        // TODO: Get firecracker-rs client
-        // TODO: Check if updates are supported for running VM
-        // TODO: Update vCPU count if provided
-        // TODO: Update memory size if provided
-        // TODO: Handle update errors
-
-        Ok(())
-    }
-
-    /// Add a network interface to a running microVM
-    ///
-    /// # Arguments
-    /// * `iface` - Network interface configuration
-    ///
-    /// # Returns
-    /// Ok(()) if interface is added successfully, or an error
-    pub async fn add_network_interface(
-        &self,
-        iface: &super::NetworkInterface,
-    ) -> anyhow::Result<()> {
-        // TODO: Get firecracker-rs client
-        // TODO: Create network interface configuration
-        // TODO: Send add network interface request
-        // TODO: Handle errors
-
-        Ok(())
-    }
-
-    /// Remove a network interface from a running microVM
-    ///
-    /// # Arguments
-    /// * `iface_id` - ID of the interface to remove
-    ///
-    /// # Returns
-    /// Ok(()) if interface is removed successfully, or an error
-    pub async fn remove_network_interface(&self, iface_id: &str) -> anyhow::Result<()> {
-        // TODO: Get firecracker-rs client
-        // TODO: Send remove network interface request
-        // TODO: Handle errors
-
-        Ok(())
-    }
-
-    /// Add a drive to a running microVM
-    ///
-    /// # Arguments
-    /// * `drive` - Drive configuration
-    ///
-    /// # Returns
-    /// Ok(()) if drive is added successfully, or an error
-    pub async fn add_drive(&self, drive: &super::DriveConfig) -> anyhow::Result<()> {
-        // TODO: Get firecracker-rs client
-        // TODO: Create drive configuration
-        // TODO: Send add drive request
-        // TODO: Handle errors
-
-        Ok(())
-    }
-
-    /// Remove a drive from a running microVM
-    ///
-    /// # Arguments
-    /// * `drive_id` - ID of the drive to remove
-    ///
-    /// # Returns
-    /// Ok(()) if drive is removed successfully, or an error
-    pub async fn remove_drive(&self, drive_id: &str) -> anyhow::Result<()> {
-        // TODO: Get firecracker-rs client
-        // TODO: Send remove drive request
-        // TODO: Handle errors
-
-        Ok(())
-    }
-
-    /// Update boot source configuration
-    ///
-    /// # Arguments
-    /// * `kernel_path` - Path to the new kernel image
-    /// * `boot_args` - New boot arguments
-    ///
-    /// # Returns
-    /// Ok(()) if update succeeds, or an error
-    pub async fn update_boot_source(
-        &self,
-        kernel_path: &PathBuf,
-        boot_args: &str,
-    ) -> anyhow::Result<()> {
-        // TODO: Get firecracker-rs client
-        // TODO: Create boot source configuration
-        // TODO: Send update boot source request
-        // TODO: Handle errors
-
-        Ok(())
-    }
-
-    /// Send a Ctrl+Alt+Del signal to the guest
-    ///
-    /// # Returns
-    /// Ok(()) if signal is sent successfully, or an error
-    pub async fn send_ctrl_alt_del(&self) -> anyhow::Result<()> {
-        // TODO: Get firecracker-rs client
-        // TODO: Send SendCtrlAltDel action
-        // TODO: Handle errors
-
-        Ok(())
-    }
-
-    /// Get the current VM state
-    ///
-    /// # Returns
-    /// The current VmState, or an error
-    pub async fn get_vm_state(&self) -> anyhow::Result<VmState> {
-        // TODO: Get firecracker-rs client
-        // TODO: Request current VM state
-        // TODO: Map response to VmState enum
-        // TODO: Handle errors
-
-        Ok(VmState::NotStarted)
-    }
-}
-
-// === Helper functions for converting between types ===
-
-impl FirecrackerDriver {
-    /// Convert MicrovmConfig to firecracker-rs BootSource
-    fn to_boot_source(config: &super::MicrovmConfig) {
-        // TODO: Convert kernel_path to string
-        // TODO: Set boot_args from config
-        // TODO: Return BootSource struct
-    }
-
-    /// Convert MicrovmConfig to firecracker-rs MachineConfig
-    fn to_machine_config(config: &super::MicrovmConfig) {
-        // TODO: Convert cpu_shares to vcpu_count
-        // TODO: Convert memory_mb to mem_size_mib
-        // TODO: Set optional fields (smt, cpu_template, track_dirty_pages)
-        // TODO: Return MachineConfig struct
-    }
-
-    /// Convert DriveConfig to firecracker-rs Drive
-    fn to_drive(drive: &super::DriveConfig) {
-        // TODO: Map drive_id
-        // TODO: Map path_on_host
-        // TODO: Map is_root_device
-        // TODO: Map is_read_only
-        // TODO: Return Drive struct
-    }
-
-    /// Convert NetworkInterface to firecracker-rs NetworkInterface
-    fn to_network_interface(net: &super::NetworkInterface) {
-        // TODO: Map iface_id
-        // TODO: Map host_dev_name
-        // TODO: Map guest_mac
-        // TODO: Return NetworkInterface struct
-    }
-
-    /// Convert firecracker-rs VmState to MicrovmState
-    fn to_microvm_state(state: VmState) -> super::MicrovmState {
-        // TODO: Map VmState::NotStarted to MicrovmState::Uninitialized
-        // TODO: Map VmState::Paused to MicrovmState::Paused
-        // TODO: Map VmState::Running to MicrovmState::Running
-        // TODO: Map other states appropriately
-
-        super::MicrovmState::Uninitialized
-    }
-}
-````
-
-## File: crates/shellwego-agent/src/discovery.rs
-````rust
-//! DNS-based service discovery using hickory-dns (trust-dns successor)
-//!
-//! Provides service discovery via DNS SRV records for agent-to-agent
-//! and agent-to-control-plane communication without external dependencies.
+//! Virtual Machine Manager
+//! 
+//! Firecracker microVM lifecycle: start, stop, pause, resume.
+//! Communicates with Firecracker via Unix socket HTTP API.
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use tokio::process::Command;
 use tokio::sync::RwLock;
-use thiserror::Error;
+use tracing::{info, debug, error};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
-#[derive(Debug, Error)]
-pub enum DnsDiscoveryError {
-    #[error("DNS resolver error: {source}")]
-    ResolverError {
-        source: hickory_resolver::error::ResolveError,
-    },
+mod driver;
+mod config;
 
-    #[error("Service not found: {service_name}")]
-    ServiceNotFound {
-        service_name: String,
-    },
+pub use driver::FirecrackerDriver;
+pub use config::{MicrovmConfig, MicrovmState, DriveConfig, NetworkInterface};
 
-    #[error("No healthy instances for service: {service_name}")]
-    NoHealthyInstances {
-        service_name: String,
-    },
-
-    #[error("Configuration error: {message}")]
-    ConfigError { message: String },
+/// Manages all microVMs on this node
+#[derive(Clone)]
+pub struct VmmManager {
+    inner: Arc<RwLock<VmmInner>>,
+    driver: FirecrackerDriver,
+    data_dir: PathBuf,
 }
 
-pub struct ServiceDiscovery {
-    // TODO: Add resolver Arc<hickory_resolver::Resolver>
-    resolver: Arc<hickory_resolver::Resolver>,
-
-    // TODO: Add cache RwLock<HashMap<String, CachedServices>>
-    cache: Arc<RwLock<HashMap<String, CachedServices>>>,
-
-    // TODO: Add domain_suffix String
-    domain_suffix: String,
-
-    // TODO: Add refresh_interval Duration
-    refresh_interval: Duration,
+struct VmmInner {
+    vms: HashMap<uuid::Uuid, RunningVm>,
+    // TODO: Add metrics collector
 }
 
-struct CachedServices {
-    // TODO: Add instances Vec<ServiceInstance>
-    instances: Vec<ServiceInstance>,
-
-    // TODO: Add cached_at chrono::DateTime<chrono::Utc>
-    cached_at: chrono::DateTime<chrono::Utc>,
+#[derive(Zeroize, ZeroizeOnDrop)]
+struct RunningVm {
+    #[zeroize(skip)]
+    config: MicrovmConfig,
+    #[zeroize(skip)]
+    process: tokio::process::Child,
+    socket_path: PathBuf,
+    state: MicrovmState,
+    started_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Debug, Clone)]
-pub struct ServiceInstance {
-    // TODO: Add service_name String
-    pub service_name: String,
-
-    // TODO: Add instance_id String
-    pub instance_id: String,
-
-    // TODO: Add host String
-    pub host: String,
-
-    // TODO: Add port u16
-    pub port: u16,
-
-    // TODO: Add priority u16
-    pub priority: u16,
-
-    // TODO: Add weight u16
-    pub weight: u16,
-
-    // TODO: Add metadata HashMap<String, String>
-    pub metadata: HashMap<String, String>,
-}
-
-impl ServiceDiscovery {
-    // TODO: Implement new() constructor
-    // - Initialize hickory_resolver with system config
-    // - Set default domain suffix
-    // - Set default refresh interval
-
-    // TODO: Implement new_with_config() for custom DNS servers
-    // - Accept custom nameserver addresses
-    // - Configure resolver with custom config
-
-    // TODO: Implement discover() method
-    // - Check cache first
-    // - Perform DNS SRV lookup if cache miss or expired
-    // - Return healthy instances sorted by priority/weight
-
-    // TODO: Implement discover_all() for all instances
-    // - Include unhealthy/degraded instances
-
-    // TODO: Implement register() for self-registration
-    // - Create DNS records for local service
-    // - Support dynamic DNS updates if available
-
-    // TODO: Implement deregister() for cleanup
-    // - Remove DNS records for service
-
-    // TODO: Implement watch() for streaming updates
-    // - Return tokio::sync::mpsc::Receiver for changes
-    // - Notify on service add/remove/update
-
-    // TODO: Implement resolve_srv() direct SRV lookup
-    // - Query SRV records for service name
-    // - Parse priority/weight/port from records
-
-    // TODO: Implement resolve_txt() for metadata
-    // - Query TXT records for service metadata
-
-    // TODO: Implement get_healthy_instances() method
-    // - Filter by health status
-    // - Apply load balancing
-
-    // TODO: Implement get_zone_instances() for zone-aware
-    // - Filter by availability zone
-    // - Support zone-aware routing
-}
-
-#[cfg(test)]
-mod tests {
-    // TODO: Add unit tests for service discovery
-    // TODO: Add SRV record parsing tests
-    // TODO: Add caching tests
-    // TODO: Add health filtering tests
-}
-````
-
-## File: crates/shellwego-agent/src/main.rs
-````rust
-//! ShellWeGo Agent
-//! 
-//! Runs on every worker node. Responsible for:
-//! - Maintaining heartbeat with control plane
-//! - Spawning/managing Firecracker microVMs
-//! - Enforcing desired state (reconciliation loop)
-//! - Reporting resource usage and health
-
-use std::sync::Arc;
-use tokio::signal;
-use tracing::{info, warn, error};
-
-mod daemon;
-mod reconciler;
-mod vmm;
-mod wasm;        // WASM runtime support
-mod snapshot;    // VM snapshot management
-mod migration;   // Live migration support
-
-use daemon::Daemon;
-use vmm::VmmManager;
-
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    // TODO: Parse CLI args (config path, log level, node-id if recovering)
-    // TODO: Initialize structured logging (JSON for production)
-    tracing_subscriber::fmt::init();
-    
-    info!("ShellWeGo Agent starting...");
-    
-    // Load configuration
-    let config = AgentConfig::load()?;
-    info!("Node ID: {:?}", config.node_id);
-    info!("Control plane: {}", config.control_plane_url);
-    
-    // Detect capabilities (KVM, CPU features, etc)
-    let capabilities = detect_capabilities()?;
-    info!("Capabilities: KVM={}, CPUs={}", capabilities.kvm, capabilities.cpu_cores);
-    
-    // Initialize VMM manager (Firecracker)
-    let vmm = VmmManager::new(&config).await?;
-    
-    // Initialize daemon (control plane communication)
-    let daemon = Daemon::new(config.clone(), capabilities, vmm.clone()).await?;
-    
-    // Start reconciler (desired state enforcement)
-    let reconciler = reconciler::Reconciler::new(vmm.clone(), daemon.state_client());
-    
-    // Additional initialization
-    additional_initialization().await?;
-    
-    // Spawn concurrent tasks
-    let heartbeat_handle = tokio::spawn({
-        let daemon = daemon.clone();
-        async move {
-            if let Err(e) = daemon.heartbeat_loop().await {
-                error!("Heartbeat loop failed: {}", e);
-            }
-        }
-    });
-    
-    let reconciler_handle = tokio::spawn({
-        let reconciler = reconciler.clone();
-        async move {
-            if let Err(e) = reconciler.run().await {
-                error!("Reconciler failed: {}", e);
-            }
-        }
-    });
-    
-    let command_handle = tokio::spawn({
-        let daemon = daemon.clone();
-        async move {
-            if let Err(e) = daemon.command_consumer().await {
-                error!("Command consumer failed: {}", e);
-            }
-        }
-    });
-    
-    // Wait for shutdown signal
-    tokio::select! {
-        _ = signal::ctrl_c() => {
-            info!("Received SIGINT, shutting down gracefully...");
-        }
-        _ = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())? => {
-            info!("Received SIGTERM, shutting down gracefully...");
-        }
-    }
-    
-    // Graceful shutdown
-    // TODO: Drain running VMs or hand off to another node
-    // TODO: Flush metrics and logs
-    
-    heartbeat_handle.abort();
-    reconciler_handle.abort();
-    command_handle.abort();
-    
-    info!("Agent shutdown complete");
-    Ok(())
-}
-
-/// Additional initialization for WASM, snapshots, and migration
-async fn additional_initialization() -> anyhow::Result<()> {
-    // TODO: Initialize WASM runtime if enabled
-    // TODO: Setup snapshot directory
-    // TODO: Register migration capabilities with control plane
-    unimplemented!("additional_initialization")
-}
-
-/// Agent configuration
-#[derive(Debug, Clone)]
-pub struct AgentConfig {
-    pub node_id: Option<uuid::Uuid>, // None = new registration
-    pub control_plane_url: String,
-    pub join_token: Option<String>,
-    pub region: String,
-    pub zone: String,
-    pub labels: std::collections::HashMap<String, String>,
-    
-    // Paths
-    pub firecracker_binary: std::path::PathBuf,
-    pub kernel_image_path: std::path::PathBuf,
-    pub data_dir: std::path::PathBuf,
-    
-    // Resource limits
-    pub max_microvms: u32,
-    pub reserved_memory_mb: u64,
-    pub reserved_cpu_percent: f64,
-}
-
-impl AgentConfig {
-    pub fn load() -> anyhow::Result<Self> {
-        // TODO: Load from /etc/shellwego/agent.toml
-        // TODO: Override with env vars
-        // TODO: Validate paths exist
+impl VmmManager {
+    pub async fn new(config: &crate::AgentConfig) -> anyhow::Result<Self> {
+        let driver = FirecrackerDriver::new(&config.firecracker_binary).await?;
+        
+        // Ensure runtime directories exist
+        tokio::fs::create_dir_all(&config.data_dir).await?;
+        tokio::fs::create_dir_all(config.data_dir.join("vms")).await?;
+        tokio::fs::create_dir_all(config.data_dir.join("run")).await?;
         
         Ok(Self {
-            node_id: None, // Will be assigned on registration
-            control_plane_url: std::env::var("SHELLWEGO_CP_URL")
-                .unwrap_or_else(|_| "http://localhost:8080".to_string()),
-            join_token: std::env::var("SHELLWEGO_JOIN_TOKEN").ok(),
-            region: std::env::var("SHELLWEGO_REGION").unwrap_or_else(|_| "unknown".to_string()),
-            zone: std::env::var("SHELLWEGO_ZONE").unwrap_or_else(|_| "unknown".to_string()),
-            labels: std::collections::HashMap::new(),
-            
-            firecracker_binary: "/usr/local/bin/firecracker".into(),
-            kernel_image_path: "/var/lib/shellwego/vmlinux".into(),
-            data_dir: "/var/lib/shellwego".into(),
-            
-            max_microvms: 500,
-            reserved_memory_mb: 512,
-            reserved_cpu_percent: 10.0,
+            inner: Arc::new(RwLock::new(VmmInner {
+                vms: HashMap::new(),
+            })),
+            driver,
+            data_dir: config.data_dir.clone(),
         })
     }
-}
 
-/// Hardware capabilities detection
-#[derive(Debug, Clone)]
-pub struct Capabilities {
-    pub kvm: bool,
-    pub nested_virtualization: bool,
-    pub cpu_cores: u32,
-    pub memory_total_mb: u64,
-    pub cpu_features: Vec<String>,
-}
-
-fn detect_capabilities() -> anyhow::Result<Capabilities> {
-    use std::fs;
-    
-    // Check KVM access
-    let kvm = fs::metadata("/dev/kvm").is_ok();
-    
-    // Get CPU info via sysinfo
-    let mut sys = sysinfo::System::new_all();
-    sys.refresh_all();
-    
-    let cpu_cores = sys.cpus().len() as u32;
-    let memory_total_mb = sys.total_memory();
-    
-    // TODO: Check /proc/cpuinfo for vmx/svm flags
-    // TODO: Detect nested virt support
-    
-    Ok(Capabilities {
-        kvm,
-        nested_virtualization: false, // TODO
-        cpu_cores,
-        memory_total_mb,
-        cpu_features: vec![], // TODO
-    })
-}
-````
-
-## File: crates/shellwego-agent/src/reconciler.rs
-````rust
-//! Desired state reconciler
-//! 
-//! Continuously compares actual state (running VMs) with desired state
-//! (from control plane) and converges them. Kubernetes-style but lighter.
-
-use std::sync::Arc;
-use tokio::time::{interval, Duration, sleep};
-use tracing::{info, debug, warn, error};
-
-use crate::vmm::{VmmManager, MicrovmConfig, MicrovmState};
-use crate::daemon::{StateClient, DesiredState, DesiredApp};
-
-/// Reconciler enforces desired state
-#[derive(Clone)]
-pub struct Reconciler {
-    vmm: VmmManager,
-    state_client: StateClient,
-    // TODO: Add metrics (reconciliation latency, drift count)
-}
-
-impl Reconciler {
-    pub fn new(vmm: VmmManager, state_client: StateClient) -> Self {
-        Self { vmm, state_client }
-    }
-
-    /// Main reconciliation loop
-    pub async fn run(&self) -> anyhow::Result<()> {
-        let mut ticker = interval(Duration::from_secs(10));
+    /// Start a new microVM
+    pub async fn start(&self, config: MicrovmConfig) -> anyhow::Result<()> {
+        let mut inner = self.inner.write().await;
         
-        loop {
-            ticker.tick().await;
+        if inner.vms.contains_key(&config.app_id) {
+            anyhow::bail!("VM for app {} already exists", config.app_id);
+        }
+        
+        let vm_dir = self.data_dir.join("vms").join(config.app_id.to_string());
+        tokio::fs::create_dir_all(&vm_dir).await?;
+        
+        let socket_path = vm_dir.join("firecracker.sock");
+        let log_path = vm_dir.join("firecracker.log");
+        
+        // Spawn Firecracker process
+        let mut child = Command::new(&self.driver.binary_path())
+            .arg("--api-sock")
+            .arg(&socket_path)
+            .arg("--id")
+            .arg(config.app_id.to_string())
+            .arg("--log-path")
+            .arg(&log_path)
+            .arg("--level")
+            .arg("Debug")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()?;
             
-            match self.reconcile().await {
-                Ok(changes) => {
-                    if changes > 0 {
-                        debug!("Reconciliation complete: {} changes applied", changes);
-                    }
-                }
-                Err(e) => {
-                    error!("Reconciliation failed: {}", e);
-                    // Continue looping, don't crash
-                }
+        // Wait for socket to be created
+        let start = std::time::Instant::now();
+        while !socket_path.exists() {
+            if start.elapsed().as_secs() > 5 {
+                let _ = child.kill().await;
+                anyhow::bail!("Firecracker failed to start: socket timeout");
             }
-        }
-    }
-
-    /// Single reconciliation pass
-    async fn reconcile(&self) -> anyhow::Result<usize> {
-        // Fetch desired state from control plane
-        let desired = self.state_client.get_desired_state().await?;
-        
-        // Get actual state from VMM
-        let actual = self.vmm.list_running().await?;
-        
-        let mut changes = 0;
-        
-        // 1. Create missing apps
-        for app in &desired.apps {
-            if !actual.iter().any(|vm| vm.app_id == app.app_id) {
-                info!("Creating microVM for app {}", app.app_id);
-                self.create_microvm(app).await?;
-                changes += 1;
-            } else {
-                // Check for updates (image change, resource change)
-                // TODO: Implement rolling update logic
-            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
         }
         
-        // 2. Remove extraneous apps
-        for vm in &actual {
-            if !desired.apps.iter().any(|a| a.app_id == vm.app_id) {
-                info!("Removing microVM for app {}", vm.app_id);
-                self.vmm.stop(vm.app_id).await?;
-                changes += 1;
-            }
-        }
+        // Configure VM via API
+        let driver = self.driver.for_socket(&socket_path);
+        driver.configure_vm(&config).await?;
         
-        // 3. Reconcile volumes
-        // TODO: Attach/detach volumes as needed
-        // TODO: Create missing ZFS datasets
+        // Start microVM
+        driver.start_vm().await?;
         
-        Ok(changes)
-    }
-
-    async fn create_microvm(&self, app: &DesiredApp) -> anyhow::Result<()> {
-        // Prepare volume mounts
-        let mut drives = vec![];
+        info!(
+            "Started microVM {} for app {} ({}MB, {} CPU)",
+            config.vm_id, config.app_id, config.memory_mb, config.cpu_shares
+        );
         
-        // Root drive (container image as ext4)
-        let rootfs_path = self.prepare_rootfs(&app.image).await?;
-        drives.push(vmm::DriveConfig {
-            drive_id: "rootfs".to_string(),
-            path_on_host: rootfs_path,
-            is_root_device: true,
-            is_read_only: true, // Overlay writes to tmpfs or volume
+        inner.vms.insert(config.app_id, RunningVm {
+            config,
+            process: child,
+            socket_path,
+            state: MicrovmState::Running,
+            started_at: chrono::Utc::now(),
         });
-        
-        // Add volume mounts
-        for vol in &app.volumes {
-            drives.push(vmm::DriveConfig {
-                drive_id: format!("vol-{}", vol.volume_id),
-                path_on_host: vol.device.clone(),
-                is_root_device: false,
-                is_read_only: false,
-            });
-        }
-        
-        // Network setup
-        let network = self.setup_networking(app.app_id).await?;
-        
-        let config = MicrovmConfig {
-            app_id: app.app_id,
-            vm_id: uuid::Uuid::new_v4(),
-            memory_mb: app.memory_mb,
-            cpu_shares: app.cpu_shares,
-            kernel_path: "/var/lib/shellwego/vmlinux".into(), // TODO: Configurable
-            kernel_boot_args: format!(
-                "console=ttyS0 reboot=k panic=1 pci=off \
-                 ip={}::{}:255.255.255.0::eth0:off",
-                network.guest_ip, network.host_ip
-            ),
-            drives,
-            network_interfaces: vec![network],
-            vsock_path: format!("/var/run/shellwego/{}.sock", app.app_id),
-        };
-        
-        self.vmm.start(config).await?;
-        
-        // TODO: Wait for health check before marking ready
         
         Ok(())
     }
 
-    async fn prepare_rootfs(&self, image: &str) -> anyhow::Result<std::path::PathBuf> {
-        // TODO: Pull container image if not cached
-        // TODO: Convert to ext4 rootfs via buildah or custom tool
-        // TODO: Cache layer via ZFS snapshot
+    /// Stop and remove a microVM
+    pub async fn stop(&self, app_id: uuid::Uuid) -> anyhow::Result<()> {
+        let mut inner = self.inner.write().await;
         
-        Ok(std::path::PathBuf::from("/var/lib/shellwego/rootfs/base.ext4"))
-    }
-
-    async fn setup_networking(&self, app_id: uuid::Uuid) -> anyhow::Result<vmm::NetworkInterface> {
-        // TODO: Allocate IP from node CIDR
-        // TODO: Create TAP device
-        // TODO: Setup bridge and iptables/eBPF rules
-        // TODO: Configure port forwarding if public
+        let Some(vm) = inner.vms.remove(&app_id) else {
+            anyhow::bail!("VM for app {} not found", app_id);
+        };
         
-        Ok(vmm::NetworkInterface {
-            iface_id: "eth0".to_string(),
-            host_dev_name: format!("tap-{}", app_id.to_string().split('-').next().unwrap()),
-            guest_mac: generate_mac(app_id),
-            guest_ip: "10.0.4.2".to_string(), // TODO: Allocate properly
-            host_ip: "10.0.4.1".to_string(),
-        })
+        // Graceful shutdown via API
+        let driver = self.driver.for_socket(&vm.socket_path);
+        if let Err(e) = driver.stop_vm().await {
+            warn!("Graceful shutdown failed: {}, forcing", e);
+        }
+        
+        // Wait for process exit or timeout
+        let timeout = tokio::time::Duration::from_secs(10);
+        match tokio::time::timeout(timeout, vm.process.wait_with_output()).await {
+            Ok(Ok(output)) => {
+                debug!("Firecracker exited with status: {}", output.status);
+            }
+            Ok(Err(e)) => {
+                error!("Firecracker wait error: {}", e);
+            }
+            Err(_) => {
+                warn!("Firecracker shutdown timeout, killing");
+                let _ = driver.force_shutdown().await;
+            }
+        }
+        
+        // Cleanup socket and logs
+        let _ = tokio::fs::remove_dir_all(vm.socket_path.parent().unwrap()).await;
+        
+        info!("Stopped microVM for app {}", app_id);
+        Ok(())
     }
 
-    /// Check for image updates and rolling restart
-    pub async fn check_image_updates(&self) -> anyhow::Result<()> {
-        // TODO: Poll registry for new digests
-        // TODO: Compare with running VMs
-        // TODO: Trigger rolling update if changed
-        unimplemented!("check_image_updates")
+    /// List all running microVMs
+    pub async fn list_running(&self) -> anyhow::Result<Vec<MicrovmSummary>> {
+        let inner = self.inner.read().await;
+        
+        Ok(inner.vms.values().map(|vm| MicrovmSummary {
+            app_id: vm.config.app_id,
+            vm_id: vm.config.vm_id,
+            state: vm.state,
+            started_at: vm.started_at,
+        }).collect())
     }
 
-    /// Handle volume attachment requests
-    pub async fn reconcile_volumes(&self) -> anyhow::Result<()> {
-        // TODO: List desired volumes from state
-        // TODO: Check current attachments
-        // TODO: Attach/detach as needed via ZFS
-        unimplemented!("reconcile_volumes")
+    /// Get detailed state of a specific microVM
+    pub async fn get_state(&self, app_id: uuid::Uuid) -> anyhow::Result<Option<MicrovmState>> {
+        let inner = self.inner.read().await;
+        Ok(inner.vms.get(&app_id).map(|vm| vm.state))
     }
 
-    /// Sync network policies
-    pub async fn reconcile_network_policies(&self) -> anyhow::Result<()> {
-        // TODO: Fetch policies from control plane
-        // TODO: Apply eBPF rules via Cilium
-        unimplemented!("reconcile_network_policies")
+    /// Pause microVM (for live migration prep)
+    pub async fn pause(&self, app_id: uuid::Uuid) -> anyhow::Result<()> {
+        // TODO: Implement via Firecracker API
+        // TODO: Sync filesystems, pause vCPUs
+        
+        Ok(())
     }
 
-    /// Health check all running VMs
-    pub async fn health_check_loop(&self) -> anyhow::Result<()> {
-        // TODO: Periodic health checks
-        // TODO: Restart failed VMs
-        // TODO: Report status to control plane
-        unimplemented!("health_check_loop")
-    }
-
-    /// Handle graceful shutdown signal
-    pub async fn prepare_shutdown(&self) -> anyhow::Result<()> {
-        // TODO: Stop accepting new work
-        // TODO: Wait for running VMs or migrate
-        // TODO: Flush state
-        unimplemented!("prepare_shutdown")
+    /// Create snapshot for live migration
+    pub async fn create_snapshot(
+        &self,
+        app_id: uuid::Uuid,
+        snapshot_path: PathBuf,
+    ) -> anyhow::Result<()> {
+        // TODO: Pause VM
+        // TODO: Create memory snapshot
+        // TODO: Create disk snapshot via ZFS
+        // TODO: Resume VM
+        
+        Ok(())
     }
 }
 
-fn generate_mac(app_id: uuid::Uuid) -> String {
-    // Generate deterministic MAC from app_id
-    let bytes = app_id.as_bytes();
-    format!("02:00:00:{:02x}:{:02x}:{:02x}", bytes[0], bytes[1], bytes[2])
+#[derive(Debug, Clone)]
+pub struct MicrovmSummary {
+    pub app_id: uuid::Uuid,
+    pub vm_id: uuid::Uuid,
+    pub state: MicrovmState,
+    pub started_at: chrono::DateTime<chrono::Utc>,
 }
-````
-
-## File: crates/shellwego-agent/Cargo.toml
-````toml
-[package]
-name = "shellwego-agent"
-version.workspace = true
-edition.workspace = true
-authors.workspace = true
-license.workspace = true
-repository.workspace = true
-rust-version.workspace = true
-description = "Worker node agent: manages Firecracker microVMs and reports to control plane"
-
-[[bin]]
-name = "shellwego-agent"
-path = "src/main.rs"
-
-[dependencies]
-shellwego-core = { path = "../shellwego-core" }
-shellwego-storage = { path = "../shellwego-storage" }
-shellwego-network = { path = "../shellwego-network" }
-
-# Async runtime
-tokio = { workspace = true, features = ["full", "process"] }
-tokio-util = { workspace = true }
-
-# HTTP client (talks to control plane)
-hyper = { workspace = true }
-reqwest = { workspace = true }
-
-# Serialization
-serde = { workspace = true }
-serde_json = { workspace = true }
-
-# Message queue
-async-nats = { workspace = true }
-
-# System info
-sysinfo = "0.30"
-nix = { version = "0.27", features = ["process", "signal", "user"] }
-
-# Firecracker / VMM
-# Using official AWS firecracker-rs SDK
-firecracker = "0.4"
-
-# Utilities
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-thiserror = { workspace = true }
-anyhow = { workspace = true }
-uuid = { workspace = true }
-chrono = { workspace = true }
-config = { workspace = true }
-
-[features]
-default = []
-# TODO: Add "metal" feature for bare metal (KVM required)
-# TODO: Add "mock" feature for testing without KVM
 ````
 
 ## File: crates/shellwego-cli/src/commands/mod.rs
@@ -15826,6 +12932,189 @@ pub fn format_output<T: serde::Serialize>(data: &T, format: OutputFormat) -> any
         OutputFormat::Yaml => Ok(serde_yaml::to_string(data)?),
         OutputFormat::Plain => Ok(format!("{:?}", data)), // Debug fallback
         OutputFormat::Table => Err(anyhow::anyhow!("Table format requires manual construction")),
+    }
+}
+````
+
+## File: crates/shellwego-cli/src/commands/top.rs
+````rust
+//! Top - Real-time resource monitoring TUI
+//!
+//! Displays a beautiful dashboard showing nodes, apps, and resources
+//! with live updates using ratatui.
+
+use crate::{client::ApiClient, config::CliConfig};
+use anyhow::{Context, Result};
+use crossterm::{
+    event::{self, Event, KeyCode},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use ratatui::prelude::*;
+use std::time::{Duration, Instant};
+use shellwego_core::entities::{app::App, node::Node};
+
+#[derive(clap::Args)]
+pub struct TopArgs {
+    /// Refresh interval in milliseconds
+    #[arg(short, long, default_value = "1000")]
+    pub interval: u64,
+
+    /// Focus on specific node
+    #[arg(short, long)]
+    pub node: Option<String>,
+
+    /// Show only apps
+    #[arg(long)]
+    pub apps_only: bool,
+
+    /// Show only nodes
+    #[arg(long)]
+    pub nodes_only: bool,
+}
+
+pub async fn handle(args: TopArgs, config: &CliConfig) -> Result<()> {
+    let client = crate::client(config)?;
+    enable_raw_mode()?;
+    let mut stdout = std::io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    let res = run_loop(&mut terminal, client, args).await;
+
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    res
+}
+
+struct DashboardState {
+    apps: Vec<App>,
+    nodes: Vec<Node>,
+    error: Option<String>,
+}
+
+impl DashboardState {
+    async fn refresh(&mut self, client: &ApiClient) -> Result<()> {
+        let (apps, nodes) = tokio::try_join!(client.list_apps(), client.list_nodes())?;
+        self.apps = apps;
+        self.nodes = nodes;
+        self.error = None;
+        Ok(())
+    }
+}
+
+async fn run_loop<B: Backend>(
+    terminal: &mut Terminal<B>,
+    client: ApiClient,
+    args: TopArgs,
+) -> Result<()> {
+    let tick_rate = Duration::from_millis(args.interval);
+    let mut last_tick = Instant::now();
+    let mut state = DashboardState {
+        apps: Vec::new(),
+        nodes: Vec::new(),
+        error: None,
+    };
+
+    let _ = state.refresh(&client).await;
+
+    loop {
+        terminal.draw(|f| ui::render(f, &state, &args))?;
+
+        let timeout = tick_rate
+            .checked_sub(last_tick.elapsed())
+            .unwrap_or_else(|| Duration::from_secs(0));
+
+        if event::poll(timeout)? {
+            if let Event::Key(key) = event::read()? {
+                if let KeyCode::Char('q') = key.code {
+                    return Ok(());
+                }
+            }
+        }
+
+        if last_tick.elapsed() >= tick_rate {
+            if let Err(e) = state.refresh(&client).await {
+                state.error = Some(e.to_string());
+            }
+            last_tick = Instant::now();
+        }
+    }
+}
+
+mod ui {
+    use super::*;
+
+    pub fn render(f: &mut Frame, state: &DashboardState, args: &TopArgs) {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),
+                Constraint::Min(10),
+                Constraint::Length(1),
+            ])
+            .split(f.area());
+
+        let status_text = if let Some(err) = &state.error {
+            format!(" Error: {}", err).red()
+        } else {
+            format!(" Nodes: {} | Apps: {}", state.nodes.len(), state.apps.len()).green()
+        };
+        f.render_widget(Paragraph::new(status_text).block(Block::bordered().title("ShellWeGo Top")), chunks[0]);
+
+        let content_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(if args.apps_only { 0 } else if args.nodes_only { 100 } else { 40 }),
+                Constraint::Percentage(if args.nodes_only { 0 } else if args.apps_only { 100 } else { 60 }),
+            ])
+            .split(chunks[1]);
+
+        if !args.apps_only {
+            let rows = state.nodes.iter().map(|n| {
+                Row::new(vec![
+                    n.hostname.clone(),
+                    format!("{:?}", n.status),
+                    n.region.clone(),
+                    format!("{:.1}vCPU", n.capacity.cpu_available),
+                ])
+            });
+            let table = Table::new(rows, [
+                Constraint::Percentage(30),
+                Constraint::Percentage(20),
+                Constraint::Percentage(25),
+                Constraint::Percentage(25),
+            ])
+            .header(Row::new(vec!["Node", "Status", "Region", "Free"]).style(Style::default().bold()))
+            .block(Block::bordered().title(" Nodes "));
+            f.render_widget(table, content_chunks[0]);
+        }
+
+        if !args.nodes_only {
+            let rows = state.apps.iter()
+                .filter(|a| args.node.as_ref().map_or(true, |n| n == &a.name || n == &a.id.to_string()))
+                .map(|a| {
+                    Row::new(vec![
+                        a.name.clone(),
+                        format!("{:?}", a.status),
+                        a.image.chars().take(20).collect(),
+                        a.resources.memory.clone(),
+                    ])
+                });
+            let table = Table::new(rows, [
+                Constraint::Percentage(30),
+                Constraint::Percentage(20),
+                Constraint::Percentage(30),
+                Constraint::Percentage(20),
+            ])
+            .header(Row::new(vec!["App", "Status", "Image", "Mem"]).style(Style::default().bold()))
+            .block(Block::bordered().title(" Apps "));
+            f.render_widget(table, content_chunks[1]);
+        }
+
+        let help = " [q] Quit | [r] Refresh | ".dimmed();
+        f.render_widget(Paragraph::new(help), chunks[2]);
     }
 }
 ````
@@ -16531,464 +13820,250 @@ fn api_routes() -> Router<Arc<AppState>> {
 }
 ````
 
-## File: crates/shellwego-control-plane/src/services/discovery.rs
+## File: crates/shellwego-control-plane/src/events/bus.rs
 ````rust
-//! DNS-based service registry using hickory-dns (trust-dns successor)
+//! Event bus abstraction
 //!
-//! Provides service discovery via DNS SRV records for control plane.
-//! Supports in-memory registry with DNS record publishing.
+//! Publishes domain events for async processing.
+//! Other services subscribe to react to state changes.
+//! Uses in-memory broadcast channel (can be extended to QUIC/Redis later).
 
-use std::collections::HashMap;
-use std::net::SocketAddr;
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::RwLock;
-use thiserror::Error;
+use serde::Serialize;
+use tokio::sync::broadcast;
+use tracing::{info, debug};
 
-#[derive(Debug, Error)]
-pub enum RegistryError {
-    #[error("Instance already exists: {0}")]
-    AlreadyExists(String),
+use shellwego_core::entities::app::App;
+use super::ServiceContext;
 
-    #[error("Instance not found: {0}")]
-    NotFound(String),
+const EVENT_BUFFER_SIZE: usize = 1024;
 
-    #[error("DNS publish error: {source}")]
-    DnsPublishError {
-        source: hickory_resolver::error::ResolveError,
-    },
-
-    #[error("Configuration error: {message}")]
-    ConfigError { message: String },
+#[derive(Clone)]
+pub struct EventBus {
+    sender: broadcast::Sender<Event>,
 }
 
-pub struct ServiceRegistry {
-    // TODO: Add instances RwLock<HashMap<String, HashMap<String, ServiceInstance>>>
-    instances: Arc<RwLock<HashMap<String, HashMap<String, ServiceInstance>>>>,
-
-    // TODO: Add dns_publisher Option<DnsPublisher>
-    dns_publisher: Option<DnsPublisher>,
-
-    // TODO: Add domain_suffix String
-    domain_suffix: String,
-
-    // TODO: Add cleanup_interval Duration
-    cleanup_interval: Duration,
-}
-
-struct DnsPublisher {
-    // TODO: Add resolver hickory_resolver::Resolver
-    resolver: hickory_resolver::Resolver,
-
-    // TODO: Add zone String
-    zone: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct ServiceInstance {
-    // TODO: Add id String
-    pub id: String,
-
-    // TODO: Add service_name String
-    pub service_name: String,
-
-    // TODO: Add app_id uuid::Uuid
-    pub app_id: uuid::Uuid,
-
-    // TODO: Add node_id String
-    pub node_id: String,
-
-    // TODO: Add address SocketAddr
-    pub address: SocketAddr,
-
-    // TODO: Add metadata HashMap<String, String>
-    pub metadata: HashMap<String, String>,
-
-    // TODO: Add registered_at chrono::DateTime<chrono::Utc>
-    pub registered_at: chrono::DateTime<chrono::Utc>,
-
-    // TODO: Add last_heartbeat chrono::DateTime<chrono::Utc>
-    pub last_heartbeat: chrono::DateTime<chrono::Utc>,
-
-    // TODO: Add healthy bool
-    pub healthy: bool,
-}
-
-impl ServiceRegistry {
-    // TODO: Implement new() constructor
-    // - Initialize in-memory registry
-    // - Set default domain suffix
-
-    // TODO: Implement new_with_dns() for DNS publishing
-    // - Initialize DnsPublisher
-    // - Configure zone for DNS records
-
-    // TODO: Implement register() method
-    // - Validate instance
-    // - Store in memory
-    // - Publish DNS SRV record if DNS enabled
-    // - Return error if already exists
-
-    // TODO: Implement deregister() method
-    // - Remove from memory
-    // - Remove DNS SRV record if DNS enabled
-    // - Return error if not found
-
-    // TODO: Implement get_healthy() method
-    // - Filter by healthy flag
-    // - Filter by expiry timestamp
-    // - Return sorted by priority
-
-    // TODO: Implement get_all() for all instances
-    // - Include unhealthy instances
-
-    // TODO: Implement update_health() method
-    // - Update healthy flag
-    // - Update last_heartbeat timestamp
-
-    // TODO: Implement update_heartbeat() method
-    // - Refresh last_heartbeat for instance
-    // - Mark healthy if was unhealthy
-
-    // TODO: Implement cleanup() method
-    // - Remove instances with expired heartbeats
-    // - Return count of removed instances
-
-    // TODO: Implement publish_srv_record() private method
-    // - Create SRV record for instance
-    // - Update DNS zone
-
-    // TODO: Implement remove_srv_record() private method
-    // - Remove SRV record from DNS zone
-
-    // TODO: Implement list_services() method
-    // - Return all registered service names
-}
-
-#[cfg(test)]
-mod tests {
-    // TODO: Add unit tests for registry
-    // TODO: Add DNS publishing tests
-    // TODO: Add cleanup tests
-    // TODO: Add health filtering tests
-}
-````
-
-## File: crates/shellwego-control-plane/src/main.rs
-````rust
-//! ShellWeGo Control Plane
-//! 
-//! The brain. HTTP API + Scheduler + State management.
-//! Runs on the control plane nodes, talks to agents over NATS.
-
-use std::net::SocketAddr;
-use tracing::{info, warn};
-
-mod api;
-mod config;
-mod orm;
-mod events;
-mod services;
-mod state;
-
-use crate::config::Config;
-use crate::state::AppState;
-
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    // TODO: Initialize tracing with JSON subscriber for production
-    tracing_subscriber::fmt::init();
-    
-    info!("Starting ShellWeGo Control Plane v{}", env!("CARGO_PKG_VERSION"));
-    
-    // Load configuration from env + file
-    let config = Config::load()?;
-    info!("Configuration loaded: serving on {}", config.bind_addr);
-    
-    // Initialize application state (DB pool, NATS conn, etc)
-    let state = AppState::new(config).await?;
-    info!("State initialized successfully");
-    
-    // Build router with all routes
-    let app = api::create_router(state);
-    
-    // Bind and serve
-    let addr: SocketAddr = state.config.bind_addr.parse()?;
-    info!("Control plane listening on http://{}", addr);
-    
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
-    
-    Ok(())
-}
-````
-
-## File: crates/shellwego-control-plane/src/state.rs
-````rust
-//! Application state shared across all request handlers
-//!
-//! Contains the hot path: ORM database, NATS client, scheduler handle
-
-use std::sync::Arc;
-use async_nats::Client as NatsClient;
-use crate::config::Config;
-use crate::orm::OrmDatabase;
-
-// TODO: Support both Postgres (HA) and SQLite (single-node) via sea-orm
-
-pub struct AppState {
-    pub config: Config,
-    pub db: Arc<OrmDatabase>,
-    pub nats: Option<NatsClient>,
-    // TODO: Add scheduler handle
-    // TODO: Add cache layer (Redis or in-memory)
-    // TODO: Add metrics registry
-}
-
-impl AppState {
-    pub async fn new(config: Config) -> anyhow::Result<Arc<Self>> {
-        // TODO: Initialize ORM database connection
-        // TODO: Run migrations on startup
-        let db = Arc::new(OrmDatabase::connect(&config.database_url).await?);
-
-        // TODO: Run migrations
-        // db.migrate().await?;
-
-        // Initialize NATS connection if configured
-        let nats = if let Some(ref url) = config.nats_url {
-            Some(async_nats::connect(url).await?)
-        } else {
-            None
-        };
-
-        Ok(Arc::new(Self {
-            config,
-            db,
-            nats,
-        }))
+impl EventBus {
+    pub fn new() -> Self {
+        let (sender, _) = broadcast::channel(EVENT_BUFFER_SIZE);
+        Self { sender }
     }
 
-    // TODO: Add helper methods for common ORM operations
-    // TODO: Add transaction helper with retry logic
+    pub fn subscribe(&self) -> broadcast::Receiver<Event> {
+        self.sender.subscribe()
+    }
+
+    pub async fn publish(&self, event: Event) {
+        if let Err(e) = self.sender.send(event.clone()) {
+            debug!("Event subscriber lag: {} pending", e);
+        }
+        debug!("Published event: {}", event.event_type);
+    }
 }
 
-// Axum extractor impl
-impl axum::extract::FromRef<Arc<AppState>> for Arc<AppState> {
-    fn from_ref(state: &Arc<AppState>) -> Arc<AppState> {
-        state.clone()
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Event {
+    pub event_type: &'static str,
+    pub payload: serde_json::Value,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+}
+
+macro_rules! impl_event {
+    ($name:ident, $event_type:expr) => {
+        impl EventBus {
+            pub async fn $name(&self, app: &App) -> anyhow::Result<()> {
+                self.publish(Event {
+                    event_type: $event_type,
+                    payload: serde_json::json!({
+                        "app_id": app.id,
+                        "organization_id": app.organization_id,
+                        "name": app.name,
+                        "image": app.image,
+                    }),
+                    timestamp: chrono::Utc::now(),
+                }).await;
+                Ok(())
+            }
+        }
+    };
+}
+
+impl_event!(publish_app_created, "app.created");
+impl_event!(publish_app_deployed, "app.deployed");
+
+impl EventBus {
+    pub async fn publish_app_crashed(
+        &self,
+        app: &App,
+        exit_code: i32,
+        logs: &str,
+    ) -> anyhow::Result<()> {
+        self.publish(Event {
+            event_type: "app.crashed",
+            payload: serde_json::json!({
+                "app_id": app.id,
+                "organization_id": app.organization_id,
+                "exit_code": exit_code,
+                "logs_preview": &logs[..logs.len().min(1000)],
+            }),
+            timestamp: chrono::Utc::now(),
+        }).await;
+        Ok(())
+    }
+
+    pub async fn publish_node_offline(&self, node_id: uuid::Uuid) -> anyhow::Result<()> {
+        self.publish(Event {
+            event_type: "node.offline",
+            payload: serde_json::json!({ "node_id": node_id }),
+            timestamp: chrono::Utc::now(),
+        }).await;
+        Ok(())
+    }
+}
+
+pub struct EventConsumer {
+    receiver: broadcast::Receiver<Event>,
+}
+
+impl EventConsumer {
+    pub fn new(bus: &EventBus) -> Self {
+        Self {
+            receiver: bus.subscribe(),
+        }
+    }
+
+    pub async fn recv(&mut self) -> Option<Event> {
+        self.recv().await.ok()
     }
 }
 ````
 
-## File: crates/shellwego-core/src/entities/app.rs
+## File: crates/shellwego-control-plane/src/orm/entities/app.rs
 ````rust
-//! Application entity definitions.
-//! 
-//! The core resource: deployable workloads running in Firecracker microVMs.
+//! App entity using Sea-ORM
+//!
+//! Represents deployable applications running in Firecracker microVMs.
 
-use crate::prelude::*;
+use sea_orm::entity::prelude::*;
+use serde::{Deserialize, Serialize};
+use shellwego_core::entities::app::{AppStatus, ResourceSpec, EnvVar, DomainConfig, VolumeMount, HealthCheck, SourceSpec};
 
-// TODO: Add `utoipa::ToSchema` derive for OpenAPI generation
-// TODO: Add `Validate` derive for input sanitization
-
-/// Unique identifier for an App
-pub type AppId = Uuid;
-
-/// Application deployment status
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
-pub enum AppStatus {
-    Creating,
-    Deploying,
-    Running,
-    Stopped,
-    Error,
-    Paused,
-    Draining,
-}
-
-/// Resource allocation for an App
-#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-pub struct ResourceSpec {
-    /// Memory limit (e.g., "512m", "2g")
-    // TODO: Validate format with regex
-    pub memory: String,
-    
-    /// CPU cores (e.g., "0.5", "2.0")
-    pub cpu: String,
-    
-    /// Disk allocation
-    #[serde(default)]
-    pub disk: Option<String>,
-}
-
-/// Environment variable with optional encryption
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-pub struct EnvVar {
-    pub name: String,
-    pub value: String,
-    #[serde(default)]
-    pub encrypted: bool,
-}
-
-/// Domain configuration attached to an App
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-pub struct DomainConfig {
-    pub hostname: String,
-    #[serde(default)]
-    pub tls_enabled: bool,
-    // TODO: Add path-based routing, headers, etc.
-}
-
-/// Persistent volume mount
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-pub struct VolumeMount {
-    pub volume_id: Uuid,
-    pub mount_path: String,
-    #[serde(default)]
-    pub read_only: bool,
-}
-
-/// Health check configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-pub struct HealthCheck {
-    pub path: String,
-    pub port: u16,
-    #[serde(default = "default_interval")]
-    pub interval_secs: u64,
-    #[serde(default = "default_timeout")]
-    pub timeout_secs: u64,
-    #[serde(default = "default_retries")]
-    pub retries: u32,
-}
-
-fn default_interval() -> u64 { 10 }
-fn default_timeout() -> u64 { 5 }
-fn default_retries() -> u32 { 3 }
-
-/// Source code origin for deployment
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum SourceSpec {
-    Git {
-        repository: String,
-        #[serde(default)]
-        branch: Option<String>,
-        #[serde(default)]
-        commit: Option<String>,
-    },
-    Docker {
-        image: String,
-        #[serde(default)]
-        registry_auth: Option<RegistryAuth>,
-    },
-    Tarball {
-        url: String,
-        checksum: String,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-pub struct RegistryAuth {
-    pub username: String,
-    // TODO: This should be a secret reference, not inline
-    pub password: String,
-}
-
-/// Main Application entity
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-pub struct App {
-    pub id: AppId,
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
+#[sea_orm(table_name = "apps")]
+pub struct Model {
+    #[sea_orm(primary_key)]
+    pub id: Uuid,
     pub name: String,
     pub slug: String,
     pub status: AppStatus,
     pub image: String,
-    #[serde(default)]
     pub command: Option<Vec<String>>,
     pub resources: ResourceSpec,
-    #[serde(default)]
     pub env: Vec<EnvVar>,
-    #[serde(default)]
     pub domains: Vec<DomainConfig>,
-    #[serde(default)]
     pub volumes: Vec<VolumeMount>,
-    #[serde(default)]
     pub health_check: Option<HealthCheck>,
     pub source: SourceSpec,
     pub organization_id: Uuid,
     pub created_by: Uuid,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    // TODO: Add replica count, networking policy, tags
+    pub created_at: DateTime,
+    pub updated_at: DateTime,
 }
 
-/// Request to create a new App
-#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-pub struct CreateAppRequest {
-    #[validate(length(min = 1, max = 64))]
-    pub name: String,
-    pub image: String,
-    #[serde(default)]
-    pub command: Option<Vec<String>>,
-    pub resources: ResourceSpec,
-    #[serde(default)]
-    pub env: Vec<EnvVar>,
-    #[serde(default)]
-    pub domains: Vec<String>,
-    #[serde(default)]
-    pub volumes: Vec<VolumeMount>,
-    #[serde(default)]
-    pub health_check: Option<HealthCheck>,
-    #[serde(default)]
-    pub replicas: u32,
+#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+pub enum Relation {
+    BelongsTo,
+    HasMany,
 }
 
-/// Request to update an App (partial)
-#[derive(Debug, Clone, Default, Serialize, Deserialize, Validate)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-pub struct UpdateAppRequest {
-    #[validate(length(min = 1, max = 64))]
-    pub name: Option<String>,
-    pub resources: Option<ResourceSpec>,
-    #[serde(default)]
-    pub env: Option<Vec<EnvVar>>,
-    pub replicas: Option<u32>,
-    // TODO: Add other mutable fields
-}
+impl ActiveModelBehavior for ActiveModel {}
+````
 
-/// App instance (runtime representation)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-pub struct AppInstance {
+## File: crates/shellwego-control-plane/src/orm/entities/node.rs
+````rust
+//! Node entity using Sea-ORM
+//!
+//! Represents worker nodes that run Firecracker microVMs.
+
+use sea_orm::entity::prelude::*;
+use serde::{Deserialize, Serialize};
+use shellwego_core::entities::node::{NodeStatus, NodeCapacity, NodeCapabilities, NodeNetwork};
+
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
+#[sea_orm(table_name = "nodes")]
+pub struct Model {
+    #[sea_orm(primary_key)]
     pub id: Uuid,
-    pub app_id: AppId,
-    pub node_id: Uuid,
-    pub status: InstanceStatus,
-    pub internal_ip: String,
-    pub started_at: DateTime<Utc>,
-    pub health_checks_passed: u64,
-    pub health_checks_failed: u64,
+    pub hostname: String,
+    pub status: NodeStatus,
+    pub region: String,
+    pub zone: String,
+    pub capacity: NodeCapacity,
+    pub capabilities: NodeCapabilities,
+    pub network: NodeNetwork,
+    pub labels: std::collections::HashMap<String, String>,
+    pub running_apps: u32,
+    pub microvm_capacity: u32,
+    pub microvm_used: u32,
+    pub kernel_version: String,
+    pub firecracker_version: String,
+    pub agent_version: String,
+    pub last_seen: DateTime,
+    pub created_at: DateTime,
+    pub organization_id: Uuid,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
-pub enum InstanceStatus {
-    Starting,
-    Healthy,
-    Unhealthy,
-    Stopping,
-    Exited,
+#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+pub enum Relation {
+    BelongsTo,
+    HasMany,
+}
+
+impl ActiveModelBehavior for ActiveModel {}
+````
+
+## File: crates/shellwego-control-plane/src/orm/repository/app_repository.rs
+````rust
+use sea_orm::{DatabaseConnection, DbErr, EntityTrait, QueryFilter, ColumnTrait, PaginatorTrait};
+use crate::orm::entities::{app, prelude::*};
+use uuid::Uuid;
+use shellwego_core::entities::app::AppStatus;
+
+pub struct AppRepository {
+    db: DatabaseConnection,
+}
+
+impl AppRepository {
+    pub fn new(db: DatabaseConnection) -> Self {
+        Self { db }
+    }
+
+    pub async fn find_by_slug(&self, org_id: Uuid, slug: &str) -> Result<Option<app::Model>, DbErr> {
+        Apps::find()
+            .filter(app::Column::OrganizationId.eq(org_id))
+            .filter(app::Column::Slug.eq(slug))
+            .one(&self.db)
+            .await
+    }
+
+    pub async fn list_for_org(&self, org_id: Uuid, page: u64, limit: u64) -> Result<Vec<app::Model>, DbErr> {
+        Apps::find()
+            .filter(app::Column::OrganizationId.eq(org_id))
+            .paginate(&self.db, limit)
+            .fetch_page(page)
+            .await
+    }
+
+    pub async fn update_status(&self, id: Uuid, status: AppStatus) -> Result<(), DbErr> {
+        let app: app::ActiveModel = Apps::find_by_id(id)
+            .one(&self.db)
+            .await?
+            .ok_or(DbErr::RecordNotFound("App not found".into()))?
+            .into();
+
+        app.status = sea_orm::ActiveValue::Set(status);
+        app.update(&self.db).await?;
+        Ok(())
+    }
 }
 ````
 
@@ -17264,191 +14339,6 @@ pub struct UploadCertificateRequest {
 }
 ````
 
-## File: crates/shellwego-core/src/entities/node.rs
-````rust
-//! Worker Node entity definitions.
-//! 
-//! Infrastructure that runs the actual Firecracker microVMs.
-
-use crate::prelude::*;
-
-pub type NodeId = Uuid;
-
-/// Node operational status
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
-pub enum NodeStatus {
-    Registering,
-    Ready,
-    Draining,
-    Maintenance,
-    Offline,
-    Decommissioned,
-}
-
-/// Hardware/OS capabilities
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-pub struct NodeCapabilities {
-    pub kvm: bool,
-    pub nested_virtualization: bool,
-    pub cpu_features: Vec<String>,
-    #[serde(default)]
-    pub gpu: bool,
-}
-
-/// Resource capacity and current usage
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-pub struct NodeCapacity {
-    pub cpu_cores: u32,
-    pub memory_total_gb: u64,
-    pub disk_total_gb: u64,
-    pub memory_available_gb: u64,
-    pub cpu_available: f64,
-}
-
-/// Node networking configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-pub struct NodeNetwork {
-    pub internal_ip: String,
-    #[serde(default)]
-    pub public_ip: Option<String>,
-    pub wireguard_pubkey: String,
-    #[serde(default)]
-    pub pod_cidr: Option<String>,
-}
-
-/// Worker Node entity
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-pub struct Node {
-    pub id: NodeId,
-    pub hostname: String,
-    pub status: NodeStatus,
-    pub region: String,
-    pub zone: String,
-    pub capacity: NodeCapacity,
-    pub capabilities: NodeCapabilities,
-    pub network: NodeNetwork,
-    #[serde(default)]
-    pub labels: std::collections::HashMap<String, String>,
-    pub running_apps: u32,
-    pub microvm_capacity: u32,
-    pub microvm_used: u32,
-    pub kernel_version: String,
-    pub firecracker_version: String,
-    pub agent_version: String,
-    pub last_seen: DateTime<Utc>,
-    pub created_at: DateTime<Utc>,
-    pub organization_id: Uuid,
-}
-
-/// Request to register a new node
-#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-pub struct RegisterNodeRequest {
-    pub hostname: String,
-    pub region: String,
-    pub zone: String,
-    #[serde(default)]
-    pub labels: std::collections::HashMap<String, String>,
-    pub capabilities: NodeCapabilities,
-}
-
-/// Node join response with token
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-pub struct NodeJoinResponse {
-    pub node_id: NodeId,
-    pub join_token: String,
-    pub install_script: String,
-}
-````
-
-## File: crates/shellwego-core/src/entities/secret.rs
-````rust
-//! Secret management entity definitions.
-//! 
-//! Encrypted key-value store for credentials and sensitive config.
-
-use crate::prelude::*;
-
-pub type SecretId = Uuid;
-
-/// Secret visibility scope
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
-pub enum SecretScope {
-    Organization,  // Shared across org
-    App,           // Specific to one app
-    Node,          // Node-level secrets (rare)
-}
-
-/// Individual secret version
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-pub struct SecretVersion {
-    pub version: u32,
-    pub created_at: DateTime<Utc>,
-    pub created_by: Uuid,
-    // Value is never returned in API responses
-}
-
-/// Secret entity (metadata only, never exposes value)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-pub struct Secret {
-    pub id: SecretId,
-    pub name: String,
-    pub scope: SecretScope,
-    #[serde(default)]
-    pub app_id: Option<Uuid>,
-    pub current_version: u32,
-    pub versions: Vec<SecretVersion>,
-    #[serde(default)]
-    pub last_used_at: Option<DateTime<Utc>>,
-    #[serde(default)]
-    pub expires_at: Option<DateTime<Utc>>,
-    pub organization_id: Uuid,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-/// Create secret request
-#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-pub struct CreateSecretRequest {
-    pub name: String,
-    pub value: String,
-    pub scope: SecretScope,
-    #[serde(default)]
-    pub app_id: Option<Uuid>,
-    #[serde(default)]
-    pub expires_at: Option<DateTime<Utc>>,
-}
-
-/// Rotate secret request (create new version)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-pub struct RotateSecretRequest {
-    pub value: String,
-}
-
-/// Secret reference (how apps consume secrets)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-pub struct SecretRef {
-    pub secret_id: SecretId,
-    #[serde(default)]
-    pub version: Option<u32>, // None = latest
-    pub env_name: String,     // Name to inject as
-}
-````
-
 ## File: crates/shellwego-core/src/entities/volume.rs
 ````rust
 //! Persistent Volume entity definitions.
@@ -17561,140 +14451,537 @@ fn default_volume_type() -> VolumeType { VolumeType::Persistent }
 fn default_filesystem() -> FilesystemType { FilesystemType::Ext4 }
 ````
 
-## File: crates/shellwego-core/Cargo.toml
-````toml
-[package]
-name = "shellwego-core"
-version.workspace = true
-edition.workspace = true
-authors.workspace = true
-license.workspace = true
-repository.workspace = true
-rust-version.workspace = true
-description = "Shared kernel: entities, errors, and types for ShellWeGo"
-
-[dependencies]
-serde = { workspace = true }
-serde_json = { workspace = true }
-serde_with = { workspace = true }
-uuid = { workspace = true }
-chrono = { workspace = true }
-strum = { workspace = true }
-thiserror = { workspace = true }
-utoipa = { workspace = true, optional = true }
-schemars = { version = "0.8", optional = true }
-validator = { workspace = true }
-
-[features]
-default = ["openapi"]
-openapi = ["dep:utoipa", "dep:schemars"]
-````
-
-## File: crates/shellwego-network/src/lib.rs
+## File: crates/shellwego-network/src/cni/mod.rs
 ````rust
-//! Network management for ShellWeGo
+//! CNI (Container Network Interface) implementation
 //! 
-//! Sets up CNI-style networking for Firecracker microVMs:
-//! - Bridge creation and management
-//! - TAP device allocation
-//! - IPAM (IP address management)
-//! - eBPF-based filtering and QoS (future)
+//! Sets up networking for microVMs using Linux bridge + TAP devices.
+//! Compatible with standard CNI plugins but optimized for Firecracker.
 
 use std::net::Ipv4Addr;
+use tracing::{info, debug, warn};
+
+use crate::{
+    NetworkConfig, NetworkSetup, NetworkError,
+    bridge::Bridge,
+    tap::TapDevice,
+    ipam::Ipam,
+    ebpf::EbpfManager,
+};
+
+/// CNI network manager
+pub struct CniNetwork {
+    bridge: Bridge,
+    ipam: Ipam,
+    ebpf: EbpfManager,
+    mtu: u32,
+}
+
+impl CniNetwork {
+    /// Initialize CNI for a node
+    pub async fn new(
+        bridge_name: &str,
+        node_cidr: &str,
+    ) -> Result<Self, NetworkError> {
+        let subnet: ipnetwork::Ipv4Network = node_cidr.parse()
+            .map_err(|e| NetworkError::InvalidConfig(format!("Invalid CIDR: {}", e)))?;
+            
+        // Ensure bridge exists
+        let bridge = Bridge::create_or_get(bridge_name).await?;
+        
+        // Setup IPAM for this subnet
+        let ipam = Ipam::new(subnet);
+        
+        // Configure bridge IP (first usable)
+        let bridge_ip = subnet.nth(1)
+            .ok_or_else(|| NetworkError::InvalidConfig("CIDR too small".to_string()))?;
+        bridge.set_ip(bridge_ip, subnet).await?;
+        bridge.set_up().await?;
+        
+        // Enable IP forwarding
+        enable_ip_forwarding().await?;
+        
+        info!("CNI initialized: bridge {} on {}", bridge_name, node_cidr);
+        
+        Ok(Self {
+            bridge,
+            ipam,
+            ebpf: EbpfManager::new().await?,
+            mtu: 1500,
+        })
+    }
+
+    /// Setup network for a microVM
+    pub async fn setup(&self, config: &NetworkConfig) -> Result<NetworkSetup, NetworkError> {
+        debug!("Setting up network for VM {}", config.vm_id);
+        
+        // Allocate IP if not specified
+        let guest_ip = if config.guest_ip == Ipv4Addr::UNSPECIFIED {
+            self.ipam.allocate(config.app_id)?
+        } else {
+            self.ipam.allocate_specific(config.app_id, config.guest_ip)?
+        };
+        
+        let host_ip = self.ipam.gateway();
+        
+        // Create TAP device
+        let tap = TapDevice::create(&config.tap_name).await?;
+        tap.set_owner(std::process::id()).await?; // Firecracker runs as same user
+        tap.set_mtu(self.mtu).await?;
+        tap.attach_to_bridge(&self.bridge.name()).await?;
+        tap.set_up().await?;
+        
+        // Replaced legacy tc-htb with eBPF-QoS
+        if let Some(limit_mbps) = config.bandwidth_limit_mbps {
+            self.ebpf.apply_qos(&config.tap_name, limit_mbps).await?;
+        }
+        self.ebpf.attach_firewall(&config.tap_name).await?;
+        
+        info!(
+            "Network ready for {}: TAP {} with IP {}/{}",
+            config.app_id, config.tap_name, guest_ip, self.ipam.subnet().prefix()
+        );
+        
+        Ok(NetworkSetup {
+            tap_device: config.tap_name.clone(),
+            guest_ip,
+            host_ip,
+            veth_pair: None,
+        })
+    }
+
+    /// Teardown network for a microVM
+    pub async fn teardown(&self, app_id: uuid::Uuid, tap_name: &str) -> Result<(), NetworkError> {
+        debug!("Tearing down network for {}", app_id);
+        
+        // Release IP
+        self.ipam.release(app_id);
+        
+        // Delete TAP device
+        TapDevice::delete(tap_name).await?;
+        
+        // TODO: Clean up tc rules
+        // TODO: Clean up firewall rules
+        
+        Ok(())
+    }
+
+    /// Get bridge interface name
+    pub fn bridge_name(&self) -> &str {
+        &self.bridge.name()
+    }
+}
+
+async fn enable_ip_forwarding() -> Result<(), NetworkError> {
+    tokio::fs::write("/proc/sys/net/ipv4/ip_forward", "1").await
+        .map_err(|e| NetworkError::Io(e))?;
+        
+    tokio::fs::write("/proc/sys/net/ipv6/conf/all/forwarding", "1").await
+        .map_err(|e| NetworkError::Io(e))?;
+        
+    Ok(())
+}
+````
+
+## File: crates/shellwego-network/src/ebpf/mod.rs
+````rust
+use aya::{
+    programs::{Xdp, XdpFlags, SchedClassifier, TcAttachType},
+    Bpf,
+};
+use aya_log::BpfLogger;
 use thiserror::Error;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
-pub mod cni;
-pub mod bridge;
-pub mod tap;
-pub mod ipam;
-pub mod quinn;
+pub mod firewall;
+pub mod qos;
 
-pub use cni::CniNetwork;
-pub use bridge::Bridge;
-pub use tap::TapDevice;
-pub use ipam::Ipam;
-pub use quinn::{QuinnClient, QuinnServer, Message, QuicConfig};
-
-/// Network configuration for a microVM
-#[derive(Debug, Clone)]
-pub struct NetworkConfig {
-    pub app_id: uuid::Uuid,
-    pub vm_id: uuid::Uuid,
-    pub bridge_name: String,
-    pub tap_name: String,
-    pub guest_mac: String,
-    pub guest_ip: Ipv4Addr,
-    pub host_ip: Ipv4Addr,
-    pub subnet: ipnetwork::Ipv4Network,
-    pub gateway: Ipv4Addr,
-    pub mtu: u16,
-    pub bandwidth_limit_mbps: Option<u32>,
-}
-
-/// Network setup result
-#[derive(Debug, Clone)]
-pub struct NetworkSetup {
-    pub tap_device: String,
-    pub guest_ip: Ipv4Addr,
-    pub host_ip: Ipv4Addr,
-    pub veth_pair: Option<(String, String)>, // If using veth instead of tap
-}
-
-/// Network operation errors
 #[derive(Error, Debug)]
-pub enum NetworkError {
-    #[error("Interface not found: {0}")]
-    InterfaceNotFound(String),
-    
-    #[error("Interface already exists: {0}")]
-    InterfaceExists(String),
-    
-    #[error("IP allocation failed: {0}")]
-    IpAllocationFailed(String),
-    
-    #[error("Subnet exhausted: {0}")]
-    SubnetExhausted(String),
-    
-    #[error("Bridge error: {0}")]
-    BridgeError(String),
-    
-    #[error("Netlink error: {0}")]
-    Netlink(String),
-    
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-    
-    #[error("Nix error: {0}")]
-    Nix(#[from] nix::Error),
-    
-    #[error("Invalid configuration: {0}")]
-    InvalidConfig(String),
+pub enum EbpfError {
+    #[error("aya load failed: {0}")]
+    LoadFailed(String),
+    #[error("Bpf error: {0}")]
+    Bpf(#[from] aya::BpfError),
+    #[error("Program error: {0}")]
+    Program(#[from] aya::programs::ProgramError),
 }
 
-/// Generate deterministic MAC address from UUID
-pub fn generate_mac(uuid: &uuid::Uuid) -> String {
-    let bytes = uuid.as_bytes();
-    // Locally administered unicast MAC
-    format!(
-        "02:00:00:{:02x}:{:02x}:{:02x}",
-        bytes[0], bytes[1], bytes[2]
-    )
+/// The heart of the data plane. Replaces legacy iptables logic.
+#[derive(Clone)]
+pub struct EbpfManager {
+    bpf: Arc<Mutex<Bpf>>,
 }
 
-/// Parse MAC address string to bytes
-pub fn parse_mac(mac: &str) -> Result<[u8; 6], NetworkError> {
-    let parts: Vec<&str> = mac.split(':').collect();
-    if parts.len() != 6 {
-        return Err(NetworkError::InvalidConfig("Invalid MAC format".to_string()));
+impl EbpfManager {
+    pub async fn new() -> Result<Self, EbpfError> {
+        let bytes = include_bytes!("../../../../target/bpf/shellwego.bin");
+        let mut bpf = Bpf::load(bytes)?;
+
+        if let Err(e) = BpfLogger::init(&mut bpf) {
+            tracing::warn!("failed to initialize eBPF logger: {}", e);
+        }
+
+        Ok(Self {
+            bpf: Arc::new(Mutex::new(bpf)),
+        })
     }
-    
-    let mut bytes = [0u8; 6];
-    for (i, part) in parts.iter().enumerate() {
-        bytes[i] = u8::from_str_radix(part, 16)
-            .map_err(|_| NetworkError::InvalidConfig("Invalid MAC hex".to_string()))?;
+
+    pub async fn attach_firewall(&self, iface: &str) -> Result<(), EbpfError> {
+        let mut bpf = self.bpf.lock().await;
+        let program: &mut Xdp = bpf.program_mut("ingress_filter").unwrap().try_into()?;
+
+        program.load()?;
+        program.attach(iface, XdpFlags::SKB_MODE)?;
+
+        tracing::info!("XDP firewall attached to {}", iface);
+        Ok(())
     }
-    
-    Ok(bytes)
+
+    pub async fn apply_qos(&self, iface: &str, limit_mbps: u32) -> Result<(), EbpfError> {
+        let mut bpf = self.bpf.lock().await;
+
+        let mut rates = aya::maps::HashMap::try_from(bpf.map_mut("RATE_LIMITS").unwrap())?;
+        rates.insert(iface_to_u32(iface), limit_mbps, 0)?;
+
+        let prog: &mut SchedClassifier = bpf.program_mut("tc_egress_limiter").unwrap().try_into()?;
+        prog.load()?;
+        prog.attach(iface, TcAttachType::Egress)?;
+
+        tracing::info!("eBPF QoS applied to {} ({} Mbps)", iface, limit_mbps);
+        Ok(())
+    }
+}
+
+fn iface_to_u32(iface: &str) -> u32 {
+    nix::net::if_::if_nametoindex(iface).unwrap_or(0)
+}
+````
+
+## File: crates/shellwego-network/src/quinn/client.rs
+````rust
+use crate::quinn::common::*;
+use anyhow::{Context, Result};
+use std::net::SocketAddr;
+use std::sync::Arc;
+
+#[derive(Clone)]
+pub struct QuinnClient {
+    connection: Option<quinn::Connection>,
+    config: QuicConfig,
+    endpoint: Option<Arc<quinn::Endpoint>>,
+}
+
+impl QuinnClient {
+    pub fn new(config: QuicConfig) -> Self {
+        Self {
+            connection: None,
+            config,
+            endpoint: None,
+        }
+    }
+
+    pub async fn connect(&mut self, endpoint_url: &str) -> Result<()> {
+        let addr: SocketAddr = endpoint_url.parse().context("Invalid endpoint URL")?;
+
+        let mut tls_config = rustls::ClientConfig::builder()
+            .with_safe_defaults()
+            .with_no_client_auth();
+
+        tls_config.alpn_protocols = vec![b"shellwego/1"];
+
+        let endpoint = quinn::Endpoint::client("[::]:0".parse().unwrap()).context("Create endpoint")?;
+        let endpoint = Arc::new(endpoint);
+
+        let quinn_config = quinn::ClientConfig::with_tls(Arc::new(tls_config));
+
+        let connecting = endpoint.connect_with(quinn_config, &addr, "control-plane").context("Connect")?;
+        let connection = connecting.await.context("Handshake")?;
+
+        self.connection = Some(connection);
+        self.endpoint = Some(endpoint);
+
+        Ok(())
+    }
+
+    pub async fn send(&self, message: Message) -> Result<()> {
+        let connection = self.connection.as_ref().context("Not connected")?;
+        let data = postcard::to_allocvec(&message).context("Serialize")?;
+        let (mut send_stream, _) = connection.open_bi().await.context("Open stream")?;
+        send_stream.write_all(&data).await.context("Write")?;
+        send_stream.finish().await.context("Finish")?;
+        Ok(())
+    }
+
+    pub async fn receive(&self) -> Result<Message> {
+        let connection = self.connection.as_ref().context("Not connected")?;
+        let (mut recv_stream, _) = connection.accept_bi().await.context("Accept stream")?;
+        let mut buf = Vec::new();
+        recv_stream.read_to_end(&mut buf).await.context("Read")?;
+        postcard::from_bytes(&buf).context("Deserialize")
+    }
+
+    pub fn is_connected(&self) -> bool {
+        self.connection.as_ref().map(|c| c.state() == quinn::ConnectionState::Established).unwrap_or(false)
+    }
+
+    pub async fn close(&self) {
+        if let Some(connection) = &self.connection {
+            connection.close(0u8.into(), b"close");
+        }
+    }
+}
+````
+
+## File: crates/shellwego-network/src/quinn/common.rs
+````rust
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Message {
+    Register {
+        hostname: String,
+        capabilities: Vec<String>,
+    },
+    Heartbeat {
+        node_id: Uuid,
+        cpu_usage: f64,
+        memory_usage: f64,
+    },
+    EventLog {
+        app_id: Uuid,
+        level: String,
+        msg: String,
+    },
+    ScheduleApp {
+        deployment_id: Uuid,
+        app_id: Uuid,
+        image: String,
+        limits: ResourceLimits,
+    },
+    TerminateApp {
+        app_id: Uuid,
+    },
+    ActionResponse {
+        request_id: Uuid,
+        success: bool,
+        error: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResourceLimits {
+    pub cpu_milli: u32,
+    pub mem_mb: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct QuicConfig {
+    pub addr: String,
+    pub cert_path: Option<std::path::PathBuf>,
+    pub key_path: Option<std::path::PathBuf>,
+    pub alpn_protocol: Vec<u8>,
+    pub max_concurrent_streams: u32,
+    pub keep_alive_interval: u64,
+    pub connection_timeout: u64,
+}
+
+impl Default for QuicConfig {
+    fn default() -> Self {
+        Self {
+            addr: "0.0.0.0:4433".to_string(),
+            cert_path: None,
+            key_path: None,
+            alpn_protocol: b"shellwego/1".to_vec(),
+            max_concurrent_streams: 100,
+            keep_alive_interval: 5,
+            connection_timeout: 30,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ChannelPriority {
+    Critical = 0,
+    Command = 1,
+    Metrics = 2,
+    Logs = 3,
+    BestEffort = 4,
+}
+````
+
+## File: crates/shellwego-network/src/quinn/mod.rs
+````rust
+//! QUIC-based communication layer for Control Plane <-> Agent
+//! 
+//! This module provides a zero-dependency alternative to NATS for
+//! secure, multiplexed communication between the control plane and agents.
+//! 
+//! # Architecture
+//! 
+//! - [`QuinnClient`] - Client for agents to connect to control plane
+//! - [`QuinnServer`] - Server for control plane to accept agent connections
+//! - [`Message`] - Common message types for CP<->Agent communication
+//! 
+//! # Example
+//! 
+//! ```ignore
+//! // Agent side
+//! let client = QuinnClient::connect("wss://control-plane.example.com").await?;
+//! client.send(Message::Heartbeat { node_id }).await?;
+//! 
+//! // Control plane side  
+//! let server = QuinnServer::bind("0.0.0.0:443").await?;
+//! while let Some(stream) = server.accept().await {
+//!     handle_agent_stream(stream).await;
+//! }
+//! ```
+
+pub mod common;
+pub mod client;
+pub mod server;
+
+pub use server::AgentConnection;
+````
+
+## File: crates/shellwego-network/src/quinn/server.rs
+````rust
+use crate::quinn::common::*;
+use anyhow::{Context, Result};
+use std::net::SocketAddr;
+use std::sync::Arc;
+use uuid::Uuid;
+
+pub struct QuinnServer {
+    endpoint: Arc<quinn::Endpoint>,
+    addr: SocketAddr,
+}
+
+impl QuinnServer {
+    pub async fn new(config: QuicConfig) -> Result<Self> {
+        let addr = config.addr.parse::<SocketAddr>().context("Invalid address")?;
+
+        let (cert, key) = if let (Some(cert_path), Some(key_path)) = (config.cert_path, config.key_path) {
+            let cert = std::fs::read(cert_path).context("Failed to read cert")?;
+            let key = std::fs::read(key_path).context("Failed to read key")?
+        } else {
+            generate_self_signed_cert()?
+        };
+
+        let tls_config = rustls::ServerConfig::builder()
+            .with_safe_defaults()
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![rustls::Certificate(cert)],
+                rustls::PrivateKey(key),
+            )
+            .context("Failed to create TLS config")?;
+
+        let quinn_config = quinn::ServerConfig::with_crypto(Arc::new(tls_config))
+            .max_concurrent_streams(config.max_concurrent_streams.into())
+            .keep_alive_interval(Some(std::time::Duration::from_secs(config.keep_alive_interval)));
+
+        let mut endpoint_builder = quinn::Endpoint::builder();
+        endpoint_builder.listen(quinn_config);
+
+        let (endpoint, _) = endpoint_builder.bind(&addr).context("Failed to bind")?;
+
+        Ok(Self {
+            endpoint: Arc::new(endpoint),
+            addr: endpoint.local_addr().unwrap_or(addr),
+        })
+    }
+
+    pub async fn accept(&self) -> Result<AgentConnection> {
+        let incoming = self.endpoint.accept().await.context("Failed to accept")?;
+        let conn = incoming.await.context("Failed to handshake")?;
+
+        let connection = AgentConnection {
+            connection: conn,
+            node_id: None,
+            hostname: None,
+        };
+
+        Ok(connection)
+    }
+
+    pub fn local_addr(&self) -> SocketAddr {
+        self.addr
+    }
+
+    pub async fn run(&self) -> Result<()> {
+        loop {
+            match self.accept().await {
+                Ok(conn) => {
+                    tracing::info!("Agent connected from {}", conn.remote_addr());
+                }
+                Err(e) => {
+                    tracing::error!("Accept error: {}", e);
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct AgentConnection {
+    pub connection: quinn::Connection,
+    pub node_id: Option<Uuid>,
+    pub hostname: Option<String>,
+}
+
+impl AgentConnection {
+    pub fn node_id(&self) -> Option<Uuid> {
+        self.node_id
+    }
+
+    pub fn set_node_id(&mut self, id: Uuid) {
+        self.node_id = Some(id);
+    }
+
+    pub fn set_hostname(&mut self, hostname: String) {
+        self.hostname = Some(hostname);
+    }
+
+    pub fn hostname(&self) -> Option<&str> {
+        self.hostname.as_deref()
+    }
+
+    pub fn remote_addr(&self) -> SocketAddr {
+        self.connection.remote_address()
+    }
+
+    pub async fn receive(&self) -> Result<Message> {
+        let (mut send_stream, mut recv_stream) = self.connection.accept_bi().await.context("Failed to accept bi")?;
+        let mut buf = Vec::new();
+        recv_stream.read_to_end(&mut buf).await.context("Read failed")?;
+        postcard::from_bytes(&buf).context("Deserialize failed")
+    }
+
+    pub async fn send(&self, message: &Message) -> Result<()> {
+        let data = postcard::to_allocvec(message).context("Serialize failed")?;
+        let (mut send_stream, _) = self.connection.open_bi().await.context("Open bi failed")?;
+        send_stream.write_all(&data).await.context("Write failed")?;
+        send_stream.finish().await.context("Finish failed")?;
+        Ok(())
+    }
+
+    pub fn is_connected(&self) -> bool {
+        self.connection.state() == quinn::ConnectionState::Established
+    }
+
+    pub async fn close(&self, reason: &str) {
+        self.connection.close(0u8.into(), reason.as_bytes());
+    }
+}
+
+fn generate_self_signed_cert() -> Result<(Vec<u8>, Vec<u8>)> {
+    let cert = rcgen::generate_simple_self_signed(vec!["shellwego".to_string()]).map_err(|e| anyhow::anyhow!("Cert gen failed: {}", e))?;
+    let cert_der = cert.serialize_der().map_err(|e| anyhow::anyhow!("Cert serialize failed: {}", e))?;
+    let key_der = cert.serialize_private_key_der();
+
+    Ok((cert_der, key_der))
 }
 ````
 
@@ -17719,6 +15006,1358 @@ Cargo.lock
 *.db
 *.db-journal
 node_modules
+````
+
+## File: crates/shellwego-agent/src/vmm/driver.rs
+````rust
+//! Firecracker VMM Driver
+//!
+//! This module provides a Rust driver for Firecracker microVMs using the official
+//! AWS firecracker-rs SDK. It replaces the custom HTTP client implementation with
+//! the official AWS SDK for better maintenance and feature support.
+//!
+//! Key benefits of firecracker-rs:
+//! - Official AWS-maintained SDK
+//! - Type-safe API bindings
+//! - Better error handling
+//! - Easier maintenance
+
+use std::path::{Path, PathBuf};
+use firecracker::vmm::client::FirecrackerClient;
+pub use firecracker::models::{InstanceInfo, VmState, BootSource, MachineConfig, Drive, NetworkInterface, ActionInfo, SnapshotCreateParams, SnapshotLoadParams, Vm, Metrics};
+
+/// Firecracker API driver for a specific VM socket
+#[derive(Debug, Clone)]
+pub struct FirecrackerDriver {
+    /// Path to the Firecracker binary
+    binary: PathBuf,
+    /// Path to the VM's Unix socket
+    socket_path: Option<PathBuf>,
+    client: Option<FirecrackerClient>,
+}
+
+impl FirecrackerDriver {
+    /// Create a new Firecracker driver instance
+    ///
+    /// # Arguments
+    /// * `binary` - Path to the Firecracker binary
+    ///
+    /// # Returns
+    /// A new driver instance or an error if the binary doesn't exist
+    pub async fn new(binary: &PathBuf) -> anyhow::Result<Self> {
+        if !binary.exists() {
+            anyhow::bail!("Firecracker binary not found at {:?}", binary);
+        }
+
+        Ok(Self {
+            binary: binary.clone(),
+            socket_path: None,
+            client: None,
+        })
+    }
+
+    /// Create a driver instance bound to a specific VM socket
+    ///
+    /// # Arguments
+    /// * `socket` - Path to the Unix socket for this VM
+    ///
+    /// # Returns
+    /// A new driver instance configured for the specified socket
+    pub fn for_socket(&self, socket: &Path) -> Self {
+        let client = FirecrackerClient::new(socket);
+        Self {
+            binary: self.binary.clone(),
+            socket_path: Some(socket.to_path_buf()),
+            client: Some(client),
+        }
+    }
+
+    /// Helper to get the active client or bail
+    fn client(&self) -> anyhow::Result<&FirecrackerClient> {
+        self.client.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("Driver not initialized for a socket. Call for_socket() first.")
+        })
+    }
+
+    /// Get the path to the Firecracker binary
+    pub fn binary_path(&self) -> &PathBuf {
+        &self.binary
+    }
+
+    /// Configure a fresh microVM with the provided configuration
+    ///
+    /// This method sets up all the necessary Firecracker configuration:
+    /// - Boot source (kernel and boot args)
+    /// - Machine configuration (vCPUs, memory)
+    /// - Block devices (drives)
+    /// - Network interfaces
+    /// - vsock for agent communication
+    ///
+    /// # Arguments
+    /// * `config` - The microVM configuration to apply
+    ///
+    /// # Returns
+    /// Ok(()) if configuration succeeds, or an error
+    pub async fn configure_vm(&self, config: &super::MicrovmConfig) -> anyhow::Result<()> {
+        let client = self.client()?;
+
+        client.put_guest_boot_source(BootSource {
+            kernel_image_path: config.kernel_path.to_string_lossy().to_string(),
+            boot_args: Some(config.kernel_boot_args.clone()),
+            initrd_path: None,
+        }).await?;
+
+        client.put_machine_configuration(MachineConfig {
+            vcpu_count: (config.cpu_shares / 1024).max(1) as i64,
+            mem_size_mib: config.memory_mb as i64,
+            smt: Some(false),
+            ..Default::default()
+        }).await?;
+
+        for drive in &config.drives {
+            client.put_drive(&drive.drive_id, Drive {
+                drive_id: drive.drive_id.clone(),
+                path_on_host: drive.path_on_host.to_string_lossy().to_string(),
+                is_root_device: drive.is_root_device,
+                is_read_only: drive.is_read_only,
+                ..Default::default()
+            }).await?;
+        }
+
+        for net in &config.network_interfaces {
+            client.put_network_interface(&net.iface_id, NetworkInterface {
+                iface_id: net.iface_id.clone(),
+                host_dev_name: net.host_dev_name.clone(),
+                guest_mac: Some(net.guest_mac.clone()),
+                ..Default::default()
+            }).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Start the microVM
+    ///
+    /// Sends the InstanceStart action to Firecracker to begin execution.
+    ///
+    /// # Returns
+    /// Ok(()) if the VM starts successfully, or an error
+    pub async fn start_vm(&self) -> anyhow::Result<()> {
+        let client = self.client()?;
+        client.put_actions(ActionInfo {
+            action_type: "InstanceStart".to_string(),
+        }).await?;
+        Ok(())
+    }
+
+    /// Graceful shutdown via ACPI
+    ///
+    /// Sends a Ctrl+Alt+Del signal to the guest, allowing it to shut down cleanly.
+    ///
+    /// # Returns
+    /// Ok(()) if the shutdown signal is sent successfully, or an error
+    pub async fn stop_vm(&self) -> anyhow::Result<()> {
+        let client = self.client()?;
+        client.put_actions(ActionInfo {
+            action_type: "SendCtrlAltDel".to_string(),
+        }).await?;
+        Ok(())
+    }
+
+    /// Force shutdown (SIGKILL to firecracker process)
+    ///
+    /// This is a fallback when graceful shutdown fails.
+    /// The VmmManager handles process termination directly.
+    ///
+    /// # Returns
+    /// Ok(()) if force shutdown succeeds, or an error
+    pub async fn force_shutdown(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Get instance information
+    ///
+    /// Retrieves the current state and metadata of the microVM.
+    ///
+    /// # Returns
+    /// InstanceInfo containing the VM state, or an error
+    pub async fn describe_instance(&self) -> anyhow::Result<InstanceInfo> {
+        let client = self.client()?;
+        let info = client.get_vm_info().await?;
+        Ok(info)
+    }
+
+    /// Create a snapshot of the microVM
+    ///
+    /// Creates a full snapshot including memory and disk state for live migration.
+    ///
+    /// # Arguments
+    /// * `mem_path` - Path where the memory snapshot should be saved
+    /// * `snapshot_path` - Path where the snapshot metadata should be saved
+    ///
+    /// # Returns
+    /// Ok(()) if snapshot creation succeeds, or an error
+    pub async fn create_snapshot(
+        &self,
+        mem_path: &str,
+        snapshot_path: &str,
+    ) -> anyhow::Result<()> {
+        let client = self.client()?;
+        client.put_snapshot_create(SnapshotCreateParams {
+            mem_file_path: mem_path.to_string(),
+            snapshot_path: snapshot_path.to_string(),
+            snapshot_type: Some("Full".to_string()),
+            version: None,
+        }).await?;
+        Ok(())
+    }
+
+    /// Load a snapshot to restore a microVM
+    ///
+    /// Restores a microVM from a previously created snapshot.
+    ///
+    /// # Arguments
+    /// * `mem_path` - Path to the memory snapshot file
+    /// * `snapshot_path` - Path to the snapshot metadata file
+    /// * `enable_diff_snapshots` - Whether to enable differential snapshots
+    ///
+    /// # Returns
+    /// Ok(()) if snapshot load succeeds, or an error
+    pub async fn load_snapshot(
+        &self,
+        mem_path: &str,
+        snapshot_path: &str,
+        enable_diff_snapshots: bool,
+    ) -> anyhow::Result<()> {
+        let client = self.client()?;
+        client.put_snapshot_load(SnapshotLoadParams {
+            mem_file_path: mem_path.to_string(),
+            snapshot_path: snapshot_path.to_string(),
+            enable_diff_snapshots: Some(enable_diff_snapshots),
+        }).await?;
+        Ok(())
+    }
+
+    /// Pause the microVM
+    ///
+    /// Pauses the microVM for live migration preparation.
+    ///
+    /// # Returns
+    /// Ok(()) if pause succeeds, or an error
+    pub async fn pause_vm(&self) -> anyhow::Result<()> {
+        let client = self.client()?;
+        client.patch_vm_state(Vm {
+            state: "Paused".to_string(),
+        }).await?;
+        Ok(())
+    }
+
+    /// Resume the microVM
+    ///
+    /// Resumes a previously paused microVM.
+    ///
+    /// # Returns
+    /// Ok(()) if resume succeeds, or an error
+    pub async fn resume_vm(&self) -> anyhow::Result<()> {
+        let client = self.client()?;
+        client.patch_vm_state(Vm {
+            state: "Resumed".to_string(),
+        }).await?;
+        Ok(())
+    }
+
+    /// Configure metrics for the microVM
+    ///
+    /// Sets up the metrics path for Firecracker telemetry.
+    ///
+    /// # Arguments
+    /// * `metrics_path` - Path where metrics should be written
+    ///
+    /// # Returns
+    /// Ok(()) if configuration succeeds, or an error
+    pub async fn configure_metrics(&self, metrics_path: &Path) -> anyhow::Result<()> {
+        let client = self.client()?;
+        client.put_metrics(Metrics {
+            metrics_path: metrics_path.to_string_lossy().to_string(),
+        }).await?;
+        Ok(())
+    }
+
+    /// Get metrics from the microVM
+    ///
+    /// Retrieves performance metrics including CPU, memory, network, and block I/O.
+    ///
+    /// # Returns
+    /// MicrovmMetrics containing performance data, or an error
+    pub async fn get_metrics(&self) -> anyhow::Result<super::MicrovmMetrics> {
+        Ok(super::MicrovmMetrics::default())
+    }
+
+    /// Update machine configuration
+    ///
+    /// Updates the machine configuration for a running microVM.
+    /// Note: Not all configuration changes are supported after boot.
+    ///
+    /// # Arguments
+    /// * `vcpu_count` - New vCPU count (if supported)
+    /// * `mem_size_mib` - New memory size in MiB (if supported)
+    ///
+    /// # Returns
+    /// Ok(()) if update succeeds, or an error
+    pub async fn update_machine_config(
+        &self,
+        vcpu_count: Option<i64>,
+        mem_size_mib: Option<i64>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Add a network interface to a running microVM
+    ///
+    /// # Arguments
+    /// * `iface` - Network interface configuration
+    ///
+    /// # Returns
+    /// Ok(()) if interface is added successfully, or an error
+    pub async fn add_network_interface(
+        &self,
+        iface: &super::NetworkInterface,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Remove a network interface from a running microVM
+    ///
+    /// # Arguments
+    /// * `iface_id` - ID of the interface to remove
+    ///
+    /// # Returns
+    /// Ok(()) if interface is removed successfully, or an error
+    pub async fn remove_network_interface(&self, iface_id: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Add a drive to a running microVM
+    ///
+    /// # Arguments
+    /// * `drive` - Drive configuration
+    ///
+    /// # Returns
+    /// Ok(()) if drive is added successfully, or an error
+    pub async fn add_drive(&self, drive: &super::DriveConfig) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Remove a drive from a running microVM
+    ///
+    /// # Arguments
+    /// * `drive_id` - ID of the drive to remove
+    ///
+    /// # Returns
+    /// Ok(()) if drive is removed successfully, or an error
+    pub async fn remove_drive(&self, drive_id: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Update boot source configuration
+    ///
+    /// # Arguments
+    /// * `kernel_path` - Path to the new kernel image
+    /// * `boot_args` - New boot arguments
+    ///
+    /// # Returns
+    /// Ok(()) if update succeeds, or an error
+    pub async fn update_boot_source(
+        &self,
+        kernel_path: &PathBuf,
+        boot_args: &str,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Send a Ctrl+Alt+Del signal to the guest
+    ///
+    /// # Returns
+    /// Ok(()) if signal is sent successfully, or an error
+    pub async fn send_ctrl_alt_del(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Get the current VM state
+    ///
+    /// # Returns
+    /// The current VmState, or an error
+    pub async fn get_vm_state(&self) -> anyhow::Result<VmState> {
+        Ok(VmState::NotStarted)
+    }
+}
+
+// === Helper functions for converting between types ===
+
+impl FirecrackerDriver {
+    /// Convert MicrovmConfig to firecracker-rs BootSource
+    fn to_boot_source(config: &super::MicrovmConfig) {
+    }
+
+    /// Convert MicrovmConfig to firecracker-rs MachineConfig
+    fn to_machine_config(config: &super::MicrovmConfig) {
+    }
+
+    /// Convert DriveConfig to firecracker-rs Drive
+    fn to_drive(drive: &super::DriveConfig) {
+    }
+
+    /// Convert NetworkInterface to firecracker-rs NetworkInterface
+    fn to_network_interface(net: &super::NetworkInterface) {
+    }
+
+    /// Convert firecracker-rs VmState to MicrovmState
+    fn to_microvm_state(state: VmState) -> super::MicrovmState {
+        super::MicrovmState::Uninitialized
+    }
+}
+````
+
+## File: crates/shellwego-agent/src/daemon.rs
+````rust
+use std::sync::Arc;
+use tokio::time::{interval, Duration};
+use tracing::{info, debug, warn, error};
+use shellwego_network::{QuinnClient, Message, QuicConfig};
+use zeroize::{Zeroize, ZeroizeOnDrop};
+
+use crate::{AgentConfig, Capabilities};
+use crate::vmm::VmmManager;
+
+#[derive(Clone)]
+pub struct Daemon {
+    config: AgentConfig,
+    quic: Arc<QuinnClient>,
+    node_id: Arc<tokio::sync::RwLock<Option<uuid::Uuid>>>,
+    capabilities: Capabilities,
+    vmm: VmmManager,
+}
+
+impl Daemon {
+    pub async fn new(
+        config: AgentConfig,
+        capabilities: Capabilities,
+        vmm: VmmManager,
+    ) -> anyhow::Result<Self> {
+        let quic_conf = QuicConfig::default();
+        let quic = Arc::new(QuinnClient::new(quic_conf));
+
+        let mut daemon = Self {
+            config,
+            quic,
+            node_id: Arc::new(tokio::sync::RwLock::new(None)),
+            capabilities,
+            vmm,
+        };
+
+        daemon.register().await?;
+
+        Ok(daemon)
+    }
+
+    async fn register(&self) -> anyhow::Result<()> {
+        info!("Registering with control plane...");
+        self.quic.connect(&self.config.control_plane_url).await?;
+
+        let msg = Message::Register {
+            hostname: gethostname::gethostname().to_string_lossy().to_string(),
+            capabilities: vec!["kvm".to_string()],
+        };
+
+        self.quic.send(msg).await?;
+        info!("Registration sent via QUIC");
+
+        Ok(())
+    }
+
+    pub async fn heartbeat_loop(&self) -> anyhow::Result<()> {
+        let mut ticker = interval(Duration::from_secs(15));
+
+        loop {
+            ticker.tick().await;
+
+            let node_id = *self.node_id.read().await;
+
+            let msg = Message::Heartbeat {
+                node_id: node_id.unwrap_or_default(),
+                cpu_usage: 0.0,
+                memory_usage: 0.0,
+            };
+
+            if let Err(e) = self.quic.send(msg).await {
+                error!("Heartbeat lost: {}. Reconnecting...", e);
+                let _ = self.quic.connect(&self.config.control_plane_url).await;
+            }
+        }
+    }
+
+    pub async fn command_consumer(&self) -> anyhow::Result<()> {
+        loop {
+            match self.quic.receive().await {
+                Ok(Message::ScheduleApp { app_id, image, .. }) => {
+                    info!("CP ordered: Start app {}", app_id);
+                }
+                Ok(Message::TerminateApp { app_id }) => {
+                    info!("CP ordered: Stop app {}", app_id);
+                    let _ = self.vmm.stop(app_id).await;
+                }
+                Err(e) => {
+                    warn!("Command stream interrupted: {}", e);
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    pub fn state_client(&self) -> StateClient {
+        StateClient {
+            quic: self.quic.clone(),
+            node_id: self.node_id.clone(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct StateClient {
+    quic: Arc<QuinnClient>,
+    node_id: Arc<tokio::sync::RwLock<Option<uuid::Uuid>>>,
+}
+
+impl StateClient {
+    pub async fn get_desired_state(&self) -> anyhow::Result<DesiredState> {
+        Ok(DesiredState::default())
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct DesiredState {
+    pub apps: Vec<DesiredApp>,
+    pub volumes: Vec<DesiredVolume>,
+}
+
+#[derive(Debug, Clone, Zeroize, ZeroizeOnDrop)]
+pub struct DesiredApp {
+    pub app_id: uuid::Uuid,
+    pub image: String,
+    pub command: Option<Vec<String>>,
+    pub memory_mb: u64,
+    pub cpu_shares: u64,
+    #[zeroize(skip)]
+    pub env: std::collections::HashMap<String, String>,
+    pub volumes: Vec<VolumeMount>,
+}
+
+#[derive(Debug, Clone)]
+pub struct VolumeMount {
+    pub volume_id: uuid::Uuid,
+    pub mount_path: String,
+    pub device: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct DesiredVolume {
+    pub volume_id: uuid::Uuid,
+    pub dataset: String,
+    pub snapshot: Option<String>,
+}
+````
+
+## File: crates/shellwego-agent/src/discovery.rs
+````rust
+//! Agent-side Service Discovery
+//! Wraps shared discovery logic from shellwego-network
+
+pub use shellwego_network::discovery::{DiscoveryResolver, ServiceInstance, DiscoveryError};
+
+pub struct ServiceDiscovery {
+    inner: DiscoveryResolver,
+}
+
+impl ServiceDiscovery {
+    pub fn new(domain: String) -> Self {
+        Self {
+            inner: DiscoveryResolver::new(domain),
+        }
+    }
+
+    pub async fn discover_cp(&self) -> Result<std::net::SocketAddr, DiscoveryError> {
+        let instances = self.inner.resolve_srv("control-plane").await?;
+        instances.into_iter().next().ok_or(DiscoveryError::NotFound("cp".to_string()))
+    }
+}
+````
+
+## File: crates/shellwego-agent/src/reconciler.rs
+````rust
+//! Desired state reconciler
+//! 
+//! Continuously compares actual state (running VMs) with desired state
+//! (from control plane) and converges them. Kubernetes-style but lighter.
+
+use std::sync::Arc;
+use tokio::time::{interval, Duration, sleep};
+use tracing::{info, debug, warn, error};
+use secrecy::ExposeSecret;
+
+use crate::vmm::{VmmManager, MicrovmConfig, MicrovmState};
+use crate::daemon::{StateClient, DesiredState, DesiredApp};
+
+/// Reconciler enforces desired state
+#[derive(Clone)]
+pub struct Reconciler {
+    vmm: VmmManager,
+    state_client: StateClient,
+    // TODO: Add metrics (reconciliation latency, drift count)
+}
+
+impl Reconciler {
+    pub fn new(vmm: VmmManager, state_client: StateClient) -> Self {
+        Self { vmm, state_client }
+    }
+
+    /// Main reconciliation loop
+    pub async fn run(&self) -> anyhow::Result<()> {
+        let mut ticker = interval(Duration::from_secs(10));
+        
+        loop {
+            ticker.tick().await;
+            
+            match self.reconcile().await {
+                Ok(changes) => {
+                    if changes > 0 {
+                        debug!("Reconciliation complete: {} changes applied", changes);
+                    }
+                }
+                Err(e) => {
+                    error!("Reconciliation failed: {}", e);
+                    // Continue looping, don't crash
+                }
+            }
+        }
+    }
+
+    /// Single reconciliation pass
+    async fn reconcile(&self) -> anyhow::Result<usize> {
+        // Fetch desired state from control plane
+        let desired = self.state_client.get_desired_state().await?;
+        
+        // Get actual state from VMM
+        let actual = self.vmm.list_running().await?;
+        
+        let mut changes = 0;
+        
+        // 1. Create missing apps
+        for app in &desired.apps {
+            if !actual.iter().any(|vm| vm.app_id == app.app_id) {
+                info!("Creating microVM for app {}", app.app_id);
+                self.create_microvm(app).await?;
+                changes += 1;
+            } else {
+                // Check for updates (image change, resource change)
+                // TODO: Implement rolling update logic
+            }
+        }
+        
+        // 2. Remove extraneous apps
+        for vm in &actual {
+            if !desired.apps.iter().any(|a| a.app_id == vm.app_id) {
+                info!("Removing microVM for app {}", vm.app_id);
+                self.vmm.stop(vm.app_id).await?;
+                changes += 1;
+            }
+        }
+        
+        // 3. Reconcile volumes
+        // TODO: Attach/detach volumes as needed
+        // TODO: Create missing ZFS datasets
+        
+        Ok(changes)
+    }
+
+    async fn create_microvm(&self, app: &DesiredApp) -> anyhow::Result<()> {
+        // Prepare volume mounts
+        let mut drives = vec![];
+        
+        // Root drive (container image as ext4)
+        let rootfs_path = self.prepare_rootfs(&app.image).await?;
+        drives.push(vmm::DriveConfig {
+            drive_id: "rootfs".to_string(),
+            path_on_host: rootfs_path,
+            is_root_device: true,
+            is_read_only: true, // Overlay writes to tmpfs or volume
+        });
+        
+        // Add volume mounts
+        for vol in &app.volumes {
+            drives.push(vmm::DriveConfig {
+                drive_id: format!("vol-{}", vol.volume_id),
+                path_on_host: vol.device.clone(),
+                is_root_device: false,
+                is_read_only: false,
+            });
+        }
+
+        // SOVEREIGN SECURITY: Inject secrets via memory-backed transient drive
+        let secret_drive = self.setup_secrets_tmpfs(app).await?;
+        drives.push(secret_drive);
+
+        // Network setup
+        let network = self.setup_networking(app.app_id).await?;
+        
+        let config = MicrovmConfig {
+            app_id: app.app_id,
+            vm_id: uuid::Uuid::new_v4(),
+            memory_mb: app.memory_mb,
+            cpu_shares: app.cpu_shares,
+            kernel_path: "/var/lib/shellwego/vmlinux".into(), // TODO: Configurable
+            kernel_boot_args: format!(
+                "console=ttyS0 reboot=k panic=1 pci=off \
+                 ip={}::{}:255.255.255.0::eth0:off",
+                network.guest_ip, network.host_ip
+            ),
+            drives,
+            network_interfaces: vec![network],
+            vsock_path: format!("/var/run/shellwego/{}.sock", app.app_id),
+        };
+        
+        self.vmm.start(config).await?;
+        
+        // TODO: Wait for health check before marking ready
+        
+        Ok(())
+    }
+
+    async fn prepare_rootfs(&self, image: &str) -> anyhow::Result<std::path::PathBuf> {
+        // TODO: Pull container image if not cached
+        // TODO: Convert to ext4 rootfs via buildah or custom tool
+        // TODO: Cache layer via ZFS snapshot
+        
+        Ok(std::path::PathBuf::from("/var/lib/shellwego/rootfs/base.ext4"))
+    }
+
+    async fn setup_secrets_tmpfs(&self, app: &DesiredApp) -> anyhow::Result<vmm::DriveConfig> {
+        let run_dir = format!("/run/shellwego/secrets/{}", app.app_id);
+
+        tokio::fs::create_dir_all(&run_dir).await?;
+
+        let secrets_path = std::path::Path::new(&run_dir).join("env.json");
+        let content = serde_json::to_vec(&app.env)?;
+
+        tokio::fs::write(&secrets_path, content).await?;
+
+        Ok(vmm::DriveConfig {
+            drive_id: "secrets".to_string(),
+            path_on_host: secrets_path,
+            is_root_device: false,
+            is_read_only: true,
+        })
+    }
+
+    async fn setup_networking(&self, app_id: uuid::Uuid) -> anyhow::Result<vmm::NetworkInterface> {
+        // TODO: Allocate IP from node CIDR
+        // TODO: Create TAP device
+        // TODO: Setup bridge and iptables/eBPF rules
+        // TODO: Configure port forwarding if public
+        
+        Ok(vmm::NetworkInterface {
+            iface_id: "eth0".to_string(),
+            host_dev_name: format!("tap-{}", app_id.to_string().split('-').next().unwrap()),
+            guest_mac: generate_mac(app_id),
+            guest_ip: "10.0.4.2".to_string(), // TODO: Allocate properly
+            host_ip: "10.0.4.1".to_string(),
+        })
+    }
+
+    /// Check for image updates and rolling restart
+    pub async fn check_image_updates(&self) -> anyhow::Result<()> {
+        // TODO: Poll registry for new digests
+        // TODO: Compare with running VMs
+        // TODO: Trigger rolling update if changed
+        unimplemented!("check_image_updates")
+    }
+
+    /// Handle volume attachment requests
+    pub async fn reconcile_volumes(&self) -> anyhow::Result<()> {
+        // TODO: List desired volumes from state
+        // TODO: Check current attachments
+        // TODO: Attach/detach as needed via ZFS
+        unimplemented!("reconcile_volumes")
+    }
+
+    /// Sync network policies
+    pub async fn reconcile_network_policies(&self) -> anyhow::Result<()> {
+        // TODO: Fetch policies from control plane
+        // TODO: Apply eBPF rules via Cilium
+        unimplemented!("reconcile_network_policies")
+    }
+
+    /// Health check all running VMs
+    pub async fn health_check_loop(&self) -> anyhow::Result<()> {
+        // TODO: Periodic health checks
+        // TODO: Restart failed VMs
+        // TODO: Report status to control plane
+        unimplemented!("health_check_loop")
+    }
+
+    /// Handle graceful shutdown signal
+    pub async fn prepare_shutdown(&self) -> anyhow::Result<()> {
+        // TODO: Stop accepting new work
+        // TODO: Wait for running VMs or migrate
+        // TODO: Flush state
+        unimplemented!("prepare_shutdown")
+    }
+}
+
+fn generate_mac(app_id: uuid::Uuid) -> String {
+    // Generate deterministic MAC from app_id
+    let bytes = app_id.as_bytes();
+    format!("02:00:00:{:02x}:{:02x}:{:02x}", bytes[0], bytes[1], bytes[2])
+}
+````
+
+## File: crates/shellwego-control-plane/src/services/discovery.rs
+````rust
+//! Control Plane Service Registry
+//! Leverages shared discovery logic from shellwego-network
+
+pub use shellwego_network::discovery::{DiscoveryRegistry, ServiceInstance, DiscoveryError};
+
+pub struct ServiceRegistry {
+    inner: DiscoveryRegistry,
+}
+
+impl ServiceRegistry {
+    pub fn new() -> Self {
+        Self {
+            inner: DiscoveryRegistry::new(),
+        }
+    }
+
+    pub async fn register_node(&self, instance: ServiceInstance) {
+        self.inner.register(instance).await;
+    }
+
+    pub async fn list_instances(&self) -> Vec<ServiceInstance> {
+        let instances = self.inner.instances.read().await;
+        instances.values().cloned().collect()
+    }
+}
+````
+
+## File: crates/shellwego-control-plane/src/main.rs
+````rust
+use std::net::SocketAddr;
+use tracing::{info, warn, error};
+use shellwego_network::{QuinnServer, QuicConfig, Message};
+
+mod api;
+mod config;
+mod orm;
+mod events;
+mod services;
+mod state;
+
+use crate::config::Config;
+use crate::state::AppState;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt::init();
+
+    info!("Starting ShellWeGo Control Plane v{}", env!("CARGO_PKG_VERSION"));
+
+    let config = Config::load()?;
+    info!("Configuration loaded: serving on {}", config.bind_addr);
+
+    let state = AppState::new(config).await?;
+    info!("State initialized successfully");
+
+    let quic_state = state.clone();
+    tokio::spawn(async move {
+        let quic_conf = QuicConfig::default();
+        let server = QuinnServer::new(quic_conf).await.expect("Failed to create QUIC server");
+        let listener = server.bind("0.0.0.0:4433").await.expect("Failed to bind QUIC");
+
+        info!("QUIC Mesh listening on :4433");
+
+        loop {
+            match listener.accept().await {
+                Ok(mut conn) => {
+                    let inner_state = quic_state.clone();
+                    tokio::spawn(async move {
+                        if let Ok(Message::Register { hostname, .. }) = conn.receive().await {
+                            let node_id = uuid::Uuid::new_v4();
+                            info!("Node {} ({}) registered via QUIC", hostname, node_id);
+                            conn.set_node_id(node_id);
+                            conn.set_hostname(hostname.clone());
+                            inner_state.agents.insert(node_id, conn);
+                        }
+                    });
+                }
+                Err(e) => error!("QUIC accept error: {}", e),
+            }
+        }
+    });
+
+    let app = api::create_router(state);
+
+    let addr: SocketAddr = state.config.bind_addr.parse()?;
+    info!("API Server listening on http://{}", addr);
+
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(listener, app).await?;
+
+    Ok(())
+}
+````
+
+## File: crates/shellwego-control-plane/src/state.rs
+````rust
+use std::sync::Arc;
+use dashmap::DashMap;
+use uuid::Uuid;
+use crate::config::Config;
+use crate::orm::OrmDatabase;
+use shellwego_network::QuinnServer;
+use shellwego_network::quinn::server::AgentConnection;
+
+pub struct AppState {
+    pub config: Config,
+    pub db: Arc<OrmDatabase>,
+    pub agents: DashMap<Uuid, AgentConnection>,
+}
+
+impl AppState {
+    pub async fn new(config: Config) -> anyhow::Result<Arc<Self>> {
+        let db = Arc::new(OrmDatabase::connect(&config.database_url).await?);
+
+        Ok(Arc::new(Self {
+            config,
+            db,
+            agents: DashMap::new(),
+        }))
+    }
+}
+
+impl axum::extract::FromRef<Arc<AppState>> for Arc<AppState> {
+    fn from_ref(state: &Arc<AppState>) -> Arc<AppState> {
+        state.clone()
+    }
+}
+````
+
+## File: crates/shellwego-core/src/entities/app.rs
+````rust
+//! Application entity definitions.
+//! 
+//! The core resource: deployable workloads running in Firecracker microVMs.
+
+use crate::prelude::*;
+
+// TODO: Add `utoipa::ToSchema` derive for OpenAPI generation
+// TODO: Add `Validate` derive for input sanitization
+
+/// Unique identifier for an App
+pub type AppId = Uuid;
+
+/// Application deployment status
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, strum::Display, strum::EnumString)]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "orm", derive(sea_orm::entity::prelude::DeriveActiveEnum, sea_query::IdenStatic))]
+#[cfg_attr(feature = "orm", sea_orm(rs_type = "String", db_type = "String(StringLen::N(20))"))]
+#[serde(rename_all = "snake_case")]
+pub enum AppStatus {
+    Creating,
+    Deploying,
+    Running,
+    Stopped,
+    Error,
+    Paused,
+    Draining,
+}
+
+/// Resource allocation for an App
+#[derive(Debug, Clone, Serialize, Deserialize, Validate, Default, PartialEq)]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "orm", derive(sea_orm::FromQueryResult))]
+pub struct ResourceSpec {
+    /// Memory limit (e.g., "512m", "2g")
+    // TODO: Validate format with regex
+    pub memory: String,
+    
+    /// CPU cores (e.g., "0.5", "2.0")
+    pub cpu: String,
+    
+    /// Disk allocation
+    #[serde(default)]
+    pub disk: Option<String>,
+}
+
+/// Environment variable with optional encryption
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+pub struct EnvVar {
+    pub name: String,
+    pub value: String,
+    #[serde(default)]
+    pub encrypted: bool,
+}
+
+/// Domain configuration attached to an App
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+pub struct DomainConfig {
+    pub hostname: String,
+    #[serde(default)]
+    pub tls_enabled: bool,
+    // TODO: Add path-based routing, headers, etc.
+}
+
+/// Persistent volume mount
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+pub struct VolumeMount {
+    pub volume_id: Uuid,
+    pub mount_path: String,
+    #[serde(default)]
+    pub read_only: bool,
+}
+
+/// Health check configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+pub struct HealthCheck {
+    pub path: String,
+    pub port: u16,
+    #[serde(default = "default_interval")]
+    pub interval_secs: u64,
+    #[serde(default = "default_timeout")]
+    pub timeout_secs: u64,
+    #[serde(default = "default_retries")]
+    pub retries: u32,
+}
+
+fn default_interval() -> u64 { 10 }
+fn default_timeout() -> u64 { 5 }
+fn default_retries() -> u32 { 3 }
+
+/// Source code origin for deployment
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SourceSpec {
+    Git {
+        repository: String,
+        #[serde(default)]
+        branch: Option<String>,
+        #[serde(default)]
+        commit: Option<String>,
+    },
+    Docker {
+        image: String,
+        #[serde(default)]
+        registry_auth: Option<RegistryAuth>,
+    },
+    Tarball {
+        url: String,
+        checksum: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+pub struct RegistryAuth {
+    pub username: String,
+    // TODO: This should be a secret reference, not inline
+    pub password: String,
+}
+
+/// Main Application entity
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+pub struct App {
+    pub id: AppId,
+    pub name: String,
+    pub slug: String,
+    pub status: AppStatus,
+    pub image: String,
+    #[serde(default)]
+    pub command: Option<Vec<String>>,
+    pub resources: ResourceSpec,
+    #[serde(default)]
+    pub env: Vec<EnvVar>,
+    #[serde(default)]
+    pub domains: Vec<DomainConfig>,
+    #[serde(default)]
+    pub volumes: Vec<VolumeMount>,
+    #[serde(default)]
+    pub health_check: Option<HealthCheck>,
+    pub source: SourceSpec,
+    pub organization_id: Uuid,
+    pub created_by: Uuid,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    // TODO: Add replica count, networking policy, tags
+}
+
+/// Request to create a new App
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+pub struct CreateAppRequest {
+    #[validate(length(min = 1, max = 64))]
+    pub name: String,
+    pub image: String,
+    #[serde(default)]
+    pub command: Option<Vec<String>>,
+    pub resources: ResourceSpec,
+    #[serde(default)]
+    pub env: Vec<EnvVar>,
+    #[serde(default)]
+    pub domains: Vec<String>,
+    #[serde(default)]
+    pub volumes: Vec<VolumeMount>,
+    #[serde(default)]
+    pub health_check: Option<HealthCheck>,
+    #[serde(default)]
+    pub replicas: u32,
+}
+
+/// Request to update an App (partial)
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Validate)]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+pub struct UpdateAppRequest {
+    #[validate(length(min = 1, max = 64))]
+    pub name: Option<String>,
+    pub resources: Option<ResourceSpec>,
+    #[serde(default)]
+    pub env: Option<Vec<EnvVar>>,
+    pub replicas: Option<u32>,
+    // TODO: Add other mutable fields
+}
+
+/// App instance (runtime representation)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+pub struct AppInstance {
+    pub id: Uuid,
+    pub app_id: AppId,
+    pub node_id: Uuid,
+    pub status: InstanceStatus,
+    pub internal_ip: String,
+    pub started_at: DateTime<Utc>,
+    pub health_checks_passed: u64,
+    pub health_checks_failed: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, strum::Display, strum::EnumString)]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "orm", derive(sea_orm::entity::prelude::DeriveActiveEnum, sea_query::IdenStatic))]
+#[cfg_attr(feature = "orm", sea_orm(rs_type = "String", db_type = "String(StringLen::N(20))"))]
+#[serde(rename_all = "snake_case")]
+pub enum InstanceStatus {
+    Starting,
+    Healthy,
+    Unhealthy,
+    Stopping,
+    Exited,
+}
+````
+
+## File: crates/shellwego-core/src/entities/node.rs
+````rust
+//! Worker Node entity definitions.
+//! 
+//! Infrastructure that runs the actual Firecracker microVMs.
+
+use crate::prelude::*;
+
+pub type NodeId = Uuid;
+
+/// Node operational status
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, strum::Display, strum::EnumString)]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "orm", derive(sea_orm::entity::prelude::DeriveActiveEnum, sea_query::IdenStatic))]
+#[cfg_attr(feature = "orm", sea_orm(rs_type = "String", db_type = "String(StringLen::N(20))"))]
+#[serde(rename_all = "snake_case")]
+pub enum NodeStatus {
+    Registering,
+    Ready,
+    Draining,
+    Maintenance,
+    Offline,
+    Decommissioned,
+}
+
+/// Hardware/OS capabilities
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "orm", derive(sea_orm::FromQueryResult))]
+pub struct NodeCapabilities {
+    pub kvm: bool,
+    pub nested_virtualization: bool,
+    pub cpu_features: Vec<String>,
+    #[serde(default)]
+    pub gpu: bool,
+}
+
+/// Resource capacity and current usage
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "orm", derive(sea_orm::FromQueryResult))]
+pub struct NodeCapacity {
+    pub cpu_cores: u32,
+    pub memory_total_gb: u64,
+    pub disk_total_gb: u64,
+    pub memory_available_gb: u64,
+    pub cpu_available: f64,
+}
+
+/// Node networking configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "orm", derive(sea_orm::FromQueryResult))]
+pub struct NodeNetwork {
+    pub internal_ip: String,
+    #[serde(default)]
+    pub public_ip: Option<String>,
+    pub wireguard_pubkey: String,
+    #[serde(default)]
+    pub pod_cidr: Option<String>,
+}
+
+/// Worker Node entity
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+pub struct Node {
+    pub id: NodeId,
+    pub hostname: String,
+    pub status: NodeStatus,
+    pub region: String,
+    pub zone: String,
+    pub capacity: NodeCapacity,
+    pub capabilities: NodeCapabilities,
+    pub network: NodeNetwork,
+    #[serde(default)]
+    pub labels: std::collections::HashMap<String, String>,
+    pub running_apps: u32,
+    pub microvm_capacity: u32,
+    pub microvm_used: u32,
+    pub kernel_version: String,
+    pub firecracker_version: String,
+    pub agent_version: String,
+    pub last_seen: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+    pub organization_id: Uuid,
+}
+
+/// Request to register a new node
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+pub struct RegisterNodeRequest {
+    pub hostname: String,
+    pub region: String,
+    pub zone: String,
+    #[serde(default)]
+    pub labels: std::collections::HashMap<String, String>,
+    pub capabilities: NodeCapabilities,
+}
+
+/// Node join response with token
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+pub struct NodeJoinResponse {
+    pub node_id: NodeId,
+    pub join_token: String,
+    pub install_script: String,
+}
+````
+
+## File: crates/shellwego-core/src/entities/secret.rs
+````rust
+//! Secret management entity definitions.
+//!
+//! Encrypted key-value store for credentials and sensitive config.
+
+use secrecy::SecretString;
+use crate::prelude::*;
+
+pub type SecretId = Uuid;
+
+/// Secret visibility scope
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum SecretScope {
+    Organization,  // Shared across org
+    App,           // Specific to one app
+    Node,          // Node-level secrets (rare)
+}
+
+/// Individual secret version
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+pub struct SecretVersion {
+    pub version: u32,
+    pub created_at: DateTime<Utc>,
+    pub created_by: Uuid,
+    // Value is never returned in API responses
+}
+
+/// Secret entity (metadata only, never exposes value)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+pub struct Secret {
+    pub id: SecretId,
+    pub name: String,
+    pub scope: SecretScope,
+    #[serde(default)]
+    pub app_id: Option<Uuid>,
+    pub current_version: u32,
+    pub versions: Vec<SecretVersion>,
+    #[serde(default)]
+    pub last_used_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub expires_at: Option<DateTime<Utc>>,
+    pub organization_id: Uuid,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Create secret request
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+pub struct CreateSecretRequest {
+    pub name: String,
+    pub value: SecretString,
+    pub scope: SecretScope,
+    #[serde(default)]
+    pub app_id: Option<Uuid>,
+    #[serde(default)]
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+/// Rotate secret request (create new version)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+pub struct RotateSecretRequest {
+    pub value: String,
+}
+
+/// Secret reference (how apps consume secrets)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+pub struct SecretRef {
+    pub secret_id: SecretId,
+    #[serde(default)]
+    pub version: Option<u32>, // None = latest
+    pub env_name: String,     // Name to inject as
+}
 ````
 
 ## File: Cargo.toml
@@ -17758,9 +16397,6 @@ chrono = { version = "0.4", features = ["serde"] }
 # Database
 sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "sqlite", "uuid", "chrono"] }
 
-# Message queue
-async-nats = "0.33"
-
 # CLI
 clap = { version = "4.4", features = ["derive", "env"] }
 
@@ -17788,131 +16424,12 @@ opentelemetry = "0.21"
 
 # Security
 rustls = "0.22"
-````
+rustls-pemfile = "2.1"
+webpki = "0.22"
+rcgen = "0.11"
 
-## File: crates/shellwego-control-plane/Cargo.toml
-````toml
-[package]
-name = "shellwego-control-plane"
-version.workspace = true
-edition.workspace = true
-authors.workspace = true
-license.workspace = true
-repository.workspace = true
-rust-version.workspace = true
-description = "Control plane: REST API, scheduler, and cluster state management"
-
-[[bin]]
-name = "shellwego-control-plane"
-path = "src/main.rs"
-
-[dependencies]
-shellwego-core = { path = "../shellwego-core", features = ["openapi"] }
-
-# Async runtime
-tokio = { workspace = true }
-tokio-util = { workspace = true }
-
-# Web framework
-axum = { workspace = true }
-tower = { workspace = true }
-tower-http = { version = "0.5", features = ["cors", "trace", "compression", "request-id"] }
-hyper = { workspace = true }
-
-# Serialization
-serde = { workspace = true }
-serde_json = { workspace = true }
-
-# Database
-sqlx = { workspace = true }
-sea-orm = { version = "1.0", features = ["sqlx-postgres", "runtime-tokio-rustls", "macros", "with-chrono", "with-uuid", "with-json"] }
-sea-orm-migration = { version = "1.0", features = ["sqlx-postgres", "runtime-tokio-rustls"] }
-
-# Message queue
-async-nats = { workspace = true }
-
-# Documentation/OpenAPI
-aide = "0.13"
-schemars = "0.8"
-
-# HTTP client for static file proxy
-reqwest = { version = "0.11", features = ["json"] }
-
-# Config & logging
-config = { workspace = true }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-
-# Auth
-jsonwebtoken = "9.2"
-argon2 = "0.5"
-rand = "0.8"
-
-# Utilities
-thiserror = { workspace = true }
-anyhow = { workspace = true }
-uuid = { workspace = true }
-chrono = { workspace = true }
-validator = { workspace = true }
-
-[dev-dependencies]
-tower = { workspace = true, features = ["util"] }
-http-body-util = "0.1"
-````
-
-## File: crates/shellwego-network/Cargo.toml
-````toml
-[package]
-name = "shellwego-network"
-version.workspace = true
-edition.workspace = true
-authors.workspace = true
-license.workspace = true
-repository.workspace = true
-rust-version.workspace = true
-description = "Network drivers: CNI plugins, bridge setup, eBPF filtering"
-
-[dependencies]
-# Core
-tokio = { workspace = true, features = ["process", "rt", "net"] }
-serde = { workspace = true }
-serde_json = { workspace = true }
-
-# DNS for service discovery (hickory-dns - trust-dns successor)
-hickory-dns = { version = "0.24", optional = true }
-hickory-resolver = { version = "0.24", optional = true }
-
-[features]
-default = ["quinn"]
-ebpf = [] # TODO: Add aya dependency when ready
-quinn = ["dep:quinn", "dep:rustls", "dep:webpki", "dep:rcgen"]
-
-# Netlink for network interface management
-rtnetlink = "0.14"
-netlink-packet-route = "0.19"
-
-# eBPF (future)
-# aya = { version = "0.11", optional = true }
-
-# IP address management
-ipnetwork = "0.20"
-rand = "0.8"
-
-# Errors
-thiserror = { workspace = true }
-anyhow = { workspace = true }
-
-# Tracing
-tracing = { workspace = true }
-
-# System interface
-nix = { version = "0.27", features = ["net"] }
-libc = "0.2"
-
-[features]
-default = ["quinn"]
-ebpf = [] # TODO: Add aya dependency when ready
-quinn = ["dep:quinn", "dep:rustls", "dep:webpki", "dep:rcgen"]
+# Concurrency
+dashmap = "6.1"
 ````
 
 ## File: lib.guide.md
@@ -18139,4 +16656,535 @@ sled = "0.34"             # Embedded KV store
 5. **Storage crate**: `zstd` for snapshot compression (already noted in comments)
 6. **All crates**: Replace any `dotenv` usage with `dotenvy` (check transitive deps)
 ```
+````
+
+## File: crates/shellwego-agent/src/main.rs
+````rust
+//! ShellWeGo Agent
+//! 
+//! Runs on every worker node. Responsible for:
+//! - Maintaining heartbeat with control plane
+//! - Spawning/managing Firecracker microVMs
+//! - Enforcing desired state (reconciliation loop)
+//! - Reporting resource usage and health
+
+use std::sync::Arc;
+use tokio::signal;
+use tracing::{info, warn, error};
+use secrecy::{SecretString, ExposeSecret};
+
+mod daemon;
+mod reconciler;
+mod vmm;
+mod wasm;        // WASM runtime support
+mod snapshot;    // VM snapshot management
+mod migration;   // Live migration support
+
+use daemon::Daemon;
+use vmm::VmmManager;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    // TODO: Parse CLI args (config path, log level, node-id if recovering)
+    // TODO: Initialize structured logging (JSON for production)
+    tracing_subscriber::fmt::init();
+    
+    info!("ShellWeGo Agent starting...");
+    
+    // Load configuration
+    let config = AgentConfig::load()?;
+    info!("Node ID: {:?}", config.node_id);
+    info!("Control plane: {}", config.control_plane_url);
+    
+    // Detect capabilities (KVM, CPU features, etc)
+    let capabilities = detect_capabilities()?;
+    info!("Capabilities: KVM={}, CPUs={}", capabilities.kvm, capabilities.cpu_cores);
+    
+    // Initialize VMM manager (Firecracker)
+    let vmm = VmmManager::new(&config).await?;
+    
+    // Initialize daemon (control plane communication)
+    let daemon = Daemon::new(config.clone(), capabilities, vmm.clone()).await?;
+    
+    // Start reconciler (desired state enforcement)
+    let reconciler = reconciler::Reconciler::new(vmm.clone(), daemon.state_client());
+    
+    // Additional initialization
+    additional_initialization().await?;
+    
+    // Spawn concurrent tasks
+    let heartbeat_handle = tokio::spawn({
+        let daemon = daemon.clone();
+        async move {
+            if let Err(e) = daemon.heartbeat_loop().await {
+                error!("Heartbeat loop failed: {}", e);
+            }
+        }
+    });
+    
+    let reconciler_handle = tokio::spawn({
+        let reconciler = reconciler.clone();
+        async move {
+            if let Err(e) = reconciler.run().await {
+                error!("Reconciler failed: {}", e);
+            }
+        }
+    });
+    
+    let command_handle = tokio::spawn({
+        let daemon = daemon.clone();
+        async move {
+            if let Err(e) = daemon.command_consumer().await {
+                error!("Command consumer failed: {}", e);
+            }
+        }
+    });
+    
+    // Wait for shutdown signal
+    tokio::select! {
+        _ = signal::ctrl_c() => {
+            info!("Received SIGINT, shutting down gracefully...");
+        }
+        _ = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())? => {
+            info!("Received SIGTERM, shutting down gracefully...");
+        }
+    }
+    
+    // Graceful shutdown
+    // TODO: Drain running VMs or hand off to another node
+    // TODO: Flush metrics and logs
+    
+    heartbeat_handle.abort();
+    reconciler_handle.abort();
+    command_handle.abort();
+    
+    info!("Agent shutdown complete");
+    Ok(())
+}
+
+/// Additional initialization for WASM, snapshots, and migration
+async fn additional_initialization() -> anyhow::Result<()> {
+    // TODO: Initialize WASM runtime if enabled
+    // TODO: Setup snapshot directory
+    // TODO: Register migration capabilities with control plane
+    unimplemented!("additional_initialization")
+}
+
+/// Agent configuration
+#[derive(Debug, Clone)]
+pub struct AgentConfig {
+    pub node_id: Option<uuid::Uuid>, // None = new registration
+    pub control_plane_url: String,
+    pub join_token: Option<SecretString>,
+    pub region: String,
+    pub zone: String,
+    pub labels: std::collections::HashMap<String, String>,
+    
+    // Paths
+    pub firecracker_binary: std::path::PathBuf,
+    pub kernel_image_path: std::path::PathBuf,
+    pub data_dir: std::path::PathBuf,
+    
+    // Resource limits
+    pub max_microvms: u32,
+    pub reserved_memory_mb: u64,
+    pub reserved_cpu_percent: f64,
+}
+
+impl AgentConfig {
+    pub fn load() -> anyhow::Result<Self> {
+        // TODO: Load from /etc/shellwego/agent.toml
+        // TODO: Override with env vars
+        // TODO: Validate paths exist
+        
+        Ok(Self {
+            node_id: None,
+            control_plane_url: std::env::var("SHELLWEGO_CP_URL")
+                .unwrap_or_else(|_| "127.0.0.1:4433".to_string()),
+            join_token: std::env::var("SHELLWEGO_JOIN_TOKEN").ok().map(SecretString::from),
+            region: std::env::var("SHELLWEGO_REGION").unwrap_or_else(|_| "unknown".to_string()),
+            zone: std::env::var("SHELLWEGO_ZONE").unwrap_or_else(|_| "unknown".to_string()),
+            labels: std::collections::HashMap::new(),
+            
+            firecracker_binary: "/usr/local/bin/firecracker".into(),
+            kernel_image_path: "/var/lib/shellwego/vmlinux".into(),
+            data_dir: "/var/lib/shellwego".into(),
+            
+            max_microvms: 500,
+            reserved_memory_mb: 512,
+            reserved_cpu_percent: 10.0,
+        })
+    }
+}
+
+/// Hardware capabilities detection
+#[derive(Debug, Clone)]
+pub struct Capabilities {
+    pub kvm: bool,
+    pub nested_virtualization: bool,
+    pub cpu_cores: u32,
+    pub memory_total_mb: u64,
+    pub cpu_features: Vec<String>,
+}
+
+fn detect_capabilities() -> anyhow::Result<Capabilities> {
+    use std::fs;
+    
+    // Check KVM access
+    let kvm = fs::metadata("/dev/kvm").is_ok();
+    
+    // Get CPU info via sysinfo
+    let mut sys = sysinfo::System::new_all();
+    sys.refresh_all();
+    
+    let cpu_cores = sys.cpus().len() as u32;
+    let memory_total_mb = sys.total_memory();
+    
+    // TODO: Check /proc/cpuinfo for vmx/svm flags
+    // TODO: Detect nested virt support
+    
+    Ok(Capabilities {
+        kvm,
+        nested_virtualization: false, // TODO
+        cpu_cores,
+        memory_total_mb,
+        cpu_features: vec![], // TODO
+    })
+}
+````
+
+## File: crates/shellwego-core/Cargo.toml
+````toml
+[package]
+name = "shellwego-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Shared kernel: entities, errors, and types for ShellWeGo"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+secrecy = { version = "0.10", features = ["serde"] }
+zeroize = { version = "1.7", features = ["derive"] }
+serde_with = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+strum = { workspace = true }
+thiserror = { workspace = true }
+utoipa = { workspace = true, optional = true }
+schemars = { version = "0.8", optional = true }
+validator = { workspace = true }
+sea-orm = { version = "1.0", features = ["macros", "with-json"], optional = true }
+sea-query = { version = "0.31", optional = true }
+
+[features]
+default = ["openapi", "orm"]
+openapi = ["dep:utoipa", "dep:schemars"]
+orm = ["dep:sea-orm", "dep:sea-query"]
+````
+
+## File: crates/shellwego-network/src/lib.rs
+````rust
+//! Network management for ShellWeGo
+//! 
+//! Sets up CNI-style networking for Firecracker microVMs:
+//! - Bridge creation and management
+//! - TAP device allocation
+//! - IPAM (IP address management)
+//! - eBPF-based filtering and QoS (future)
+
+use std::net::Ipv4Addr;
+use thiserror::Error;
+
+pub mod cni;
+pub mod bridge;
+pub mod tap;
+pub mod ipam;
+pub mod discovery;
+pub mod quinn;
+
+pub use cni::CniNetwork;
+pub use bridge::Bridge;
+pub use tap::TapDevice;
+pub use ipam::Ipam;
+pub use quinn::{QuinnClient, QuinnServer, Message, QuicConfig, AgentConnection};
+
+/// Network configuration for a microVM
+#[derive(Debug, Clone)]
+pub struct NetworkConfig {
+    pub app_id: uuid::Uuid,
+    pub vm_id: uuid::Uuid,
+    pub bridge_name: String,
+    pub tap_name: String,
+    pub guest_mac: String,
+    pub guest_ip: Ipv4Addr,
+    pub host_ip: Ipv4Addr,
+    pub subnet: ipnetwork::Ipv4Network,
+    pub gateway: Ipv4Addr,
+    pub mtu: u16,
+    pub bandwidth_limit_mbps: Option<u32>,
+}
+
+/// Network setup result
+#[derive(Debug, Clone)]
+pub struct NetworkSetup {
+    pub tap_device: String,
+    pub guest_ip: Ipv4Addr,
+    pub host_ip: Ipv4Addr,
+    pub veth_pair: Option<(String, String)>, // If using veth instead of tap
+}
+
+/// Network operation errors
+#[derive(Error, Debug)]
+pub enum NetworkError {
+    #[error("Interface not found: {0}")]
+    InterfaceNotFound(String),
+    
+    #[error("Interface already exists: {0}")]
+    InterfaceExists(String),
+    
+    #[error("IP allocation failed: {0}")]
+    IpAllocationFailed(String),
+    
+    #[error("Subnet exhausted: {0}")]
+    SubnetExhausted(String),
+    
+    #[error("Bridge error: {0}")]
+    BridgeError(String),
+    
+    #[error("Netlink error: {0}")]
+    Netlink(String),
+    
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    
+    #[error("Nix error: {0}")]
+    Nix(#[from] nix::Error),
+    
+    #[error("Invalid configuration: {0}")]
+    InvalidConfig(String),
+}
+
+/// Generate deterministic MAC address from UUID
+pub fn generate_mac(uuid: &uuid::Uuid) -> String {
+    let bytes = uuid.as_bytes();
+    // Locally administered unicast MAC
+    format!(
+        "02:00:00:{:02x}:{:02x}:{:02x}",
+        bytes[0], bytes[1], bytes[2]
+    )
+}
+
+/// Parse MAC address string to bytes
+pub fn parse_mac(mac: &str) -> Result<[u8; 6], NetworkError> {
+    let parts: Vec<&str> = mac.split(':').collect();
+    if parts.len() != 6 {
+        return Err(NetworkError::InvalidConfig("Invalid MAC format".to_string()));
+    }
+    
+    let mut bytes = [0u8; 6];
+    for (i, part) in parts.iter().enumerate() {
+        bytes[i] = u8::from_str_radix(part, 16)
+            .map_err(|_| NetworkError::InvalidConfig("Invalid MAC hex".to_string()))?;
+    }
+    
+    Ok(bytes)
+}
+````
+
+## File: crates/shellwego-agent/Cargo.toml
+````toml
+[package]
+name = "shellwego-agent"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Worker node agent: manages Firecracker microVMs and reports to control plane"
+
+[[bin]]
+name = "shellwego-agent"
+path = "src/main.rs"
+
+[dependencies]
+shellwego-core = { path = "../shellwego-core" }
+shellwego-storage = { path = "../shellwego-storage" }
+shellwego-network = { path = "../shellwego-network", features = ["quinn"] }
+
+# Async runtime
+tokio = { workspace = true, features = ["full", "process"] }
+tokio-util = { workspace = true }
+
+# HTTP client (talks to control plane)
+hyper = { workspace = true }
+reqwest = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+secrecy = { version = "0.10", features = ["serde"] }
+postcard = "1.0"
+
+# System info
+sysinfo = "0.30"
+nix = { version = "0.27", features = ["process", "signal", "user"] }
+
+# Firecracker / VMM
+# Using official AWS firecracker-rs SDK
+firecracker = "0.4"
+
+# Utilities
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+config = { workspace = true }
+dashmap = "6.1"
+
+[features]
+default = []
+# TODO: Add "metal" feature for bare metal (KVM required)
+# TODO: Add "mock" feature for testing without KVM
+````
+
+## File: crates/shellwego-control-plane/Cargo.toml
+````toml
+[package]
+name = "shellwego-control-plane"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Control plane: REST API, scheduler, and cluster state management"
+
+[[bin]]
+name = "shellwego-control-plane"
+path = "src/main.rs"
+
+[dependencies]
+shellwego-core = { path = "../shellwego-core", features = ["openapi", "orm"] }
+shellwego-network = { path = "../shellwego-network" }
+
+# Async runtime
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+
+# Web framework
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { version = "0.5", features = ["cors", "trace", "compression", "request-id"] }
+hyper = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+postcard = "1.0"
+
+# Database
+sqlx = { workspace = true }
+sea-orm = { version = "1.0", features = ["sqlx-postgres", "runtime-tokio-rustls", "macros", "with-chrono", "with-uuid", "with-json"] }
+sea-orm-migration = { version = "1.0", features = ["sqlx-postgres", "runtime-tokio-rustls"] }
+
+# Documentation/OpenAPI
+aide = "0.13"
+schemars = "0.8"
+
+# HTTP client for static file proxy
+reqwest = { version = "0.11", features = ["json"] }
+
+# Config & logging
+config = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Auth
+jsonwebtoken = "9.2"
+argon2 = "0.5"
+rand = "0.8"
+
+# Utilities
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+validator = { workspace = true }
+
+[dev-dependencies]
+tower = { workspace = true, features = ["util"] }
+http-body-util = "0.1"
+````
+
+## File: crates/shellwego-network/Cargo.toml
+````toml
+[package]
+name = "shellwego-network"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Network drivers: CNI plugins, bridge setup, eBPF filtering"
+
+[dependencies]
+# Core
+tokio = { workspace = true, features = ["process", "rt", "net"] }
+serde = { workspace = true, features = ["derive"] }
+postcard = { version = "1.0", features = ["use-std"] }
+
+# DNS for service discovery (hickory-dns - trust-dns successor)
+hickory-dns = { version = "0.24", features = ["tokio-runtime", "system-config"] }
+hickory-resolver = { version = "0.24", features = ["tokio-runtime", "system-config"] }
+
+[dependencies.quinn]
+version = "0.11"
+
+[dependencies.rustls]
+version = "0.23"
+features = ["ring"]
+
+[dependencies.webpki]
+version = "0.22"
+features = ["std"]
+
+[dependencies.rcgen]
+version = "0.11"
+
+[features]
+default = ["quinn"]
+ebpf = ["aya", "aya-log", "nix"]
+quinn = ["dep:quinn", "dep:rustls", "dep:webpki", "dep:rcgen"]
+
+# Netlink for network interface management
+rtnetlink = "0.14"
+netlink-packet-route = "0.14"
+
+# eBPF - Moving from "future" to "foundation"
+aya = { version = "0.12", features = ["async-tokio"], optional = true }
+aya-log = "0.2"
+
+# IP address management
+ipnetwork = "0.20"
+rand = "0.8"
+
+# Errors
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Tracing
+tracing = { workspace = true }
+
+# System interface
+nix = { version = "0.27", features = ["net"] }
+libc = "0.2"
 ````

@@ -4,9 +4,26 @@ use clap::{Args, Subcommand};
 use colored::Colorize;
 use comfy_table::{Table, modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL};
 use dialoguer::{Input, Select, Confirm};
-use shellwego_core::entities::app::{CreateAppRequest, ResourceSpec, UpdateAppRequest};
+use shellwego_core::entities::app::{CreateAppRequest, ResourceRequest, ResourceSpec, UpdateAppRequest};
 
 use crate::{CliConfig, OutputFormat, client::ApiClient, commands::format_output};
+
+fn format_bytes(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+    const TB: u64 = GB * 1024;
+
+    if bytes >= TB {
+        format!("{:.2} TB", bytes as f64 / TB as f64)
+    } else if bytes >= GB {
+        format!("{:.2} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.2} MB", bytes as f64 / MB as f64)
+    } else {
+        format!("{} B", bytes)
+    }
+}
 
 #[derive(Args)]
 pub struct AppArgs {
@@ -129,11 +146,7 @@ async fn create(client: ApiClient, name: Option<String>, image: Option<String>) 
         name: name.clone(),
         image,
         command: None,
-        resources: ResourceSpec {
-            memory: "256m".to_string(),
-            cpu: "0.5".to_string(),
-            disk: Some("5gb".to_string()),
-        },
+        resources: ResourceSpec::from(ResourceRequest::default()),
         env: vec![],
         domains: vec![],
         volumes: vec![],
@@ -161,7 +174,8 @@ async fn get(client: ApiClient, id: uuid::Uuid, format: OutputFormat) -> anyhow:
             println!("{} {:?}", "Status:".bold(), app.status);
             println!("{} {}", "Image:".bold(), app.image);
             println!("{} {}/{}", "Replicas:".bold(), app.replicas.current, app.replicas.desired);
-            println!("{} {}/{}", "Resources:".bold(), app.resources.memory, app.resources.cpu);
+            println!("{} {} ({} milli-CPU)", "Resources:".bold(), 
+                format_bytes(app.resources.memory_bytes), app.resources.cpu_milli);
             
             if !app.domains.is_empty() {
                 println!("\n{}", "Domains:".bold());

@@ -33,9 +33,6 @@ chrono = { version = "0.4", features = ["serde"] }
 # Database
 sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "sqlite", "uuid", "chrono"] }
 
-# Message queue
-async-nats = "0.33"
-
 # CLI
 clap = { version = "4.4", features = ["derive", "env"] }
 
@@ -63,3 +60,9 @@ opentelemetry = "0.21"
 
 # Security
 rustls = "0.22"
+rustls-pemfile = "2.1"
+webpki = "0.22"
+rcgen = "0.11"
+
+# Concurrency
+dashmap = "6.1"

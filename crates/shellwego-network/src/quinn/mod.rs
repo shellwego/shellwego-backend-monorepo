@@ -26,3 +26,5 @@
 pub mod common;
 pub mod client;
 pub mod server;
+
+pub use server::AgentConnection;

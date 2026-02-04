@@ -19,7 +19,7 @@ pub use cni::CniNetwork;
 pub use bridge::Bridge;
 pub use tap::TapDevice;
 pub use ipam::Ipam;
-pub use quinn::{QuinnClient, QuinnServer, Message, QuicConfig};
+pub use quinn::{QuinnClient, QuinnServer, Message, QuicConfig, AgentConnection};
 
 /// Network configuration for a microVM
 #[derive(Debug, Clone)]

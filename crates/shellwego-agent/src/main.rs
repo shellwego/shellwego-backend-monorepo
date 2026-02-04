@@ -135,9 +135,9 @@ impl AgentConfig {
         // TODO: Validate paths exist
         
         Ok(Self {
-            node_id: None, // Will be assigned on registration
+            node_id: None,
             control_plane_url: std::env::var("SHELLWEGO_CP_URL")
-                .unwrap_or_else(|_| "http://localhost:8080".to_string()),
+                .unwrap_or_else(|_| "127.0.0.1:4433".to_string()),
             join_token: std::env::var("SHELLWEGO_JOIN_TOKEN").ok(),
             region: std::env::var("SHELLWEGO_REGION").unwrap_or_else(|_| "unknown".to_string()),
             zone: std::env::var("SHELLWEGO_ZONE").unwrap_or_else(|_| "unknown".to_string()),

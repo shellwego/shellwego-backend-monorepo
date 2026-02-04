@@ -1,220 +1,136 @@
-//! QUIC server for Control Plane to Agent communication
-//!
-//! This server accepts and manages connections from agents,
-//! providing a NATS-free alternative for CP<->Agent communication.
-
 use crate::quinn::common::*;
-use anyhow::Result;
+use anyhow::{Context, Result};
+use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use uuid::Uuid;
 
-/// Quinn server for control plane
 pub struct QuinnServer {
-    //TODO: Initialize Quinn endpoint
-    // endpoint: Arc<quinn::Endpoint>,
-    //TODO: Server configuration
-    // config: Arc<quinn::ServerConfig>,
-    //TODO: Runtime for handling connections
-    // runtime: tokio::runtime::Handle,
-    config: QuicConfig,
+    endpoint: Arc<quinn::Endpoint>,
+    addr: SocketAddr,
 }
 
 impl QuinnServer {
-    /// Create a new server with the given configuration
-    //TODO: Implement server constructor
-    pub fn new(config: QuicConfig) -> Self {
-        Self {
-            // endpoint: unimplemented!(),
-            // config: unimplemented!(),
-            // runtime: unimplemented!(),
-            config,
-        }
+    pub async fn new(config: QuicConfig) -> Result<Self> {
+        let addr = config.addr.parse::<SocketAddr>().context("Invalid address")?;
+
+        let (cert, key) = if let (Some(cert_path), Some(key_path)) = (config.cert_path, config.key_path) {
+            let cert = std::fs::read(cert_path).context("Failed to read cert")?;
+            let key = std::fs::read(key_path).context("Failed to read key")?
+        } else {
+            generate_self_signed_cert()?
+        };
+
+        let tls_config = rustls::ServerConfig::builder()
+            .with_safe_defaults()
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![rustls::Certificate(cert)],
+                rustls::PrivateKey(key),
+            )
+            .context("Failed to create TLS config")?;
+
+        let quinn_config = quinn::ServerConfig::with_crypto(Arc::new(tls_config))
+            .max_concurrent_streams(config.max_concurrent_streams.into())
+            .keep_alive_interval(Some(std::time::Duration::from_secs(config.keep_alive_interval)));
+
+        let mut endpoint_builder = quinn::Endpoint::builder();
+        endpoint_builder.listen(quinn_config);
+
+        let (endpoint, _) = endpoint_builder.bind(&addr).context("Failed to bind")?;
+
+        Ok(Self {
+            endpoint: Arc::new(endpoint),
+            addr: endpoint.local_addr().unwrap_or(addr),
+        })
     }
 
-    /// Bind to the specified address
-    //TODO: Implement binding to socket address
-    pub async fn bind(&self, addr: &str) -> Result<Self> {
-        //TODO: Parse address
-        //TODO: Create Quinn endpoint
-        //TODO: Configure TLS
-        //TODO: Set ALPN protocol
-        unimplemented!("QUIC server bind not yet implemented")
-    }
-
-    /// Accept a new agent connection
-    //TODO: Implement connection acceptance
     pub async fn accept(&self) -> Result<AgentConnection> {
-        //TODO: Wait for incoming connection
-        //TODO: Perform TLS handshake
-        //TODO: Validate client certificate (if using mTLS)
-        //TODO: Create AgentConnection wrapper
-        unimplemented!("Connection acceptance not yet implemented")
+        let incoming = self.endpoint.accept().await.context("Failed to accept")?;
+        let conn = incoming.await.context("Failed to handshake")?;
+
+        let connection = AgentConnection {
+            connection: conn,
+            node_id: None,
+            hostname: None,
+        };
+
+        Ok(connection)
     }
 
-    /// Accept an agent connection with timeout
-    //TODO: Implement timeout for accept
-    pub async fn accept_with_timeout(&self, timeout: std::time::Duration) -> Result<Option<AgentConnection>> {
-        //TODO: Use tokio::time::timeout
-        //TODO: Handle timeout gracefully
-        unimplemented!("Timeout accept not yet implemented")
+    pub fn local_addr(&self) -> SocketAddr {
+        self.addr
     }
 
-    /// Run the server loop
-    //TODO: Implement main accept loop
     pub async fn run(&self) -> Result<()> {
-        //TODO: Accept connections in loop
-        //TODO: Spawn connection handler
-        //TODO: Handle errors and continue
-        unimplemented!("Server run loop not yet implemented")
-    }
-
-    /// Get the bound address
-    //TODO: Return bound socket address
-    pub fn local_addr(&self) -> Result<std::net::SocketAddr> {
-        //TODO: Extract from endpoint
-        unimplemented!("Local address not yet implemented")
-    }
-
-    /// Broadcast message to all connected agents
-    //TODO: Implement broadcast to all agents
-    pub async fn broadcast(&self, message: &Message) -> Result<()> {
-        //TODO: Iterate over all connections
-        //TODO: Send message to each
-        //TODO: Handle disconnected agents
-        unimplemented!("Broadcast not yet implemented")
-    }
-
-    /// Send message to specific agent
-    //TODO: Implement point-to-point messaging
-    pub async fn send_to(&self, node_id: &str, message: &Message) -> Result<()> {
-        //TODO: Look up connection by node ID
-        //TODO: Send message to connection
-        //TODO: Handle unknown node ID
-        unimplemented!("Send to node not yet implemented")
-    }
-
-    /// Get list of connected agents
-    //TODO: Return connected agent information
-    pub fn connected_agents(&self) -> Vec<AgentInfo> {
-        //TODO: Iterate connections
-        //TODO: Collect agent info
-        unimplemented!("Connected agents list not yet implemented")
-    }
-
-    /// Shutdown the server gracefully
-    //TODO: Implement graceful shutdown
-    pub async fn shutdown(&self) -> Result<()> {
-        //TODO: Stop accepting new connections
-        //TODO: Close existing connections gracefully
-        //TODO: Wait for handlers to complete
-        unimplemented!("Server shutdown not yet implemented")
+        loop {
+            match self.accept().await {
+                Ok(conn) => {
+                    tracing::info!("Agent connected from {}", conn.remote_addr());
+                }
+                Err(e) => {
+                    tracing::error!("Accept error: {}", e);
+                }
+            }
+        }
     }
 }
 
-/// Represents an active agent connection
+#[derive(Clone)]
 pub struct AgentConnection {
-    //TODO: QUIC connection handle
-    //TODO: Node ID
-    //TODO: Connection state
-    //TODO: Channels for messaging
+    pub connection: quinn::Connection,
+    pub node_id: Option<Uuid>,
+    pub hostname: Option<String>,
 }
 
 impl AgentConnection {
-    /// Get the node ID for this connection
-    //TODO: Return node ID
-    pub fn node_id(&self) -> &str {
-        unimplemented!("Node ID not yet implemented")
+    pub fn node_id(&self) -> Option<Uuid> {
+        self.node_id
     }
 
-    /// Get the remote address
-    //TODO: Return socket address
-    pub fn remote_addr(&self) -> std::net::SocketAddr {
-        unimplemented!("Remote address not yet implemented")
+    pub fn set_node_id(&mut self, id: Uuid) {
+        self.node_id = Some(id);
     }
 
-    /// Receive a message from the agent
-    //TODO: Implement message receive
+    pub fn set_hostname(&mut self, hostname: String) {
+        self.hostname = Some(hostname);
+    }
+
+    pub fn hostname(&self) -> Option<&str> {
+        self.hostname.as_deref()
+    }
+
+    pub fn remote_addr(&self) -> SocketAddr {
+        self.connection.remote_address()
+    }
+
     pub async fn receive(&self) -> Result<Message> {
-        //TODO: Read from stream
-        //TODO: Deserialize
-        unimplemented!("Message receive not yet implemented")
+        let (mut send_stream, mut recv_stream) = self.connection.accept_bi().await.context("Failed to accept bi")?;
+        let mut buf = Vec::new();
+        recv_stream.read_to_end(&mut buf).await.context("Read failed")?;
+        postcard::from_bytes(&buf).context("Deserialize failed")
     }
 
-    /// Send a message to the agent
-    //TODO: Implement message send
     pub async fn send(&self, message: &Message) -> Result<()> {
-        //TODO: Serialize message
-        //TODO: Write to stream
-        unimplemented!("Message send not yet implemented")
+        let data = postcard::to_allocvec(message).context("Serialize failed")?;
+        let (mut send_stream, _) = self.connection.open_bi().await.context("Open bi failed")?;
+        send_stream.write_all(&data).await.context("Write failed")?;
+        send_stream.finish().await.context("Finish failed")?;
+        Ok(())
     }
 
-    /// Open a bidirectional stream for this connection
-    //TODO: Implement stream opening
-    pub async fn open_stream(&self) -> Result<QuinnStream> {
-        //TODO: Create bidirectional stream
-        //TODO: Return wrapped stream
-        unimplemented!("Stream opening not yet implemented")
-    }
-
-    /// Check if connection is still alive
-    //TODO: Implement connection health check
     pub fn is_connected(&self) -> bool {
-        unimplemented!("Connection check not yet implemented")
+        self.connection.state() == quinn::ConnectionState::Established
     }
 
-    /// Close the connection
-    //TODO: Implement graceful close
-    pub async fn close(&self, reason: &str) -> Result<()> {
-        //TODO: Send close message
-        //TODO: Close streams
-        //TODO: Drop connection
-        unimplemented!("Connection close not yet implemented")
+    pub async fn close(&self, reason: &str) {
+        self.connection.close(0u8.into(), reason.as_bytes());
     }
 }
 
-/// QUIC stream wrapper
-pub struct QuinnStream {
-    //TODO: Stream handle
-    //TODO: Direction indicator
+fn generate_self_signed_cert() -> Result<(Vec<u8>, Vec<u8>)> {
+    let cert = rcgen::generate_simple_self_signed(vec!["shellwego".to_string()]).map_err(|e| anyhow::anyhow!("Cert gen failed: {}", e))?;
+    let cert_der = cert.serialize_der().map_err(|e| anyhow::anyhow!("Cert serialize failed: {}", e))?;
+    let key_der = cert.serialize_private_key_der();
+
+    Ok((cert_der, key_der))
 }
-
-/// Information about a connected agent
-#[derive(Debug, Clone)]
-pub struct AgentInfo {
-    pub node_id: String,
-    pub connected_at: chrono::DateTime<chrono::Utc>,
-    pub remote_addr: std::net::SocketAddr,
-    pub last_heartbeat: Option<chrono::DateTime<chrono::Utc>>,
-    pub status: AgentStatus,
-    pub capabilities: Vec<String>,
-}
-
-/// Server builder for configuration
-pub struct QuinnServerBuilder {
-    config: QuicConfig,
-}
-
-impl QuinnServerBuilder {
-    //TODO: Implement builder methods
-    //TODO: Add TLS configuration
-    //TODO: Add certificate validation options
-}
-
-/// Handler trait for processing agent connections
-#[async_trait::async_trait]
-pub trait AgentHandler: Send + Sync {
-    /// Called when a new agent connects
-    //TODO: Implement on_connect callback
-    async fn on_connect(&self, connection: AgentConnection) -> Result<()>;
-
-    /// Called when an agent disconnects
-    //TODO: Implement on_disconnect callback
-    async fn on_disconnect(&self, node_id: &str, reason: &str);
-
-    /// Called when a message is received from an agent
-    //TODO: Implement on_message callback
-    async fn on_message(&self, connection: &AgentConnection, message: Message) -> Result<()>;
-}
-
-/// Default agent handler implementation
-//TODO: Implement default handler that delegates to individual callbacks

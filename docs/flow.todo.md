@@ -2,6 +2,10 @@
 
 Give me the most comprehensive rust (e2e, integration, unit) test cases plan for crates/shellwego-agent . Everything should be real no mock. Make sure easily to run test in single Ubuntu vps... Your plan should be considered as production ready to proof that readme.md purpose achieved
 
+---
+
+Give me scaffolding skeletons diff patch test files In crates/shellwego-agent/tests/[unit/e2e/integration]/[category] based on the plan in tests/ md docs
+
 ===
 
 Give me diff patches for 7. Missing "Sovereign" Safety . how many parts? Give me the 1/x first

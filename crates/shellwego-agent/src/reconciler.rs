@@ -8,6 +8,7 @@ use tokio::time::{interval, Duration, sleep};
 use tracing::{info, debug, warn, error};
 use secrecy::ExposeSecret;
 
+use shellwego_network::{CniNetwork, NetworkConfig};
 use crate::vmm::{VmmManager, MicrovmConfig, MicrovmState};
 use crate::daemon::{StateClient, DesiredState, DesiredApp};
 
@@ -15,13 +16,14 @@ use crate::daemon::{StateClient, DesiredState, DesiredApp};
 #[derive(Clone)]
 pub struct Reconciler {
     vmm: VmmManager,
+    network: std::sync::Arc<CniNetwork>,
     state_client: StateClient,
     // TODO: Add metrics (reconciliation latency, drift count)
 }
 
 impl Reconciler {
-    pub fn new(vmm: VmmManager, state_client: StateClient) -> Self {
-        Self { vmm, state_client }
+    pub fn new(vmm: VmmManager, network: std::sync::Arc<CniNetwork>, state_client: StateClient) -> Self {
+        Self { vmm, network, state_client }
     }
 
     /// Main reconciliation loop
@@ -110,8 +112,20 @@ impl Reconciler {
         let secret_drive = self.setup_secrets_tmpfs(app).await?;
         drives.push(secret_drive);
 
-        // Network setup
-        let network = self.setup_networking(app.app_id).await?;
+        // Delegating network setup to shellwego-network
+        let net_setup = self.network.setup(&NetworkConfig {
+            app_id: app.app_id,
+            vm_id: uuid::Uuid::new_v4(),
+            bridge_name: self.network.bridge_name().to_string(),
+            tap_name: format!("tap-{}", &app.app_id.to_string()[..8]),
+            guest_mac: shellwego_network::generate_mac(&app.app_id),
+            guest_ip: std::net::Ipv4Addr::UNSPECIFIED, // IPAM handles this
+            host_ip: std::net::Ipv4Addr::UNSPECIFIED,
+            subnet: "10.0.0.0/16".parse().unwrap(),
+            gateway: "10.0.0.1".parse().unwrap(),
+            mtu: 1500,
+            bandwidth_limit_mbps: Some(100),
+        }).await?;
         
         let config = MicrovmConfig {
             app_id: app.app_id,
@@ -122,10 +136,16 @@ impl Reconciler {
             kernel_boot_args: format!(
                 "console=ttyS0 reboot=k panic=1 pci=off \
                  ip={}::{}:255.255.255.0::eth0:off",
-                network.guest_ip, network.host_ip
+                net_setup.guest_ip, net_setup.host_ip
             ),
             drives,
-            network_interfaces: vec![network],
+            network_interfaces: vec![crate::vmm::NetworkInterface {
+                iface_id: "eth0".into(),
+                host_dev_name: net_setup.tap_device,
+                guest_mac: shellwego_network::generate_mac(&app.app_id),
+                guest_ip: net_setup.guest_ip.to_string(),
+                host_ip: net_setup.host_ip.to_string(),
+            }],
             vsock_path: format!("/var/run/shellwego/{}.sock", app.app_id),
         };
         
@@ -159,21 +179,6 @@ impl Reconciler {
             path_on_host: secrets_path,
             is_root_device: false,
             is_read_only: true,
-        })
-    }
-
-    async fn setup_networking(&self, app_id: uuid::Uuid) -> anyhow::Result<vmm::NetworkInterface> {
-        // TODO: Allocate IP from node CIDR
-        // TODO: Create TAP device
-        // TODO: Setup bridge and iptables/eBPF rules
-        // TODO: Configure port forwarding if public
-        
-        Ok(vmm::NetworkInterface {
-            iface_id: "eth0".to_string(),
-            host_dev_name: format!("tap-{}", app_id.to_string().split('-').next().unwrap()),
-            guest_mac: generate_mac(app_id),
-            guest_ip: "10.0.4.2".to_string(), // TODO: Allocate properly
-            host_ip: "10.0.4.1".to_string(),
         })
     }
 
@@ -217,8 +222,3 @@ impl Reconciler {
     }
 }
 
-fn generate_mac(app_id: uuid::Uuid) -> String {
-    // Generate deterministic MAC from app_id
-    let bytes = app_id.as_bytes();
-    format!("02:00:00:{:02x}:{:02x}:{:02x}", bytes[0], bytes[1], bytes[2])
-}

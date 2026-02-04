@@ -20,6 +20,7 @@ mod migration;   // Live migration support
 
 use daemon::Daemon;
 use vmm::VmmManager;
+use shellwego_network::CniNetwork;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -41,11 +42,14 @@ async fn main() -> anyhow::Result<()> {
     // Initialize VMM manager (Firecracker)
     let vmm = VmmManager::new(&config).await?;
     
+    // Initialize Networking (CNI)
+    let network = Arc::new(CniNetwork::new("sw0", "10.0.0.0/16").await?);
+
     // Initialize daemon (control plane communication)
     let daemon = Daemon::new(config.clone(), capabilities, vmm.clone()).await?;
     
     // Start reconciler (desired state enforcement)
-    let reconciler = reconciler::Reconciler::new(vmm.clone(), daemon.state_client());
+    let reconciler = reconciler::Reconciler::new(vmm.clone(), network, daemon.state_client());
     
     // Additional initialization
     additional_initialization().await?;

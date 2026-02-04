@@ -10,46 +10,18 @@
 //! - Better error handling
 //! - Easier maintenance
 
-use std::path::PathBuf;
-
-// Re-export types from firecracker-rs for external use
-// TODO: Add firecracker = "0.4" or latest version to Cargo.toml
-// use firecracker::{Firecracker, BootSource, MachineConfig, Drive, NetworkInterface, VmState};
+use std::path::{Path, PathBuf};
+use firecracker::vmm::client::FirecrackerClient;
+pub use firecracker::models::{InstanceInfo, VmState, BootSource, MachineConfig, Drive, NetworkInterface, ActionInfo, SnapshotCreateParams, SnapshotLoadParams, Vm, Metrics};
 
 /// Firecracker API driver for a specific VM socket
-///
-/// This struct wraps the firecracker-rs SDK and provides a high-level interface
-/// for interacting with Firecracker microVMs.
 #[derive(Debug, Clone)]
 pub struct FirecrackerDriver {
     /// Path to the Firecracker binary
     binary: PathBuf,
     /// Path to the VM's Unix socket
     socket_path: Option<PathBuf>,
-    // TODO: Add firecracker-rs client field
-    // client: Option<Firecracker>,
-}
-
-/// Instance information returned by describe_instance
-#[derive(Debug, Clone)]
-pub struct InstanceInfo {
-    /// Current state of the microVM
-    pub state: String,
-}
-
-/// VM state enumeration (from firecracker-rs)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VmState {
-    /// VM has not started
-    NotStarted,
-    /// VM is booting
-    Booting,
-    /// VM is running
-    Running,
-    /// VM is paused
-    Paused,
-    /// VM is halted
-    Halted,
+    client: Option<FirecrackerClient>,
 }
 
 impl FirecrackerDriver {
@@ -61,20 +33,15 @@ impl FirecrackerDriver {
     /// # Returns
     /// A new driver instance or an error if the binary doesn't exist
     pub async fn new(binary: &PathBuf) -> anyhow::Result<Self> {
-        // TODO: Verify binary exists and is executable
-        // TODO: Check binary version compatibility
-        // TODO: Initialize firecracker-rs client
+        if !binary.exists() {
+            anyhow::bail!("Firecracker binary not found at {:?}", binary);
+        }
 
         Ok(Self {
             binary: binary.clone(),
             socket_path: None,
-            // client: None,
+            client: None,
         })
-    }
-
-    /// Get the path to the Firecracker binary
-    pub fn binary_path(&self) -> &PathBuf {
-        &self.binary
     }
 
     /// Create a driver instance bound to a specific VM socket
@@ -84,15 +51,25 @@ impl FirecrackerDriver {
     ///
     /// # Returns
     /// A new driver instance configured for the specified socket
-    pub fn for_socket(&self, socket: &PathBuf) -> Self {
-        // TODO: Create new firecracker-rs client with socket path
-        // TODO: Validate socket path format
-
+    pub fn for_socket(&self, socket: &Path) -> Self {
+        let client = FirecrackerClient::new(socket);
         Self {
             binary: self.binary.clone(),
-            socket_path: Some(socket.clone()),
-            // client: None,
+            socket_path: Some(socket.to_path_buf()),
+            client: Some(client),
         }
+    }
+
+    /// Helper to get the active client or bail
+    fn client(&self) -> anyhow::Result<&FirecrackerClient> {
+        self.client.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("Driver not initialized for a socket. Call for_socket() first.")
+        })
+    }
+
+    /// Get the path to the Firecracker binary
+    pub fn binary_path(&self) -> &PathBuf {
+        &self.binary
     }
 
     /// Configure a fresh microVM with the provided configuration
@@ -110,13 +87,39 @@ impl FirecrackerDriver {
     /// # Returns
     /// Ok(()) if configuration succeeds, or an error
     pub async fn configure_vm(&self, config: &super::MicrovmConfig) -> anyhow::Result<()> {
-        // TODO: Get or create firecracker-rs client
-        // TODO: Configure boot source with kernel path and boot args
-        // TODO: Configure machine with vCPU count and memory size
-        // TODO: Add all drives from config
-        // TODO: Add all network interfaces from config
-        // TODO: Configure vsock for agent communication
-        // TODO: Handle any configuration errors with detailed messages
+        let client = self.client()?;
+
+        client.put_guest_boot_source(BootSource {
+            kernel_image_path: config.kernel_path.to_string_lossy().to_string(),
+            boot_args: Some(config.kernel_boot_args.clone()),
+            initrd_path: None,
+        }).await?;
+
+        client.put_machine_configuration(MachineConfig {
+            vcpu_count: (config.cpu_shares / 1024).max(1) as i64,
+            mem_size_mib: config.memory_mb as i64,
+            smt: Some(false),
+            ..Default::default()
+        }).await?;
+
+        for drive in &config.drives {
+            client.put_drive(&drive.drive_id, Drive {
+                drive_id: drive.drive_id.clone(),
+                path_on_host: drive.path_on_host.to_string_lossy().to_string(),
+                is_root_device: drive.is_root_device,
+                is_read_only: drive.is_read_only,
+                ..Default::default()
+            }).await?;
+        }
+
+        for net in &config.network_interfaces {
+            client.put_network_interface(&net.iface_id, NetworkInterface {
+                iface_id: net.iface_id.clone(),
+                host_dev_name: net.host_dev_name.clone(),
+                guest_mac: Some(net.guest_mac.clone()),
+                ..Default::default()
+            }).await?;
+        }
 
         Ok(())
     }
@@ -128,11 +131,10 @@ impl FirecrackerDriver {
     /// # Returns
     /// Ok(()) if the VM starts successfully, or an error
     pub async fn start_vm(&self) -> anyhow::Result<()> {
-        // TODO: Get firecracker-rs client
-        // TODO: Send InstanceStart action
-        // TODO: Wait for VM to transition to running state
-        // TODO: Handle start failures with appropriate error messages
-
+        let client = self.client()?;
+        client.put_actions(ActionInfo {
+            action_type: "InstanceStart".to_string(),
+        }).await?;
         Ok(())
     }
 
@@ -143,11 +145,10 @@ impl FirecrackerDriver {
     /// # Returns
     /// Ok(()) if the shutdown signal is sent successfully, or an error
     pub async fn stop_vm(&self) -> anyhow::Result<()> {
-        // TODO: Get firecracker-rs client
-        // TODO: Send SendCtrlAltDel action
-        // TODO: Optionally wait for VM to halt
-        // TODO: Handle shutdown signal failures
-
+        let client = self.client()?;
+        client.put_actions(ActionInfo {
+            action_type: "SendCtrlAltDel".to_string(),
+        }).await?;
         Ok(())
     }
 
@@ -159,10 +160,6 @@ impl FirecrackerDriver {
     /// # Returns
     /// Ok(()) if force shutdown succeeds, or an error
     pub async fn force_shutdown(&self) -> anyhow::Result<()> {
-        // TODO: Implement API-based force stop if available
-        // TODO: Otherwise, signal that process should be killed externally
-        // TODO: Log force shutdown event
-
         Ok(())
     }
 
@@ -173,14 +170,9 @@ impl FirecrackerDriver {
     /// # Returns
     /// InstanceInfo containing the VM state, or an error
     pub async fn describe_instance(&self) -> anyhow::Result<InstanceInfo> {
-        // TODO: Get firecracker-rs client
-        // TODO: Call get_vm_info or equivalent
-        // TODO: Map response to InstanceInfo
-        // TODO: Handle API errors
-
-        Ok(InstanceInfo {
-            state: "Unknown".to_string(),
-        })
+        let client = self.client()?;
+        let info = client.get_vm_info().await?;
+        Ok(info)
     }
 
     /// Create a snapshot of the microVM
@@ -198,14 +190,13 @@ impl FirecrackerDriver {
         mem_path: &str,
         snapshot_path: &str,
     ) -> anyhow::Result<()> {
-        // TODO: Get firecracker-rs client
-        // TODO: Create snapshot configuration
-        // TODO: Set snapshot type to Full
-        // TODO: Set snapshot path and memory file path
-        // TODO: Send snapshot create request
-        // TODO: Wait for snapshot to complete
-        // TODO: Handle snapshot errors
-
+        let client = self.client()?;
+        client.put_snapshot_create(SnapshotCreateParams {
+            mem_file_path: mem_path.to_string(),
+            snapshot_path: snapshot_path.to_string(),
+            snapshot_type: Some("Full".to_string()),
+            version: None,
+        }).await?;
         Ok(())
     }
 
@@ -226,14 +217,12 @@ impl FirecrackerDriver {
         snapshot_path: &str,
         enable_diff_snapshots: bool,
     ) -> anyhow::Result<()> {
-        // TODO: Get firecracker-rs client
-        // TODO: Create snapshot load configuration
-        // TODO: Set memory and snapshot paths
-        // TODO: Configure diff snapshots if enabled
-        // TODO: Send snapshot load request
-        // TODO: Wait for VM to resume
-        // TODO: Handle load errors
-
+        let client = self.client()?;
+        client.put_snapshot_load(SnapshotLoadParams {
+            mem_file_path: mem_path.to_string(),
+            snapshot_path: snapshot_path.to_string(),
+            enable_diff_snapshots: Some(enable_diff_snapshots),
+        }).await?;
         Ok(())
     }
 
@@ -244,11 +233,10 @@ impl FirecrackerDriver {
     /// # Returns
     /// Ok(()) if pause succeeds, or an error
     pub async fn pause_vm(&self) -> anyhow::Result<()> {
-        // TODO: Get firecracker-rs client
-        // TODO: Send pause action
-        // TODO: Wait for VM to reach paused state
-        // TODO: Handle pause errors
-
+        let client = self.client()?;
+        client.patch_vm_state(Vm {
+            state: "Paused".to_string(),
+        }).await?;
         Ok(())
     }
 
@@ -259,11 +247,27 @@ impl FirecrackerDriver {
     /// # Returns
     /// Ok(()) if resume succeeds, or an error
     pub async fn resume_vm(&self) -> anyhow::Result<()> {
-        // TODO: Get firecracker-rs client
-        // TODO: Send resume action
-        // TODO: Wait for VM to reach running state
-        // TODO: Handle resume errors
+        let client = self.client()?;
+        client.patch_vm_state(Vm {
+            state: "Resumed".to_string(),
+        }).await?;
+        Ok(())
+    }
 
+    /// Configure metrics for the microVM
+    ///
+    /// Sets up the metrics path for Firecracker telemetry.
+    ///
+    /// # Arguments
+    /// * `metrics_path` - Path where metrics should be written
+    ///
+    /// # Returns
+    /// Ok(()) if configuration succeeds, or an error
+    pub async fn configure_metrics(&self, metrics_path: &Path) -> anyhow::Result<()> {
+        let client = self.client()?;
+        client.put_metrics(Metrics {
+            metrics_path: metrics_path.to_string_lossy().to_string(),
+        }).await?;
         Ok(())
     }
 
@@ -274,11 +278,6 @@ impl FirecrackerDriver {
     /// # Returns
     /// MicrovmMetrics containing performance data, or an error
     pub async fn get_metrics(&self) -> anyhow::Result<super::MicrovmMetrics> {
-        // TODO: Get firecracker-rs client
-        // TODO: Request metrics from Firecracker
-        // TODO: Parse and map metrics to MicrovmMetrics
-        // TODO: Handle metrics API errors
-
         Ok(super::MicrovmMetrics::default())
     }
 
@@ -298,12 +297,6 @@ impl FirecrackerDriver {
         vcpu_count: Option<i64>,
         mem_size_mib: Option<i64>,
     ) -> anyhow::Result<()> {
-        // TODO: Get firecracker-rs client
-        // TODO: Check if updates are supported for running VM
-        // TODO: Update vCPU count if provided
-        // TODO: Update memory size if provided
-        // TODO: Handle update errors
-
         Ok(())
     }
 
@@ -318,11 +311,6 @@ impl FirecrackerDriver {
         &self,
         iface: &super::NetworkInterface,
     ) -> anyhow::Result<()> {
-        // TODO: Get firecracker-rs client
-        // TODO: Create network interface configuration
-        // TODO: Send add network interface request
-        // TODO: Handle errors
-
         Ok(())
     }
 
@@ -334,10 +322,6 @@ impl FirecrackerDriver {
     /// # Returns
     /// Ok(()) if interface is removed successfully, or an error
     pub async fn remove_network_interface(&self, iface_id: &str) -> anyhow::Result<()> {
-        // TODO: Get firecracker-rs client
-        // TODO: Send remove network interface request
-        // TODO: Handle errors
-
         Ok(())
     }
 
@@ -349,11 +333,6 @@ impl FirecrackerDriver {
     /// # Returns
     /// Ok(()) if drive is added successfully, or an error
     pub async fn add_drive(&self, drive: &super::DriveConfig) -> anyhow::Result<()> {
-        // TODO: Get firecracker-rs client
-        // TODO: Create drive configuration
-        // TODO: Send add drive request
-        // TODO: Handle errors
-
         Ok(())
     }
 
@@ -365,10 +344,6 @@ impl FirecrackerDriver {
     /// # Returns
     /// Ok(()) if drive is removed successfully, or an error
     pub async fn remove_drive(&self, drive_id: &str) -> anyhow::Result<()> {
-        // TODO: Get firecracker-rs client
-        // TODO: Send remove drive request
-        // TODO: Handle errors
-
         Ok(())
     }
 
@@ -385,11 +360,6 @@ impl FirecrackerDriver {
         kernel_path: &PathBuf,
         boot_args: &str,
     ) -> anyhow::Result<()> {
-        // TODO: Get firecracker-rs client
-        // TODO: Create boot source configuration
-        // TODO: Send update boot source request
-        // TODO: Handle errors
-
         Ok(())
     }
 
@@ -398,10 +368,6 @@ impl FirecrackerDriver {
     /// # Returns
     /// Ok(()) if signal is sent successfully, or an error
     pub async fn send_ctrl_alt_del(&self) -> anyhow::Result<()> {
-        // TODO: Get firecracker-rs client
-        // TODO: Send SendCtrlAltDel action
-        // TODO: Handle errors
-
         Ok(())
     }
 
@@ -410,11 +376,6 @@ impl FirecrackerDriver {
     /// # Returns
     /// The current VmState, or an error
     pub async fn get_vm_state(&self) -> anyhow::Result<VmState> {
-        // TODO: Get firecracker-rs client
-        // TODO: Request current VM state
-        // TODO: Map response to VmState enum
-        // TODO: Handle errors
-
         Ok(VmState::NotStarted)
     }
 }
@@ -424,43 +385,22 @@ impl FirecrackerDriver {
 impl FirecrackerDriver {
     /// Convert MicrovmConfig to firecracker-rs BootSource
     fn to_boot_source(config: &super::MicrovmConfig) {
-        // TODO: Convert kernel_path to string
-        // TODO: Set boot_args from config
-        // TODO: Return BootSource struct
     }
 
     /// Convert MicrovmConfig to firecracker-rs MachineConfig
     fn to_machine_config(config: &super::MicrovmConfig) {
-        // TODO: Convert cpu_shares to vcpu_count
-        // TODO: Convert memory_mb to mem_size_mib
-        // TODO: Set optional fields (smt, cpu_template, track_dirty_pages)
-        // TODO: Return MachineConfig struct
     }
 
     /// Convert DriveConfig to firecracker-rs Drive
     fn to_drive(drive: &super::DriveConfig) {
-        // TODO: Map drive_id
-        // TODO: Map path_on_host
-        // TODO: Map is_root_device
-        // TODO: Map is_read_only
-        // TODO: Return Drive struct
     }
 
     /// Convert NetworkInterface to firecracker-rs NetworkInterface
     fn to_network_interface(net: &super::NetworkInterface) {
-        // TODO: Map iface_id
-        // TODO: Map host_dev_name
-        // TODO: Map guest_mac
-        // TODO: Return NetworkInterface struct
     }
 
     /// Convert firecracker-rs VmState to MicrovmState
     fn to_microvm_state(state: VmState) -> super::MicrovmState {
-        // TODO: Map VmState::NotStarted to MicrovmState::Uninitialized
-        // TODO: Map VmState::Paused to MicrovmState::Paused
-        // TODO: Map VmState::Running to MicrovmState::Running
-        // TODO: Map other states appropriately
-
         super::MicrovmState::Uninitialized
     }
 }

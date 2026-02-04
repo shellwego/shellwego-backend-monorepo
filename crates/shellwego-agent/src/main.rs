@@ -9,6 +9,7 @@
 use std::sync::Arc;
 use tokio::signal;
 use tracing::{info, warn, error};
+use secrecy::{SecretString, ExposeSecret};
 
 mod daemon;
 mod reconciler;
@@ -112,7 +113,7 @@ async fn additional_initialization() -> anyhow::Result<()> {
 pub struct AgentConfig {
     pub node_id: Option<uuid::Uuid>, // None = new registration
     pub control_plane_url: String,
-    pub join_token: Option<String>,
+    pub join_token: Option<SecretString>,
     pub region: String,
     pub zone: String,
     pub labels: std::collections::HashMap<String, String>,
@@ -138,7 +139,7 @@ impl AgentConfig {
             node_id: None,
             control_plane_url: std::env::var("SHELLWEGO_CP_URL")
                 .unwrap_or_else(|_| "127.0.0.1:4433".to_string()),
-            join_token: std::env::var("SHELLWEGO_JOIN_TOKEN").ok(),
+            join_token: std::env::var("SHELLWEGO_JOIN_TOKEN").ok().map(SecretString::from),
             region: std::env::var("SHELLWEGO_REGION").unwrap_or_else(|_| "unknown".to_string()),
             zone: std::env::var("SHELLWEGO_ZONE").unwrap_or_else(|_| "unknown".to_string()),
             labels: std::collections::HashMap::new(),

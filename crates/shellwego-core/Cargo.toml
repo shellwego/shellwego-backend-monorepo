@@ -11,6 +11,8 @@ description = "Shared kernel: entities, errors, and types for ShellWeGo"
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+secrecy = { version = "0.10", features = ["serde"] }
+zeroize = { version = "1.7", features = ["derive"] }
 serde_with = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }

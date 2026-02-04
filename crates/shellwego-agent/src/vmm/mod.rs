@@ -9,6 +9,7 @@ use std::sync::Arc;
 use tokio::process::Command;
 use tokio::sync::RwLock;
 use tracing::{info, debug, error};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 mod driver;
 mod config;
@@ -29,8 +30,11 @@ struct VmmInner {
     // TODO: Add metrics collector
 }
 
+#[derive(Zeroize, ZeroizeOnDrop)]
 struct RunningVm {
+    #[zeroize(skip)]
     config: MicrovmConfig,
+    #[zeroize(skip)]
     process: tokio::process::Child,
     socket_path: PathBuf,
     state: MicrovmState,

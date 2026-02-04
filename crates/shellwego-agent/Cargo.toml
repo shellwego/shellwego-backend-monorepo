@@ -28,6 +28,7 @@ reqwest = { workspace = true }
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
+secrecy = { version = "0.10", features = ["serde"] }
 postcard = "1.0"
 
 # System info

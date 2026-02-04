@@ -2,6 +2,7 @@ use std::sync::Arc;
 use tokio::time::{interval, Duration};
 use tracing::{info, debug, warn, error};
 use shellwego_network::{QuinnClient, Message, QuicConfig};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::{AgentConfig, Capabilities};
 use crate::vmm::VmmManager;
@@ -118,13 +119,14 @@ pub struct DesiredState {
     pub volumes: Vec<DesiredVolume>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Zeroize, ZeroizeOnDrop)]
 pub struct DesiredApp {
     pub app_id: uuid::Uuid,
     pub image: String,
     pub command: Option<Vec<String>>,
     pub memory_mb: u64,
     pub cpu_shares: u64,
+    #[zeroize(skip)]
     pub env: std::collections::HashMap<String, String>,
     pub volumes: Vec<VolumeMount>,
 }

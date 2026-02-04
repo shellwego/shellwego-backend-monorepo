@@ -1,7 +1,8 @@
 //! Secret management entity definitions.
-//! 
+//!
 //! Encrypted key-value store for credentials and sensitive config.
 
+use secrecy::SecretString;
 use crate::prelude::*;
 
 pub type SecretId = Uuid;
@@ -51,7 +52,7 @@ pub struct Secret {
 #[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct CreateSecretRequest {
     pub name: String,
-    pub value: String,
+    pub value: SecretString,
     pub scope: SecretScope,
     #[serde(default)]
     pub app_id: Option<Uuid>,

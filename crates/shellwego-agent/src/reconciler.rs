@@ -6,6 +6,7 @@
 use std::sync::Arc;
 use tokio::time::{interval, Duration, sleep};
 use tracing::{info, debug, warn, error};
+use secrecy::ExposeSecret;
 
 use crate::vmm::{VmmManager, MicrovmConfig, MicrovmState};
 use crate::daemon::{StateClient, DesiredState, DesiredApp};
@@ -104,7 +105,11 @@ impl Reconciler {
                 is_read_only: false,
             });
         }
-        
+
+        // SOVEREIGN SECURITY: Inject secrets via memory-backed transient drive
+        let secret_drive = self.setup_secrets_tmpfs(app).await?;
+        drives.push(secret_drive);
+
         // Network setup
         let network = self.setup_networking(app.app_id).await?;
         
@@ -137,6 +142,24 @@ impl Reconciler {
         // TODO: Cache layer via ZFS snapshot
         
         Ok(std::path::PathBuf::from("/var/lib/shellwego/rootfs/base.ext4"))
+    }
+
+    async fn setup_secrets_tmpfs(&self, app: &DesiredApp) -> anyhow::Result<vmm::DriveConfig> {
+        let run_dir = format!("/run/shellwego/secrets/{}", app.app_id);
+
+        tokio::fs::create_dir_all(&run_dir).await?;
+
+        let secrets_path = std::path::Path::new(&run_dir).join("env.json");
+        let content = serde_json::to_vec(&app.env)?;
+
+        tokio::fs::write(&secrets_path, content).await?;
+
+        Ok(vmm::DriveConfig {
+            drive_id: "secrets".to_string(),
+            path_on_host: secrets_path,
+            is_root_device: false,
+            is_read_only: true,
+        })
     }
 
     async fn setup_networking(&self, app_id: uuid::Uuid) -> anyhow::Result<vmm::NetworkInterface> {

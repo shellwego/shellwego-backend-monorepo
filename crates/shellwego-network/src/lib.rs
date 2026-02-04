@@ -13,6 +13,7 @@ pub mod cni;
 pub mod bridge;
 pub mod tap;
 pub mod ipam;
+pub mod discovery;
 pub mod quinn;
 
 pub use cni::CniNetwork;

@@ -15,8 +15,8 @@ serde = { workspace = true, features = ["derive"] }
 postcard = { version = "1.0", features = ["use-std"] }
 
 # DNS for service discovery (hickory-dns - trust-dns successor)
-hickory-dns = { version = "0.24", optional = true }
-hickory-resolver = { version = "0.24", optional = true }
+hickory-dns = { version = "0.24", features = ["tokio-runtime", "system-config"] }
+hickory-resolver = { version = "0.24", features = ["tokio-runtime", "system-config"] }
 
 [dependencies.quinn]
 version = "0.11"

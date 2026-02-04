@@ -15,7 +15,7 @@ path = "src/main.rs"
 [dependencies]
 shellwego-core = { path = "../shellwego-core" }
 shellwego-storage = { path = "../shellwego-storage" }
-shellwego-network = { path = "../shellwego-network" }
+shellwego-network = { path = "../shellwego-network", features = ["quinn"] }
 
 # Async runtime
 tokio = { workspace = true, features = ["full", "process"] }

@@ -38,6 +38,10 @@ console = "0.15"
 # Table output
 comfy-table = "7.1"
 
+# TUI for top command
+ratatui = "0.29"
+crossterm = "0.28"
+
 # Async
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs"] }
 

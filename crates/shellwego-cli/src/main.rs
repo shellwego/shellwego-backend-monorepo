@@ -86,7 +86,11 @@ enum Commands {
     
     /// Show current status
     Status,
-    
+
+    /// Real-time resource monitoring dashboard
+    #[command(alias = "top")]
+    Top(commands::top::TopArgs),
+
     /// Update CLI to latest version
     Update,
 }
@@ -127,6 +131,7 @@ async fn main() {
         Commands::Logs(args) => commands::logs::handle(args, &config).await,
         Commands::Exec(args) => commands::exec::handle(args, &config).await,
         Commands::Status => commands::status::handle(&config, cli.output).await,
+        Commands::Top(args) => commands::top::handle(args, &config).await,
         Commands::Update => commands::update::handle().await,
     };
     

@@ -9,6 +9,7 @@ pub mod logs;
 pub mod nodes;
 pub mod secrets;
 pub mod status;
+pub mod top;
 pub mod update;
 pub mod volumes;
 

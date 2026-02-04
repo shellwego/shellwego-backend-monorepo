@@ -1,6 +1,6 @@
 
 ===
-
+Execute biggest win number 1 of lib.guide.md ... Make sure you are producing skeletons scaffolding without any logic code. Just //TODO commentd of methods
 ===
 
 understand the readme.md then make sure the codebase boilerplate is enough to achieve the purpose. rules: you are at scaffolding with //TODO phase only. should not write logic. only yhe skeletons

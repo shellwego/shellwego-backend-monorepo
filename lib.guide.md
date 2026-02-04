@@ -194,7 +194,7 @@ sled = "0.34"             # Embedded KV store
 
 ## Biggest Wins (Updated)
 
-1. **`sea-orm`** → Deletes entire `db/` module, gives migrations/relations free (control plane would benefit most)
+1. ~~**`sea-orm`** → Deletes entire `db/` module, gives migrations/relations free (control plane would benefit most)~~ ✅ **COMPLETED**
 2. **`firecracker-rs`** → Deletes `vmm/driver.rs`, official AWS SDK (critical for agent crate)
 3. **`aide`** → Deletes `api/docs.rs`, derive-free OpenAPI (control plane API cleanup)
 4. **`quinn`** → Replaces NATS for CP<->Agent, zero external deps (if you want to drop NATS dependency)

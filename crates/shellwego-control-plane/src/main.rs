@@ -8,7 +8,7 @@ use tracing::{info, warn};
 
 mod api;
 mod config;
-mod db;
+mod orm;
 mod events;
 mod services;
 mod state;

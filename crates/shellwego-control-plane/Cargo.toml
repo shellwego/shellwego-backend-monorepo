@@ -1,0 +1,61 @@
+[package]
+name = "shellwego-control-plane"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Control plane: REST API, scheduler, and cluster state management"
+
+[[bin]]
+name = "shellwego-control-plane"
+path = "src/main.rs"
+
+[dependencies]
+shellwego-core = { path = "../shellwego-core", features = ["openapi"] }
+
+# Async runtime
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+
+# Web framework
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { version = "0.5", features = ["cors", "trace", "compression", "request-id"] }
+hyper = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Database
+sqlx = { workspace = true }
+
+# Message queue
+async-nats = { workspace = true }
+
+# Documentation/OpenAPI
+utoipa = { workspace = true }
+utoipa-swagger-ui = { version = "4.0", features = ["axum"] }
+
+# Config & logging
+config = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Auth
+jsonwebtoken = "9.2"
+argon2 = "0.5"
+rand = "0.8"
+
+# Utilities
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+validator = { workspace = true }
+
+[dev-dependencies]
+tower = { workspace = true, features = ["util"] }
+http-body-util = "0.1"

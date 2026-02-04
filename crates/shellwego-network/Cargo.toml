@@ -1,0 +1,41 @@
+[package]
+name = "shellwego-network"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Network drivers: CNI plugins, bridge setup, eBPF filtering"
+
+[dependencies]
+# Core
+tokio = { workspace = true, features = ["process", "rt", "net"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Netlink for network interface management
+rtnetlink = "0.14"
+netlink-packet-route = "0.19"
+
+# eBPF (future)
+# aya = { version = "0.11", optional = true }
+
+# IP address management
+ipnetwork = "0.20"
+rand = "0.8"
+
+# Errors
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Tracing
+tracing = { workspace = true }
+
+# System interface
+nix = { version = "0.27", features = ["net"] }
+libc = "0.2"
+
+[features]
+default = []
+ebpf = [] # TODO: Add aya dependency when ready

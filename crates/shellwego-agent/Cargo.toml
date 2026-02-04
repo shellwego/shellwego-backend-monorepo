@@ -1,0 +1,55 @@
+[package]
+name = "shellwego-agent"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Worker node agent: manages Firecracker microVMs and reports to control plane"
+
+[[bin]]
+name = "shellwego-agent"
+path = "src/main.rs"
+
+[dependencies]
+shellwego-core = { path = "../shellwego-core" }
+shellwego-storage = { path = "../shellwego-storage" }
+shellwego-network = { path = "../shellwego-network" }
+
+# Async runtime
+tokio = { workspace = true, features = ["full", "process"] }
+tokio-util = { workspace = true }
+
+# HTTP client (talks to control plane)
+hyper = { workspace = true }
+reqwest = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Message queue
+async-nats = { workspace = true }
+
+# System info
+sysinfo = "0.30"
+nix = { version = "0.27", features = ["process", "signal", "user"] }
+
+# Firecracker / VMM
+# TODO: Add firecracker-rs or implement HTTP client to firecracker socket
+# For now we use raw HTTP over Unix socket
+
+# Utilities
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+config = { workspace = true }
+
+[features]
+default = []
+# TODO: Add "metal" feature for bare metal (KVM required)
+# TODO: Add "mock" feature for testing without KVM

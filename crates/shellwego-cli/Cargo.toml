@@ -1,0 +1,60 @@
+[package]
+name = "shellwego-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "ShellWeGo CLI - deploy apps from your terminal"
+
+[[bin]]
+name = "shellwego"
+path = "src/main.rs"
+
+[dependencies]
+shellwego-core = { path = "../shellwego-core" }
+
+# CLI framework
+clap = { workspace = true }
+
+# HTTP client
+reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Config dirs
+dirs = "5.0"
+confy = "0.6"
+
+# Terminal UI
+colored = "2.1"
+indicatif = "0.17"
+dialoguer = "0.11"
+console = "0.15"
+
+# Table output
+comfy-table = "7.1"
+
+# Async
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs"] }
+
+# Auth
+keyring = "2.3"
+
+# Errors
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# Tracing (client-side)
+tracing = { workspace = true }
+
+# Editor for interactive input
+edit = "0.1"
+
+[dev-dependencies]
+assert_cmd = "2.0"
+predicates = "3.0"
+tempfile = "3.8"

@@ -1,4 +1,6 @@
-//! Service discovery endpoints
+//! DNS-based service discovery API endpoints
+//!
+//! Provides HTTP API for DNS-based service registry using hickory-dns.
 
 use axum::{
     extract::{Path, State, Query},
@@ -9,15 +11,38 @@ use std::sync::Arc;
 use std::collections::HashMap;
 
 use crate::state::AppState;
+use crate::services::discovery::ServiceInstance;
+
+#[derive(Debug, serde::Deserialize)]
+pub struct RegisterRequest {
+    // TODO: Add service_name String
+    // TODO: Add instance_id String
+    // TODO: Add address String
+    // TODO: Add port u16
+    // TODO: Add metadata HashMap<String, String>
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct HealthUpdateRequest {
+    // TODO: Add healthy bool
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct DiscoveryQuery {
+    // TODO: Add healthy_only bool
+    // TODO: Add metadata_filters HashMap<String, String>
+    // TODO: Add zone String
+}
 
 /// Register service instance
 pub async fn register(
     State(state): State<Arc<AppState>>,
-    // TODO: Json body with service details
+    Json(body): Json<RegisterRequest>,
 ) -> Result<StatusCode, StatusCode> {
-    // TODO: Validate instance belongs to authenticated app
-    // TODO: Store in registry
-    // TODO: Broadcast to watchers
+    // TODO: Validate request body
+    // TODO: Parse address to SocketAddr
+    // TODO: Call registry.register()
+    // TODO: Publish DNS SRV record
     Err(StatusCode::NOT_IMPLEMENTED)
 }
 
@@ -26,19 +51,31 @@ pub async fn deregister(
     State(state): State<Arc<AppState>>,
     Path((service_name, instance_id)): Path<(String, String)>,
 ) -> Result<StatusCode, StatusCode> {
-    // TODO: Remove from registry
+    // TODO: Call registry.deregister()
+    // TODO: Remove DNS SRV record
     Err(StatusCode::NOT_IMPLEMENTED)
 }
 
-/// Discover instances
+/// Discover instances via DNS
 pub async fn discover(
     State(state): State<Arc<AppState>>,
     Path(service_name): Path<String>,
     Query(params): Query<DiscoveryQuery>,
-) -> Result<StatusCode, StatusCode> {
-    // TODO: Query registry for healthy instances
-    // TODO: Filter by metadata if requested
-    // TODO: Return weighted list
+) -> Result<Json<Vec<ServiceInstance>>, StatusCode> {
+    // TODO: Call registry.get_healthy() or get_all()
+    // TODO: Filter by metadata if params.metadata_filters set
+    // TODO: Filter by zone if params.zone set
+    // TODO: Return as JSON
+    Err(StatusCode::NOT_IMPLEMENTED)
+}
+
+/// DNS SRV record lookup endpoint
+pub async fn discover_dns(
+    Path(service_name): Path<String>,
+) -> Result<Json<Vec<DnsServiceInstance>>, StatusCode> {
+    // TODO: Perform direct DNS SRV lookup
+    // TODO: Parse SRV records to DnsServiceInstance
+    // TODO: Return as JSON
     Err(StatusCode::NOT_IMPLEMENTED)
 }
 
@@ -46,26 +83,36 @@ pub async fn discover(
 pub async fn health_check(
     State(state): State<Arc<AppState>>,
     Path((service_name, instance_id)): Path<(String, String)>,
-    // TODO: Json body with health status
+    Json(body): Json<HealthUpdateRequest>,
 ) -> Result<StatusCode, StatusCode> {
-    // TODO: Update instance health timestamp
-    // TODO: Mark unhealthy if missed checks
+    // TODO: Call registry.update_health()
+    // TODO: Update DNS record if health changed
     Err(StatusCode::NOT_IMPLEMENTED)
 }
 
-/// Watch for changes (SSE)
-pub async fn watch(
+/// Heartbeat from instance
+pub async fn heartbeat(
     State(state): State<Arc<AppState>>,
-    Path(service_name): Path<String>,
+    Path((service_name, instance_id)): Path<(String, String)>,
 ) -> Result<StatusCode, StatusCode> {
-    // TODO: Create SSE stream
-    // TODO: Send current state
-    // TODO: Push updates as they happen
+    // TODO: Call registry.update_heartbeat()
     Err(StatusCode::NOT_IMPLEMENTED)
 }
 
-/// Query parameters
-#[derive(Debug, serde::Deserialize)]
-pub struct DiscoveryQuery {
-    // TODO: Add metadata filters, health_only
+/// List all registered services
+pub async fn list_services(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<String>>, StatusCode> {
+    // TODO: Call registry.list_services()
+    Err(StatusCode::NOT_IMPLEMENTED)
+}
+
+/// DNS service instance response
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DnsServiceInstance {
+    // TODO: Add host String
+    // TODO: Add port u16
+    // TODO: Add priority u16
+    // TODO: Add weight u16
+    // TODO: Add target String
 }

@@ -1,6 +1,9 @@
 //! Worker Node entity definitions.
-//! 
+//!
 //! Infrastructure that runs the actual Firecracker microVMs.
+
+#[cfg(feature = "orm")]
+use sea_orm::entity::prelude::*;
 
 use crate::prelude::*;
 
@@ -59,18 +62,25 @@ pub struct NodeNetwork {
 }
 
 /// Worker Node entity
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "orm", derive(DeriveEntityModel))]
+#[cfg_attr(feature = "orm", sea_orm(table_name = "nodes"))]
 pub struct Node {
+    #[cfg_attr(feature = "orm", sea_orm(primary_key, auto_increment = false))]
     pub id: NodeId,
     pub hostname: String,
     pub status: NodeStatus,
     pub region: String,
     pub zone: String,
+    #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary"))]
     pub capacity: NodeCapacity,
+    #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary"))]
     pub capabilities: NodeCapabilities,
+    #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary"))]
     pub network: NodeNetwork,
     #[serde(default)]
+    #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary"))]
     pub labels: std::collections::HashMap<String, String>,
     pub running_apps: u32,
     pub microvm_capacity: u32,
@@ -78,10 +88,19 @@ pub struct Node {
     pub kernel_version: String,
     pub firecracker_version: String,
     pub agent_version: String,
+    #[cfg_attr(feature = "orm", sea_orm(default_value = "sea_orm::prelude::DateTimeWithchrono::Utc::now()"))]
     pub last_seen: DateTime<Utc>,
+    #[cfg_attr(feature = "orm", sea_orm(default_value = "sea_orm::prelude::DateTimeWithchrono::Utc::now()"))]
     pub created_at: DateTime<Utc>,
     pub organization_id: Uuid,
 }
+
+#[cfg(feature = "orm")]
+#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+pub enum Relation {}
+
+#[cfg(feature = "orm")]
+impl ActiveModelBehavior for ActiveModel {}
 
 /// Request to register a new node
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]

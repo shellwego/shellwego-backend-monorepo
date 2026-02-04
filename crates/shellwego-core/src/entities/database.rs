@@ -1,8 +1,11 @@
 //! Managed Database entity definitions.
-//! 
+//!
 //! DBaaS: Postgres, MySQL, Redis, etc.
 
 use crate::prelude::*;
+
+#[cfg(feature = "orm")]
+use sea_orm::entity::prelude::*;
 
 pub type DatabaseId = Uuid;
 
@@ -87,23 +90,40 @@ pub struct DatabaseBackupConfig {
 }
 
 /// Database entity
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "orm", derive(DeriveEntityModel))]
+#[cfg_attr(feature = "orm", sea_orm(table_name = "databases"))]
 pub struct Database {
+    #[cfg_attr(feature = "orm", sea_orm(primary_key, auto_increment = false))]
     pub id: DatabaseId,
     pub name: String,
     pub engine: DatabaseEngine,
     pub version: String,
     pub status: DatabaseStatus,
+    #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary"))]
     pub endpoint: DatabaseEndpoint,
+    #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary"))]
     pub resources: DatabaseResources,
+    #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary"))]
     pub usage: DatabaseUsage,
+    #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary"))]
     pub ha: HighAvailability,
+    #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary"))]
     pub backup_config: DatabaseBackupConfig,
     pub organization_id: Uuid,
+    #[cfg_attr(feature = "orm", sea_orm(default_value = "sea_orm::prelude::DateTimeWithchrono::Utc::now()"))]
     pub created_at: DateTime<Utc>,
+    #[cfg_attr(feature = "orm", sea_orm(default_value = "sea_orm::prelude::DateTimeWithchrono::Utc::now()"))]
     pub updated_at: DateTime<Utc>,
 }
+
+#[cfg(feature = "orm")]
+#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+pub enum Relation {}
+
+#[cfg(feature = "orm")]
+impl ActiveModelBehavior for ActiveModel {}
 
 /// Create database request
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]

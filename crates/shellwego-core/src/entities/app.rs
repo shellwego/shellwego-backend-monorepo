@@ -5,6 +5,9 @@
 //! When the `orm` feature is enabled, the `App` struct directly derives
 //! Sea-ORM's entity traits, eliminating duplication between core and control-plane.
 
+#[cfg(feature = "orm")]
+use sea_orm::entity::prelude::*;
+
 use crate::prelude::*;
 
 // TODO: Add `utoipa::ToSchema` derive for OpenAPI generation
@@ -32,7 +35,6 @@ pub enum AppStatus {
 /// Resource allocation using canonical units (bytes and milli-CPU)
 #[derive(Debug, Clone, Serialize, Deserialize, Validate, Default, PartialEq)]
 #[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-#[cfg_attr(feature = "orm", derive(sea_orm::FromQueryResult))]
 pub struct ResourceSpec {
     /// Memory limit in bytes
     #[serde(default)]
@@ -231,33 +233,41 @@ pub struct RegistryAuth {
     pub password: String,
 }
 
-#[cfg(feature = "orm")]
-use sea_orm::entity::prelude::*;
-
-#[cfg(feature = "orm")]
-use super::super::DateTime;
-
-#[cfg(feature = "orm")]
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
-#[sea_orm(table_name = "apps")]
-pub struct Model {
-    #[sea_orm(primary_key)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "orm", derive(DeriveEntityModel))]
+#[cfg_attr(feature = "orm", sea_orm(table_name = "apps"))]
+pub struct App {
+    #[cfg_attr(feature = "orm", sea_orm(primary_key, auto_increment = false))]
     pub id: AppId,
     pub name: String,
     pub slug: String,
     pub status: AppStatus,
     pub image: String,
+    #[serde(default)]
+    #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary", nullable))]
     pub command: Option<Vec<String>>,
     pub resources: ResourceSpec,
+    #[serde(default)]
+    #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary"))]
     pub env: Vec<EnvVar>,
+    #[serde(default)]
+    #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary"))]
     pub domains: Vec<DomainConfig>,
+    #[serde(default)]
+    #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary"))]
     pub volumes: Vec<VolumeMount>,
+    #[serde(default)]
+    #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary", nullable))]
     pub health_check: Option<HealthCheck>,
+    #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary"))]
     pub source: SourceSpec,
     pub organization_id: Uuid,
     pub created_by: Uuid,
-    pub created_at: DateTime,
-    pub updated_at: DateTime,
+    #[cfg_attr(feature = "orm", sea_orm(default_value = "sea_orm::prelude::DateTimeWithchrono::Utc::now()"))]
+    pub created_at: DateTime<Utc>,
+    #[cfg_attr(feature = "orm", sea_orm(default_value = "sea_orm::prelude::DateTimeWithchrono::Utc::now()"))]
+    pub updated_at: DateTime<Utc>,
 }
 
 #[cfg(feature = "orm")]
@@ -266,33 +276,6 @@ pub enum Relation {}
 
 #[cfg(feature = "orm")]
 impl ActiveModelBehavior for ActiveModel {}
-
-#[cfg(not(feature = "orm"))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-pub struct App {
-    pub id: AppId,
-    pub name: String,
-    pub slug: String,
-    pub status: AppStatus,
-    pub image: String,
-    #[serde(default)]
-    pub command: Option<Vec<String>>,
-    pub resources: ResourceSpec,
-    #[serde(default)]
-    pub env: Vec<EnvVar>,
-    #[serde(default)]
-    pub domains: Vec<DomainConfig>,
-    #[serde(default)]
-    pub volumes: Vec<VolumeMount>,
-    #[serde(default)]
-    pub health_check: Option<HealthCheck>,
-    pub source: SourceSpec,
-    pub organization_id: Uuid,
-    pub created_by: Uuid,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
 
 /// Request to create a new App
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
@@ -329,17 +312,32 @@ pub struct UpdateAppRequest {
     // TODO: Add other mutable fields
 }
 
-#[cfg(feature = "orm")]
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
-#[sea_orm(table_name = "app_instances")]
-pub struct AppInstanceModel {
-    #[sea_orm(primary_key)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, strum::Display, strum::EnumString)]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "orm", derive(sea_orm::entity::prelude::DeriveActiveEnum, sea_query::IdenStatic))]
+#[cfg_attr(feature = "orm", sea_orm(rs_type = "String", db_type = "String(StringLen::N(20))"))]
+#[serde(rename_all = "snake_case")]
+pub enum InstanceStatus {
+    Starting,
+    Healthy,
+    Unhealthy,
+    Stopping,
+    Exited,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "orm", derive(DeriveEntityModel))]
+#[cfg_attr(feature = "orm", sea_orm(table_name = "app_instances"))]
+pub struct AppInstance {
+    #[cfg_attr(feature = "orm", sea_orm(primary_key, auto_increment = false))]
     pub id: Uuid,
     pub app_id: AppId,
     pub node_id: Uuid,
     pub status: InstanceStatus,
     pub internal_ip: String,
-    pub started_at: DateTime,
+    #[cfg_attr(feature = "orm", sea_orm(default_value = "sea_orm::prelude::DateTimeWithchrono::Utc::now()"))]
+    pub started_at: DateTime<Utc>,
     pub health_checks_passed: u64,
     pub health_checks_failed: u64,
 }
@@ -350,42 +348,3 @@ pub enum AppInstanceRelation {}
 
 #[cfg(feature = "orm")]
 impl ActiveModelBehavior for AppInstanceActiveModel {}
-
-#[cfg(feature = "orm")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, strum::Display, strum::EnumString)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-#[sea_orm(rs_type = "String", db_type = "String(StringLen::N(20))")]
-#[serde(rename_all = "snake_case")]
-pub enum InstanceStatus {
-    Starting,
-    Healthy,
-    Unhealthy,
-    Stopping,
-    Exited,
-}
-
-#[cfg(not(feature = "orm"))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-pub struct AppInstance {
-    pub id: Uuid,
-    pub app_id: AppId,
-    pub node_id: Uuid,
-    pub status: InstanceStatus,
-    pub internal_ip: String,
-    pub started_at: DateTime<Utc>,
-    pub health_checks_passed: u64,
-    pub health_checks_failed: u64,
-}
-
-#[cfg(not(feature = "orm"))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, strum::Display, strum::EnumString)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
-pub enum InstanceStatus {
-    Starting,
-    Healthy,
-    Unhealthy,
-    Stopping,
-    Exited,
-}

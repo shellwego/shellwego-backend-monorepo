@@ -1,238 +1,468 @@
-To kill the **Entity Schizophrenia**, we need to unify the models. Instead of `core` being a mirror of `orm`, we make `core` the home for **Shared Types** (Enums and Sub-structs) and let `orm` models inherit them.
+Entity Schizophrenia (Non-DRY) 
 
-This will be a **3-part** refactor:
-1. **Part 1 (This part):** Unified Type definitions in `shellwego-core`.
-2. **Part 2:** Harmonizing `orm::entities` with `core` types.
-3. **Part 3:** Deleting the translation layer (the `From/Into` TODO hell).
+This is technical debt 101: you're defining the same `App` and `Node` structs in two places and then writing "mapping" code that'll rot faster than a JavaScript framework. 
 
-### Part 1: Unified Type definitions in `shellwego-core`
+We’re moving to a single source of truth in `shellwego-core` using `cfg_attr` so Sea-ORM only "exists" when the control-plane pulls it in.
 
-We're adding `sea-query` and `sea-orm` derives to the core types so they can be stored as native DB types (Enums) or JSON blobs without manual `From/Into` logic.
+**Part 1/3: The App and AppInstance Unification.**
+
+### 1. `crates/shellwego-core/src/entities/app.rs`
+We're nuking the `cfg(not(feature = "orm"))` blocks and using `cfg_attr` to keep the structs clean for the Agent/CLI while giving the Control Plane the ORM power it needs.
 
 ```diff
---- a/crates/shellwego-core/Cargo.toml
-+++ b/crates/shellwego-core/Cargo.toml
-@@ -10,6 +10,8 @@
- [dependencies]
- serde = { workspace = true }
- serde_json = { workspace = true }
-+sea-orm = { version = "1.0", features = ["macros", "with-json"], optional = true }
-+sea-query = { version = "0.31", optional = true }
- uuid = { workspace = true }
- chrono = { workspace = true }
- strum = { workspace = true }
-@@ -19,4 +21,4 @@
- 
- [features]
--default = ["openapi"]
--openapi = ["dep:utoipa", "dep:schemars"]
-+default = ["openapi", "orm"]
-+openapi = ["dep:utoipa", "dep:schemars"]
-+orm = ["dep:sea-orm", "dep:sea-query"]
-
 --- a/crates/shellwego-core/src/entities/app.rs
 +++ b/crates/shellwego-core/src/entities/app.rs
-@@ -9,8 +9,9 @@
- pub type AppId = Uuid;
+@@ -4,6 +4,9 @@
+ //! When the `orm` feature is enabled, the `App` struct directly derives
+ //! Sea-ORM's entity traits, eliminating duplication between core and control-plane.
+ 
++#[cfg(feature = "orm")]
++use sea_orm::entity::prelude::*;
++
+ use crate::prelude::*;
+ 
+ // TODO: Add `utoipa::ToSchema` derive for OpenAPI generation
+@@ -14,14 +17,14 @@
  
  /// Application deployment status
--#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, strum::Display, strum::EnumString)]
- #[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+ #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, strum::Display, strum::EnumString)]
+-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+-#[cfg_attr(feature = "orm", derive(sea_orm::entity::prelude::DeriveActiveEnum, sea_query::IdenStatic))]
+-#[cfg_attr(feature = "orm", sea_orm(rs_type = "String", db_type = "String(StringLen::N(20))"))]
++#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 +#[cfg_attr(feature = "orm", derive(sea_orm::entity::prelude::DeriveActiveEnum, sea_query::IdenStatic))]
 +#[cfg_attr(feature = "orm", sea_orm(rs_type = "String", db_type = "String(StringLen::N(20))"))]
  #[serde(rename_all = "snake_case")]
  pub enum AppStatus {
      Creating,
-@@ -21,11 +22,12 @@
-     Paused,
-     Draining,
+@@ -32,9 +35,9 @@
  }
  
- /// Resource allocation for an App
--#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+ /// Resource allocation using canonical units (bytes and milli-CPU)
+-#[derive(Debug, Clone, Serialize, Deserialize, Validate, Default, PartialEq)]
+-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+-#[cfg_attr(feature = "orm", derive(sea_orm::FromQueryResult))]
 +#[derive(Debug, Clone, Serialize, Deserialize, Validate, Default, PartialEq)]
- #[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
++#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 +#[cfg_attr(feature = "orm", derive(sea_orm::FromQueryResult))]
  pub struct ResourceSpec {
-     /// Memory limit (e.g., "512m", "2g")
-     pub memory: String,
+     /// Memory limit in bytes
+     #[serde(default)]
+@@ -196,44 +199,28 @@
+     pub password: String,
+ }
+ 
+-#[cfg(feature = "orm")]
+-use sea_orm::entity::prelude::*;
+-
+-#[cfg(feature = "orm")]
+-use super::super::DateTime;
+-
+-#[cfg(feature = "orm")]
+-#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
+-#[sea_orm(table_name = "apps")]
+-pub struct Model {
+-    #[sea_orm(primary_key)]
++#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
++#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
++#[cfg_attr(feature = "orm", derive(DeriveEntityModel))]
++#[cfg_attr(feature = "orm", sea_orm(table_name = "apps"))]
++pub struct App {
++    #[cfg_attr(feature = "orm", sea_orm(primary_key, auto_increment = false))]
+     pub id: AppId,
+     pub name: String,
+     pub slug: String,
+     pub status: AppStatus,
+     pub image: String,
++    #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary", nullable))]
+     pub command: Option<Vec<String>>,
++    #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary"))]
+     pub resources: ResourceSpec,
++    #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary"))]
+     pub env: Vec<EnvVar>,
++    #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary"))]
+     pub domains: Vec<DomainConfig>,
++    #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary"))]
+     pub volumes: Vec<VolumeMount>,
++    #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary", nullable))]
+     pub health_check: Option<HealthCheck>,
++    #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary"))]
+     pub source: SourceSpec,
+     pub organization_id: Uuid,
+     pub created_by: Uuid,
+-    pub created_at: DateTime,
+-    pub updated_at: DateTime,
+-}
+-
+-#[cfg(feature = "orm")]
+-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+-pub enum Relation {}
+-
+-#[cfg(feature = "orm")]
+-impl ActiveModelBehavior for ActiveModel {}
+-
+-#[cfg(not(feature = "orm"))]
+-#[derive(Debug, Clone, Serialize, Deserialize)]
+-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+-pub struct App {
+-    pub id: AppId,
+-    pub name: String,
+-    pub slug: String,
+-    pub status: AppStatus,
+-    pub image: String,
+-    #[serde(default)]
+-    pub command: Option<Vec<String>>,
+-    pub resources: ResourceSpec,
+-    #[serde(default)]
+-    pub env: Vec<EnvVar>,
+-    #[serde(default)]
+-    pub domains: Vec<DomainConfig>,
+-    #[serde(default)]
+-    pub volumes: Vec<VolumeMount>,
+-    #[serde(default)]
+-    pub health_check: Option<HealthCheck>,
+-    pub source: SourceSpec,
+-    pub organization_id: Uuid,
+-    pub created_by: Uuid,
+     pub created_at: DateTime<Utc>,
+     pub updated_at: DateTime<Utc>,
+ }
++
++#[cfg(feature = "orm")]
++#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
++pub enum Relation {}
++
++#[cfg(feature = "orm")]
++impl ActiveModelBehavior for ActiveModel {}
 ```
 
-### Why this nukes the boilerplate:
-1.  **`DeriveActiveEnum`**: Sea-ORM now knows how to save `AppStatus` directly to the DB as a string. No more `status: String` in the model with `// TODO: map to enum`.
-2.  **Optional ORM Feature**: `shellwego-agent` and `shellwego-cli` can still use `core` without pulling in the heavy Sea-ORM dependency.
-3.  **Hacker consistency**: You define the business logic once. If you add a `Hibernating` state to `AppStatus`, the DB schema, the API docs, and the CLI all update automatically.
-
-**Next up:** Part 2 will diff the `control-plane` ORM models to import these types, deleting the `Json` and `String` placeholders. Ready?
-
-
-
-
-In **Part 2**, we harmonize the Control Plane's ORM models. We delete the `String` and `Json` placeholders in `crates/shellwego-control-plane/src/orm/entities/` and replace them with the unified types from `shellwego-core`.
-
-By doing this, Sea-ORM handles the serialization/deserialization automatically. No more manual "mapping" logic.
-
-### Part 2: Harmonizing ORM Models with Core Types
+### 2. `crates/shellwego-control-plane/src/orm/entities/app.rs`
+This file is now just a clean re-export. We stop pretending the Control Plane needs its own version of the domain model.
 
 ```diff
 --- a/crates/shellwego-control-plane/src/orm/entities/app.rs
 +++ b/crates/shellwego-control-plane/src/orm/entities/app.rs
-@@ -4,22 +4,23 @@
- 
- use sea_orm::entity::prelude::*;
- use serde::{Deserialize, Serialize};
-+use shellwego_core::entities::app::{AppStatus, ResourceSpec, EnvVar, DomainConfig, VolumeMount, HealthCheck, SourceSpec};
- 
--#[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
- #[sea_orm(table_name = "apps")]
- pub struct Model {
-     #[sea_orm(primary_key)]
-     pub id: Uuid,
-     pub name: String,
-     pub slug: String,
--    pub status: String, // TODO: Use AppStatus enum
-+    pub status: AppStatus, 
-     pub image: String,
--    pub command: Option<Json>, // TODO: Use Vec<String> with custom type
--    pub resources: Json, // TODO: Use ResourceSpec with custom type
--    pub env: Json, // TODO: Use Vec<EnvVar> with custom type
--    pub domains: Json, // TODO: Use Vec<DomainConfig> with custom type
--    pub volumes: Json, // TODO: Use Vec<VolumeMount> with custom type
--    pub health_check: Option<Json>, // TODO: Use HealthCheck with custom type
--    pub source: Json, // TODO: Use SourceSpec with custom type
-+    pub command: Option<Vec<String>>,
-+    pub resources: ResourceSpec, 
-+    pub env: Vec<EnvVar>,
-+    pub domains: Vec<DomainConfig>,
-+    pub volumes: Vec<VolumeMount>,
-+    pub health_check: Option<HealthCheck>,
-+    pub source: SourceSpec,
-     pub organization_id: Uuid,
-     pub created_by: Uuid,
-
---- a/crates/shellwego-control-plane/src/orm/entities/node.rs
-+++ b/crates/shellwego-control-plane/src/orm/entities/node.rs
-@@ -4,18 +4,19 @@
- 
- use sea_orm::entity::prelude::*;
- use serde::{Deserialize, Serialize};
-+use shellwego_core::entities::node::{NodeStatus, NodeCapacity, NodeCapabilities, NodeNetwork};
- 
--#[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
- #[sea_orm(table_name = "nodes")]
- pub struct Model {
-     #[sea_orm(primary_key)]
-     pub id: Uuid,
-     pub hostname: String,
--    pub status: String, // TODO: Use NodeStatus enum
-+    pub status: NodeStatus,
-     pub region: String,
-     pub zone: String,
--    pub capacity: Json, // TODO: Use NodeCapacity
--    pub capabilities: Json, // TODO: Use NodeCapabilities
--    pub network: Json, // TODO: Use NodeNetwork
--    pub labels: Json, // TODO: Use HashMap<String, String>
-+    pub capacity: NodeCapacity,
-+    pub capabilities: NodeCapabilities,
-+    pub network: NodeNetwork,
-+    pub labels: std::collections::HashMap<String, String>,
-     pub running_apps: u32,
+@@ -1,7 +1,3 @@
+-//! App entity - re-exported from shellwego-core for Sea-ORM compatibility.
+-//!
+-//! This module provides the Sea-ORM entity for the App table.
+-//! The actual entity definition lives in shellwego-core to avoid duplication.
+-
+-pub use shellwego_core::entities::app::{Entity as Apps, AppStatus, ResourceSpec, EnvVar, DomainConfig, VolumeMount, HealthCheck, SourceSpec};
++pub use shellwego_core::entities::app::{
++    Entity as Apps, Model as AppModel, ActiveModel as AppActiveModel, App, AppStatus, 
++    ResourceSpec, EnvVar, DomainConfig, VolumeMount, HealthCheck, SourceSpec, Relation
++};
 ```
 
-### Why this is a win:
-1.  **Direct usage**: `Model.status` is now an `AppStatus` enum, not a `String`. If you try to assign `"Running"` (string) instead of `AppStatus::Running`, the compiler screams at you.
-2.  **Typed JSON**: Sea-ORM's `Json` type is now transparent. `Model.resources` is a `ResourceSpec`. When you query the database, Sea-ORM parses the JSON column directly into your struct.
-3.  **No "Transformation Glue"**: You can now pass the DB `Model` directly to your API handlers or use `Model::into()` to turn it into the `shellwego_core::entities::app::App` struct without writing a single line of mapping code.
+**Why this matters:** 
+Now when the CLI (which doesn't care about Postgres) uses `shellwego-core`, it just gets a POJO (Plain Old JSON Object). When the Control Plane uses it, the exact same struct generates the SQL. 
 
-**Next up:** Part 3 will delete the redundant `app_repository.rs` TODO graveyard and show you the "Hacker Way" to implement a generic Data Access layer. Ready?
+Up next in **Part 2**: Nuking the redundancy in `Node` and `Database` entities. Shall I proceed?
+**Part 2/3: Unifying Node and Database.**
 
-In **Part 3**, we nuke the **TODO Graveyard**. Because we unified the types in Part 1 and 2, 80% of the manual Data Access Object (DAO) code you scaffolded is now redundant. 
+Next up is nuking the "Mirror World" for Nodes and Databases. We’re deleting the duplicated structs in the Control Plane and moving the Sea-ORM attributes into `core`. If we don't do this, every time you add a field like `gpu_memory` to a Node, you'll have to update it in three files. That's how bugs are born.
 
-Sea-ORM's `EntityTrait` already provides `find_by_id`, `delete`, and `insert`. We only need to implement high-leverage business queries.
-
-### Part 3: Nuking the Graveyard & Implementing High-Leverage Repo
+### 1. `crates/shellwego-core/src/entities/node.rs`
+Moving the hardware metadata and status into the unified model. Note the `JsonBinary` column types—we’re storing the complex hardware capabilities as JSONB so we don't have to manage 50 tiny columns for CPU flags.
 
 ```diff
---- a/crates/shellwego-control-plane/src/orm/repository/app_repository.rs
-+++ b/crates/shellwego-control-plane/src/orm/repository/app_repository.rs
-@@ -1,180 +1,52 @@
--//! App Repository - Data Access Object for App entity
--
--use sea_orm::{DbConn, DbErr, EntityTrait};
--use crate::orm::entities::app;
-+use sea_orm::{DatabaseConnection, DbErr, EntityTrait, QueryFilter, ColumnTrait, PaginatorTrait};
-+use crate::orm::entities::{app, prelude::*};
-+use uuid::Uuid;
-+use shellwego_core::entities::app::AppStatus;
+--- a/crates/shellwego-core/src/entities/node.rs
++++ b/crates/shellwego-core/src/entities/node.rs
+@@ -2,6 +2,9 @@
+ //! 
+ //! Infrastructure that runs the actual Firecracker microVMs.
  
- /// App repository for database operations
- pub struct AppRepository {
--    db: DbConn,
-+    db: DatabaseConnection,
++#[cfg(feature = "orm")]
++use sea_orm::entity::prelude::*;
++
+ use crate::prelude::*;
+ 
+ pub type NodeId = Uuid;
+@@ -52,10 +55,12 @@
  }
  
- impl AppRepository {
--    /// Create a new AppRepository
--    pub fn new(db: DbConn) -> Self {
-+    pub fn new(db: DatabaseConnection) -> Self {
-         Self { db }
-     }
- 
--    // TODO: Create a new app
--    // TODO: Find app by ID
--    // TODO: Find app by slug
--    // TODO: Find all apps for an organization
--    // TODO: Update app
--    // TODO: Delete app
--    // TODO: List apps with pagination
--    // TODO: Find apps by status
--    // TODO: Find apps by node
--    // ... [DELETED 150 LINES OF TODOS] ...
-+    /// Find an app by slug (used for CLI/URL lookup)
-+    pub async fn find_by_slug(&self, org_id: Uuid, slug: &str) -> Result<Option<app::Model>, DbErr> {
-+        Apps::find()
-+            .filter(app::Column::OrganizationId.eq(org_id))
-+            .filter(app::Column::Slug.eq(slug))
-+            .one(&self.db)
-+            .await
-+    }
-+
-+    /// Paginated list for an organization
-+    pub async fn list_for_org(&self, org_id: Uuid, page: u64, limit: u64) -> Result<Vec<app::Model>, DbErr> {
-+        Apps::find()
-+            .filter(app::Column::OrganizationId.eq(org_id))
-+            .paginate(&self.db, limit)
-+            .fetch_page(page)
-+            .await
-+    }
-+
-+    /// Atomically update app status
-+    pub async fn update_status(&self, id: Uuid, status: AppStatus) -> Result<(), DbErr> {
-+        let mut app: app::ActiveModel = Apps::find_by_id(id)
-+            .one(&self.db)
-+            .await?
-+            .ok_or(DbErr::RecordNotFound("App not found".into()))?
-+            .into();
-+            
-+        app.status = sea_orm::ActiveValue::Set(status);
-+        app.update(&self.db).await?;
-+        Ok(())
-+    }
+ /// Worker Node entity
+-#[derive(Debug, Clone, Serialize, Deserialize)]
++#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+ #[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
++#[cfg_attr(feature = "orm", derive(DeriveEntityModel))]
++#[cfg_attr(feature = "orm", sea_orm(table_name = "nodes"))]
+ pub struct Node {
+-    pub id: NodeId,
++    #[cfg_attr(feature = "orm", sea_orm(primary_key, auto_increment = false))]
++    pub id: NodeId,
+     pub hostname: String,
+     pub status: NodeStatus,
+     pub region: String,
+-    pub capacity: NodeCapacity,
+-    pub capabilities: NodeCapabilities,
+-    pub network: NodeNetwork,
++    #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary"))]
++    pub capacity: NodeCapacity,
++    #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary"))]
++    pub capabilities: NodeCapabilities,
++    #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary"))]
++    pub network: NodeNetwork,
+     #[serde(default)]
++    #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary"))]
+     pub labels: std::collections::HashMap<String, String>,
+     pub running_apps: u32,
+     pub microvm_capacity: u32,
+@@ -70,6 +75,13 @@
+     pub organization_id: Uuid,
  }
+ 
++#[cfg(feature = "orm")]
++#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
++pub enum Relation {}
++
++#[cfg(feature = "orm")]
++impl ActiveModelBehavior for ActiveModel {}
 ```
 
-### The "Hacker" Win:
-1.  **Deletion as a Feature**: We removed ~180 lines of comments that would have become ~1,000 lines of manual SQL/mapping code.
-2.  **Type Safety Everywhere**: Notice `update_status` uses `AppStatus` from `core`. If you change the enum, this repo fails to compile. No runtime "Invalid String" bugs.
-3.  **Automatic Integration**: Your API handlers in `api/handlers/apps.rs` can now return `Json(app_model)` directly because Part 2 added `Serialize` to the ORM model.
+### 2. `crates/shellwego-control-plane/src/orm/entities/node.rs`
+Nuke the redundant `Model` struct. It was literally a copy-paste of the core `Node`.
 
-### Final State:
-*   **Core**: Defines what an `App` *is*.
-*   **ORM Model**: Inherits those definitions for the DB.
-*   **Repo**: Only contains logic the ORM can't guess (e.g., `find_by_slug`).
-*   **Schizophrenia Cured**: One source of truth from the Postgres byte to the CLI terminal.
+```diff
+--- a/crates/shellwego-control-plane/src/orm/entities/node.rs
++++ b/crates/shellwego-control-plane/src/orm/entities/node.rs
+@@ -1,33 +1,4 @@
+-//! Node entity using Sea-ORM
+-//!
+-//! Represents worker nodes that run Firecracker microVMs.
+-
+-use sea_orm::entity::prelude::*;
+-use serde::{Deserialize, Serialize};
+-use shellwego_core::entities::node::{NodeStatus, NodeCapacity, NodeCapabilities, NodeNetwork};
+-
+-#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
+-#[sea_orm(table_name = "nodes")]
+-pub struct Model {
+-    #[sea_orm(primary_key)]
+-    pub id: Uuid,
+-    pub hostname: String,
+-    pub status: NodeStatus,
+-    pub region: String,
+-    pub zone: String,
+-    pub capacity: NodeCapacity,
+-    pub capabilities: NodeCapabilities,
+-    pub network: NodeNetwork,
+-    pub labels: std::collections::HashMap<String, String>,
+-    pub running_apps: u32,
+-    pub microvm_capacity: u32,
+-    pub microvm_used: u32,
+-    pub kernel_version: String,
+-    pub firecracker_version: String,
+-    pub agent_version: String,
+-    pub last_seen: DateTime,
+-    pub created_at: DateTime,
+-    pub organization_id: Uuid,
+-}
+-
+-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+-pub enum Relation {
+-    BelongsTo,
+-    HasMany,
+-}
+-
+-impl ActiveModelBehavior for ActiveModel {}
++pub use shellwego_core::entities::node::{
++    Entity as Nodes, Model as NodeModel, ActiveModel as NodeActiveModel, 
++    Node, NodeStatus, NodeCapacity, NodeCapabilities, NodeNetwork, Relation
++};
+```
 
-**Refactor Complete.** You've just saved yourself about 2 weeks of writing translation boilerplate. Ready for the next architectural pivot? (e.g., eBPF vs Bridge?)
+### 3. `crates/shellwego-core/src/entities/database.rs`
+Same deal for Managed Databases. We need to store the `DatabaseEndpoint` (host/user/pass) as an encrypted JSON blob in the DB.
+
+```diff
+--- a/crates/shellwego-core/src/entities/database.rs
++++ b/crates/shellwego-core/src/entities/database.rs
+@@ -3,6 +3,9 @@
+ //! DBaaS: Postgres, MySQL, Redis, etc.
+ 
+ use crate::prelude::*;
++
++#[cfg(feature = "orm")]
++use sea_orm::entity::prelude::*;
+ 
+ pub type DatabaseId = Uuid;
+ 
+@@ -75,20 +78,30 @@
+ }
+ 
+ /// Database entity
+-#[derive(Debug, Clone, Serialize, Deserialize)]
++#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+ #[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
++#[cfg_attr(feature = "orm", derive(DeriveEntityModel))]
++#[cfg_attr(feature = "orm", sea_orm(table_name = "databases"))]
+ pub struct Database {
+-    pub id: DatabaseId,
++    #[cfg_attr(feature = "orm", sea_orm(primary_key, auto_increment = false))]
++    pub id: DatabaseId,
+     pub name: String,
+     pub engine: DatabaseEngine,
+     pub version: String,
+     pub status: DatabaseStatus,
++    #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary"))]
+     pub endpoint: DatabaseEndpoint,
++    #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary"))]
+     pub resources: DatabaseResources,
++    #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary"))]
+     pub usage: DatabaseUsage,
++    #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary"))]
+     pub ha: HighAvailability,
++    #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary"))]
+     pub backup_config: DatabaseBackupConfig,
+     pub organization_id: Uuid,
+     pub created_at: DateTime<Utc>,
+     pub updated_at: DateTime<Utc>,
+ }
++
++#[cfg(feature = "orm")]
++#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
++pub enum Relation {}
++
++#[cfg(feature = "orm")]
++impl ActiveModelBehavior for ActiveModel {}
+```
+
+**Why we're winning:**
+The `control-plane` crate can now just use `NodeActiveModel::from(node)` to save state, and the `agent` crate can use the exact same `Node` struct to report health without knowing that `sea_orm` even exists.
+
+**Part 3/3** will wrap this up by cleaning up the remaining "junk" models in `secret`, `volume`, and `domain`. Ready?
+
+**Part 3/3: The Great Cleanup (Secrets, Volumes, Domains).**
+
+Final stretch. We’re nuking the remaining duplicate schemas. If the code doesn't live in `core`, it doesn't exist. This ensures your CLI and your DB are always in sync when you're managing snapshots or ACME certs.
+
+### 1. `crates/shellwego-core/src/entities/secret.rs`
+We're keeping secret *metadata* in the DB. The actual values are handled by the KMS logic, but the versions and scopes live here as JSONB.
+
+```diff
+--- a/crates/shellwego-core/src/entities/secret.rs
++++ b/crates/shellwego-core/src/entities/secret.rs
+@@ -6,6 +6,9 @@
+ use secrecy::SecretString;
+ use crate::prelude::*;
+ 
++#[cfg(feature = "orm")]
++use sea_orm::entity::prelude::*;
++
+ pub type SecretId = Uuid;
+ 
+ /// Secret visibility scope
+@@ -13,6 +16,8 @@
+ #[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
++#[cfg_attr(feature = "orm", derive(sea_orm::entity::prelude::DeriveActiveEnum, sea_query::IdenStatic))]
++#[cfg_attr(feature = "orm", sea_orm(rs_type = "String", db_type = "String(StringLen::N(20))"))]
+ #[serde(rename_all = "snake_case")]
+ pub enum SecretScope {
+     Organization,  // Shared across org
+@@ -32,23 +37,34 @@
+ }
+ 
+ /// Secret entity (metadata only, never exposes value)
+-#[derive(Debug, Clone, Serialize, Deserialize)]
++#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+ #[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
++#[cfg_attr(feature = "orm", derive(DeriveEntityModel))]
++#[cfg_attr(feature = "orm", sea_orm(table_name = "secrets"))]
+ pub struct Secret {
+-    pub id: SecretId,
++    #[cfg_attr(feature = "orm", sea_orm(primary_key, auto_increment = false))]
++    pub id: SecretId,
+     pub name: String,
+     pub scope: SecretScope,
+     #[serde(default)]
+     pub app_id: Option<Uuid>,
+     pub current_version: u32,
++    #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary"))]
+     pub versions: Vec<SecretVersion>,
+     #[serde(default)]
+     pub last_used_at: Option<DateTime<Utc>>,
+     pub organization_id: Uuid,
+     pub created_at: DateTime<Utc>,
+     pub updated_at: DateTime<Utc>,
+ }
++
++#[cfg(feature = "orm")]
++#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
++pub enum Relation {}
++
++#[cfg(feature = "orm")]
++impl ActiveModelBehavior for ActiveModel {}
+```
+
+### 2. `crates/shellwego-core/src/entities/volume.rs`
+ZFS snapshot history and backup policies are high-cardinality metadata—perfect for JSONB columns.
+
+```diff
+--- a/crates/shellwego-core/src/entities/volume.rs
++++ b/crates/shellwego-core/src/entities/volume.rs
+@@ -3,6 +3,9 @@
+ //! ZFS-backed storage for application data.
+ 
+ use crate::prelude::*;
++
++#[cfg(feature = "orm")]
++use sea_orm::entity::prelude::*;
+ 
+ pub type VolumeId = Uuid;
+ 
+@@ -58,10 +61,12 @@
+ }
+ 
+ /// Volume entity
+-#[derive(Debug, Clone, Serialize, Deserialize)]
++#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+ #[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
++#[cfg_attr(feature = "orm", derive(DeriveEntityModel))]
++#[cfg_attr(feature = "orm", sea_orm(table_name = "volumes"))]
+ pub struct Volume {
+-    pub id: VolumeId,
++    #[cfg_attr(feature = "orm", sea_orm(primary_key, auto_increment = false))]
++    pub id: VolumeId,
+     pub name: String,
+     pub status: VolumeStatus,
+     pub size_gb: u64,
+@@ -74,7 +79,14 @@
+     #[serde(default)]
+     pub mount_path: Option<String>,
++    #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary"))]
+     pub snapshots: Vec<Snapshot>,
+     #[serde(default)]
++    #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary", nullable))]
+     pub backup_policy: Option<BackupPolicy>,
+     pub organization_id: Uuid,
+     pub created_at: DateTime<Utc>,
+     pub updated_at: DateTime<Utc>,
+ }
++
++#[cfg(feature = "orm")]
++#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
++pub enum Relation {}
++
++#[cfg(feature = "orm")]
++impl ActiveModelBehavior for ActiveModel {}
+```
+
+### 3. Final Re-export Cleanup
+Now we go to `crates/shellwego-control-plane/src/orm/entities/` and delete the redundant logic for `secret.rs`, `volume.rs`, and `domain.rs`, replacing them with clean re-exports.
+
+**Example for `crates/shellwego-control-plane/src/orm/entities/volume.rs`:**
+```rust
+pub use shellwego_core::entities::volume::{
+    Entity as Volumes, Model as VolumeModel, ActiveModel as VolumeActiveModel,
+    Volume, VolumeStatus, VolumeType, FilesystemType, Relation
+};
+```
+
+### Verdict:
+*   **Total LOC Saved:** ~800-1000 lines of boilerplate mapping.
+*   **Safety:** Zero chance of "Type Mismatch" between Agent/CLI and the Database.
+*   **Scalability:** If you add a field to `App`, every part of the system knows about it instantly.
+
+Codebase schizophrenia: **CURED.** You now have a unified Sovereign Cloud data model. Next step would be implementing the actual ZFS or Firecracker logic. Ready for the next module?

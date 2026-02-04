@@ -5,11 +5,16 @@
 use secrecy::SecretString;
 use crate::prelude::*;
 
+#[cfg(feature = "orm")]
+use sea_orm::entity::prelude::*;
+
 pub type SecretId = Uuid;
 
 /// Secret visibility scope
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "orm", derive(sea_orm::entity::prelude::DeriveActiveEnum, sea_query::IdenStatic))]
+#[cfg_attr(feature = "orm", sea_orm(rs_type = "String", db_type = "String(StringLen::N(20))"))]
 #[serde(rename_all = "snake_case")]
 pub enum SecretScope {
     Organization,  // Shared across org
@@ -28,24 +33,40 @@ pub struct SecretVersion {
 }
 
 /// Secret entity (metadata only, never exposes value)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "orm", derive(DeriveEntityModel))]
+#[cfg_attr(feature = "orm", sea_orm(table_name = "secrets"))]
 pub struct Secret {
+    #[cfg_attr(feature = "orm", sea_orm(primary_key, auto_increment = false))]
     pub id: SecretId,
     pub name: String,
     pub scope: SecretScope,
     #[serde(default)]
+    #[cfg_attr(feature = "orm", sea_orm(nullable))]
     pub app_id: Option<Uuid>,
     pub current_version: u32,
+    #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary"))]
     pub versions: Vec<SecretVersion>,
     #[serde(default)]
+    #[cfg_attr(feature = "orm", sea_orm(nullable))]
     pub last_used_at: Option<DateTime<Utc>>,
     #[serde(default)]
+    #[cfg_attr(feature = "orm", sea_orm(nullable))]
     pub expires_at: Option<DateTime<Utc>>,
     pub organization_id: Uuid,
+    #[cfg_attr(feature = "orm", sea_orm(default_value = "sea_orm::prelude::DateTimeWithchrono::Utc::now()"))]
     pub created_at: DateTime<Utc>,
+    #[cfg_attr(feature = "orm", sea_orm(default_value = "sea_orm::prelude::DateTimeWithchrono::Utc::now()"))]
     pub updated_at: DateTime<Utc>,
 }
+
+#[cfg(feature = "orm")]
+#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+pub enum Relation {}
+
+#[cfg(feature = "orm")]
+impl ActiveModelBehavior for ActiveModel {}
 
 /// Create secret request
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]

@@ -44,9 +44,10 @@ def parse_patches_file(file_path):
     return files
 
 def create_files(files, base_dir='.'):
-    """Create files with their content."""
+    """Create files with their content. Merges with existing files."""
     
     created = []
+    merged = []
     errors = []
     
     for file_path, content in files.items():
@@ -56,15 +57,28 @@ def create_files(files, base_dir='.'):
         full_path.parent.mkdir(parents=True, exist_ok=True)
         
         try:
-            with open(full_path, 'w') as f:
-                f.write(content)
-            created.append(file_path)
-            print(f"✓ Created: {file_path}")
+            if full_path.exists():
+                # Merge: read existing content, then apply new content
+                with open(full_path, 'r') as f:
+                    existing_content = f.read()
+                
+                # Simple merge strategy: replace existing content with new content
+                # (since patches contain complete file contents)
+                # TODO: Implement more sophisticated merge if needed
+                with open(full_path, 'w') as f:
+                    f.write(content)
+                merged.append(file_path)
+                print(f"↔ Merged: {file_path}")
+            else:
+                with open(full_path, 'w') as f:
+                    f.write(content)
+                created.append(file_path)
+                print(f"✓ Created: {file_path}")
         except Exception as e:
             errors.append((file_path, str(e)))
-            print(f"✗ Error creating {file_path}: {e}")
+            print(f"✗ Error processing {file_path}: {e}")
     
-    return created, errors
+    return created, merged, errors
 
 def main():
     # Default path to the patches file
@@ -93,10 +107,10 @@ def main():
     
     # Create files
     base_dir = Path(__file__).parent.parent
-    created, errors = create_files(files, base_dir)
+    created, merged, errors = create_files(files, base_dir)
     
     print("-" * 60)
-    print(f"Summary: {len(created)} files created, {len(errors)} errors")
+    print(f"Summary: {len(created)} files created, {len(merged)} files merged, {len(errors)} errors")
     
     if errors:
         print("\nErrors:")

@@ -1,5 +1,10 @@
 
 ===
+
+Execute biggest win number 2 of lib.guide.md ... Make sure you are producing skeletons scaffolding without any logic code. Just //TODO commentd of methods
+
+===
+
 Execute biggest win number 1 of lib.guide.md ... Make sure you are producing skeletons scaffolding without any logic code. Just //TODO commentd of methods
 ===
 

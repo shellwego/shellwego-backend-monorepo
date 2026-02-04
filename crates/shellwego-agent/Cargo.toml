@@ -37,8 +37,8 @@ sysinfo = "0.30"
 nix = { version = "0.27", features = ["process", "signal", "user"] }
 
 # Firecracker / VMM
-# TODO: Add firecracker-rs or implement HTTP client to firecracker socket
-# For now we use raw HTTP over Unix socket
+# Using official AWS firecracker-rs SDK
+firecracker = "0.4"
 
 # Utilities
 tracing = { workspace = true }

@@ -20,15 +20,16 @@ hickory-resolver = { version = "0.24", optional = true }
 
 [features]
 default = ["quinn"]
-ebpf = [] # TODO: Add aya dependency when ready
+ebpf = ["aya", "aya-log", "nix"]
 quinn = ["dep:quinn", "dep:rustls", "dep:webpki", "dep:rcgen"]
 
 # Netlink for network interface management
 rtnetlink = "0.14"
-netlink-packet-route = "0.19"
+netlink-packet-route = "0.14"
 
-# eBPF (future)
-# aya = { version = "0.11", optional = true }
+# eBPF - Moving from "future" to "foundation"
+aya = { version = "0.12", features = ["async-tokio"], optional = true }
+aya-log = "0.2"
 
 # IP address management
 ipnetwork = "0.20"
@@ -44,8 +45,3 @@ tracing = { workspace = true }
 # System interface
 nix = { version = "0.27", features = ["net"] }
 libc = "0.2"
-
-[features]
-default = ["quinn"]
-ebpf = [] # TODO: Add aya dependency when ready
-quinn = ["dep:quinn", "dep:rustls", "dep:webpki", "dep:rcgen"]

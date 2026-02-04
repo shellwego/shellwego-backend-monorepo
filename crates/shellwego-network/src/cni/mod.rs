@@ -11,12 +11,14 @@ use crate::{
     bridge::Bridge,
     tap::TapDevice,
     ipam::Ipam,
+    ebpf::EbpfManager,
 };
 
 /// CNI network manager
 pub struct CniNetwork {
     bridge: Bridge,
     ipam: Ipam,
+    ebpf: EbpfManager,
     mtu: u32,
 }
 
@@ -44,14 +46,12 @@ impl CniNetwork {
         // Enable IP forwarding
         enable_ip_forwarding().await?;
         
-        // Setup NAT for outbound traffic
-        setup_nat(&subnet).await?;
-        
         info!("CNI initialized: bridge {} on {}", bridge_name, node_cidr);
         
         Ok(Self {
             bridge,
             ipam,
+            ebpf: EbpfManager::new().await?,
             mtu: 1500,
         })
     }
@@ -76,13 +76,11 @@ impl CniNetwork {
         tap.attach_to_bridge(&self.bridge.name()).await?;
         tap.set_up().await?;
         
-        // Setup bandwidth limiting if requested
+        // Replaced legacy tc-htb with eBPF-QoS
         if let Some(limit_mbps) = config.bandwidth_limit_mbps {
-            setup_tc_bandwidth(&config.tap_name, limit_mbps).await?;
+            self.ebpf.apply_qos(&config.tap_name, limit_mbps).await?;
         }
-        
-        // TODO: Setup firewall rules (nftables or eBPF)
-        // TODO: Port forwarding if public IP
+        self.ebpf.attach_firewall(&config.tap_name).await?;
         
         info!(
             "Network ready for {}: TAP {} with IP {}/{}",
@@ -126,107 +124,5 @@ async fn enable_ip_forwarding() -> Result<(), NetworkError> {
     tokio::fs::write("/proc/sys/net/ipv6/conf/all/forwarding", "1").await
         .map_err(|e| NetworkError::Io(e))?;
         
-    Ok(())
-}
-
-async fn setup_nat(subnet: &ipnetwork::Ipv4Network) -> Result<(), NetworkError> {
-    // Use nftables or iptables for NAT
-    // Prefer nftables on modern systems
-    
-    let rule = format!(
-        "ip saddr {} oifname != \"{}\" masquerade",
-        subnet, "shellwego0" // TODO: Use actual bridge name
-    );
-    
-    // Check if nftables is available
-    let nft_check = tokio::process::Command::new("nft")
-        .arg("list")
-        .output()
-        .await;
-        
-    if nft_check.is_ok() && nft_check.unwrap().status.success() {
-        // Use nftables
-        setup_nftables_nat(subnet).await?;
-    } else {
-        // Fallback to iptables
-        setup_iptables_nat(subnet).await?;
-    }
-    
-    Ok(())
-}
-
-async fn setup_nftables_nat(subnet: &ipnetwork::Ipv4Network) -> Result<(), NetworkError> {
-    // TODO: Create table if not exists
-    // TODO: Add masquerade rule for subnet
-    
-    let _ = tokio::process::Command::new("nft")
-        .args([
-            "add", "rule", "ip", "nat", "postrouting",
-            "ip", "saddr", &subnet.to_string(),
-            "masquerade",
-        ])
-        .output()
-        .await?;
-        
-    Ok(())
-}
-
-async fn setup_iptables_nat(subnet: &ipnetwork::Ipv4Network) -> Result<(), NetworkError> {
-    let _ = tokio::process::Command::new("iptables")
-        .args([
-            "-t", "nat", "-A", "POSTROUTING",
-            "-s", &subnet.to_string(),
-            "!", "-o", "shellwego0", // TODO
-            "-j", "MASQUERADE",
-        ])
-        .output()
-        .await?;
-        
-    Ok(())
-}
-
-async fn setup_tc_bandwidth(iface: &str, limit_mbps: u32) -> Result<(), NetworkError> {
-    // Setup traffic control (tc) for bandwidth limiting
-    // HTB (Hierarchical Token Bucket) qdisc
-    
-    // Delete existing
-    let _ = tokio::process::Command::new("tc")
-        .args(["qdisc", "del", "dev", iface, "root"])
-        .output()
-        .await;
-        
-    // Add HTB
-    let output = tokio::process::Command::new("tc")
-        .args([
-            "qdisc", "add", "dev", iface, "root",
-            "handle", "1:", "htb", "default", "10",
-        ])
-        .output()
-        .await?;
-        
-    if !output.status.success() {
-        return Err(NetworkError::BridgeError(
-            String::from_utf8_lossy(&output.stderr).to_string()
-        ));
-    }
-    
-    // Add class with rate limit
-    let kbit = limit_mbps * 1000;
-    let output = tokio::process::Command::new("tc")
-        .args([
-            "class", "add", "dev", iface, "parent", "1:",
-            "classid", "1:10", "htb",
-            "rate", &format!("{}kbit", kbit),
-            "ceil", &format!("{}kbit", kbit),
-        ])
-        .output()
-        .await?;
-        
-    if !output.status.success() {
-        return Err(NetworkError::BridgeError(
-            String::from_utf8_lossy(&output.stderr).to_string()
-        ));
-    }
-    
     Ok(())
 }

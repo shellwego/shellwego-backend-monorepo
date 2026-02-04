@@ -1,128 +1,71 @@
-//! eBPF/XDP programs for high-performance networking
-//! 
-//! Uses aya-rs for safe eBPF loading and management.
-
+use aya::{
+    programs::{Xdp, XdpFlags, SchedClassifier, TcAttachType},
+    Bpf,
+};
+use aya_log::BpfLogger;
 use thiserror::Error;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 pub mod firewall;
 pub mod qos;
 
 #[derive(Error, Debug)]
 pub enum EbpfError {
-    #[error("eBPF load failed: {0}")]
+    #[error("aya load failed: {0}")]
     LoadFailed(String),
-    
-    #[error("Program not attached: {0}")]
-    NotAttached(String),
-    
-    #[error("Map operation failed: {0}")]
-    MapError(String),
-    
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
+    #[error("Bpf error: {0}")]
+    Bpf(#[from] aya::BpfError),
+    #[error("Program error: {0}")]
+    Program(#[from] aya::programs::ProgramError),
 }
 
-/// eBPF program manager
+/// The heart of the data plane. Replaces legacy iptables logic.
+#[derive(Clone)]
 pub struct EbpfManager {
-    // TODO: Add loaded_programs, bpf_loader, map_fds
+    bpf: Arc<Mutex<Bpf>>,
 }
 
 impl EbpfManager {
-    /// Initialize eBPF subsystem
     pub async fn new() -> Result<Self, EbpfError> {
-        // TODO: Check kernel version (5.10+ required)
-        // TODO: Verify BPF filesystem mounted
-        // TODO: Initialize aya::BpfLoader
-        unimplemented!("EbpfManager::new")
+        let bytes = include_bytes!("../../../../target/bpf/shellwego.bin");
+        let mut bpf = Bpf::load(bytes)?;
+
+        if let Err(e) = BpfLogger::init(&mut bpf) {
+            tracing::warn!("failed to initialize eBPF logger: {}", e);
+        }
+
+        Ok(Self {
+            bpf: Arc::new(Mutex::new(bpf)),
+        })
     }
 
-    /// Load and attach XDP program to interface
-    pub async fn attach_xdp(
-        &self,
-        iface: &str,
-        program: XdpProgram,
-    ) -> Result<ProgramHandle, EbpfError> {
-        // TODO: Load eBPF ELF
-        // TODO: Set XDP mode (SKB_MODE or DRV_MODE)
-        // TODO: Attach to interface
-        unimplemented!("EbpfManager::attach_xdp")
+    pub async fn attach_firewall(&self, iface: &str) -> Result<(), EbpfError> {
+        let mut bpf = self.bpf.lock().await;
+        let program: &mut Xdp = bpf.program_mut("ingress_filter").unwrap().try_into()?;
+
+        program.load()?;
+        program.attach(iface, XdpFlags::SKB_MODE)?;
+
+        tracing::info!("XDP firewall attached to {}", iface);
+        Ok(())
     }
 
-    /// Load and attach TC (traffic control) program
-    pub async fn attach_tc(
-        &self,
-        iface: &str,
-        direction: TcDirection,
-        program: TcProgram,
-    ) -> Result<ProgramHandle, EbpfError> {
-        // TODO: Load clsact qdisc if needed
-        // TODO: Attach filter program
-        unimplemented!("EbpfManager::attach_tc")
-    }
+    pub async fn apply_qos(&self, iface: &str, limit_mbps: u32) -> Result<(), EbpfError> {
+        let mut bpf = self.bpf.lock().await;
 
-    /// Load cgroup eBPF program for socket filtering
-    pub async fn attach_cgroup(
-        &self,
-        cgroup_path: &std::path::Path,
-        program: CgroupProgram,
-    ) -> Result<ProgramHandle, EbpfError> {
-        // TODO: Open cgroup FD
-        // TODO: Attach SOCK_OPS or SOCK_ADDR program
-        unimplemented!("EbpfManager::attach_cgroup")
-    }
+        let mut rates = aya::maps::HashMap::try_from(bpf.map_mut("RATE_LIMITS").unwrap())?;
+        rates.insert(iface_to_u32(iface), limit_mbps, 0)?;
 
-    /// Detach program by handle
-    pub async fn detach(&self, handle: ProgramHandle) -> Result<(), EbpfError> {
-        // TODO: Lookup program by handle
-        // TODO: Call aya detach
-        unimplemented!("EbpfManager::detach")
-    }
+        let prog: &mut SchedClassifier = bpf.program_mut("tc_egress_limiter").unwrap().try_into()?;
+        prog.load()?;
+        prog.attach(iface, TcAttachType::Egress)?;
 
-    /// Update eBPF map entry
-    pub async fn map_update<K, V>(
-        &self,
-        map_name: &str,
-        key: &K,
-        value: &V,
-    ) -> Result<(), EbpfError> {
-        // TODO: Lookup map FD
-        // TODO: Insert or update key-value
-        unimplemented!("EbpfManager::map_update")
-    }
-
-    /// Read eBPF map entry
-    pub async fn map_lookup<K, V>(
-        &self,
-        map_name: &str,
-        key: &K,
-    ) -> Result<Option<V>, EbpfError> {
-        // TODO: Lookup map FD
-        // TODO: Lookup key, return value if exists
-        unimplemented!("EbpfManager::map_lookup")
+        tracing::info!("eBPF QoS applied to {} ({} Mbps)", iface, limit_mbps);
+        Ok(())
     }
 }
 
-/// XDP program types
-pub enum XdpProgram {
-    // TODO: Firewall, DdosProtection, LoadBalancer
+fn iface_to_u32(iface: &str) -> u32 {
+    nix::net::if_::if_nametoindex(iface).unwrap_or(0)
 }
-
-/// TC program types
-pub enum TcProgram {
-    // TODO: BandwidthLimit, LatencyInjection
-}
-
-/// Cgroup program types
-pub enum CgroupProgram {
-    // TODO: SocketFilter, ConnectHook
-}
-
-/// TC attachment direction
-pub enum TcDirection {
-    Ingress,
-    Egress,
-}
-
-/// Opaque handle to loaded program
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ProgramHandle(u64);

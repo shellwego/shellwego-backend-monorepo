@@ -53,5 +53,4 @@ tempfile = "3.8"
 
 [features]
 default = []
-# TODO: Add "metal" feature for bare metal (KVM required)
-# TODO: Add "mock" feature for testing without KVM
+metal = []

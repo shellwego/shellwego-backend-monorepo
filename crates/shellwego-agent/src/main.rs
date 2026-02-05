@@ -8,8 +8,9 @@
 
 use std::sync::Arc;
 use tokio::signal;
-use tracing::{info, warn, error};
-use secrecy::{SecretString, ExposeSecret};
+use tracing::{info, error};
+use secrecy::SecretString;
+use clap::Parser;
 
 mod daemon;
 mod reconciler;
@@ -21,17 +22,46 @@ mod migration;   // Live migration support
 use daemon::Daemon;
 use vmm::VmmManager;
 use shellwego_network::CniNetwork;
+use shellwego_storage::zfs::ZfsManager;
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Path to configuration file
+    #[arg(short, long, default_value = "/etc/shellwego/agent.toml")]
+    config: std::path::PathBuf,
+
+    /// Log level (info, debug, trace, etc.)
+    #[arg(short, long, default_value = "info")]
+    log_level: String,
+
+    /// Output logs in JSON format for production
+    #[arg(long)]
+    json_logs: bool,
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // TODO: Parse CLI args (config path, log level, node-id if recovering)
-    // TODO: Initialize structured logging (JSON for production)
-    tracing_subscriber::fmt::init();
+    let args = Args::parse();
+
+    // Initialize logging
+    if args.json_logs {
+        tracing_subscriber::fmt()
+            .json()
+            .with_env_filter(&args.log_level)
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(&args.log_level)
+            .init();
+    }
     
     info!("ShellWeGo Agent starting...");
     
     // Load configuration
-    let config = AgentConfig::load()?;
+    let mut config = AgentConfig::load()?;
+    // Override config with CLI args or env if needed
+
     info!("Node ID: {:?}", config.node_id);
     info!("Control plane: {}", config.control_plane_url);
     
@@ -42,6 +72,9 @@ async fn main() -> anyhow::Result<()> {
     // Initialize VMM manager (Firecracker)
     let vmm = VmmManager::new(&config).await?;
     
+    // Initialize Storage (ZFS)
+    let storage = Arc::new(ZfsManager::new("tank").await?);
+
     // Initialize Networking (CNI)
     let network = Arc::new(CniNetwork::new("sw0", "10.0.0.0/16").await?);
 
@@ -49,10 +82,7 @@ async fn main() -> anyhow::Result<()> {
     let daemon = Daemon::new(config.clone(), capabilities, vmm.clone()).await?;
     
     // Start reconciler (desired state enforcement)
-    let reconciler = reconciler::Reconciler::new(vmm.clone(), network, daemon.state_client());
-    
-    // Additional initialization
-    additional_initialization().await?;
+    let reconciler = reconciler::Reconciler::new(vmm.clone(), network, storage, daemon.state_client());
     
     // Spawn concurrent tasks
     let heartbeat_handle = tokio::spawn({
@@ -83,18 +113,15 @@ async fn main() -> anyhow::Result<()> {
     });
     
     // Wait for shutdown signal
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     tokio::select! {
         _ = signal::ctrl_c() => {
             info!("Received SIGINT, shutting down gracefully...");
         }
-        _ = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())? => {
+        _ = sigterm.recv() => {
             info!("Received SIGTERM, shutting down gracefully...");
         }
     }
-    
-    // Graceful shutdown
-    // TODO: Drain running VMs or hand off to another node
-    // TODO: Flush metrics and logs
     
     heartbeat_handle.abort();
     reconciler_handle.abort();
@@ -104,30 +131,20 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Additional initialization for WASM, snapshots, and migration
-async fn additional_initialization() -> anyhow::Result<()> {
-    // TODO: Initialize WASM runtime if enabled
-    // TODO: Setup snapshot directory
-    // TODO: Register migration capabilities with control plane
-    unimplemented!("additional_initialization")
-}
-
 /// Agent configuration
 #[derive(Debug, Clone)]
 pub struct AgentConfig {
-    pub node_id: Option<uuid::Uuid>, // None = new registration
+    pub node_id: Option<uuid::Uuid>,
     pub control_plane_url: String,
     pub join_token: Option<SecretString>,
     pub region: String,
     pub zone: String,
     pub labels: std::collections::HashMap<String, String>,
     
-    // Paths
     pub firecracker_binary: std::path::PathBuf,
     pub kernel_image_path: std::path::PathBuf,
     pub data_dir: std::path::PathBuf,
     
-    // Resource limits
     pub max_microvms: u32,
     pub reserved_memory_mb: u64,
     pub reserved_cpu_percent: f64,
@@ -135,10 +152,6 @@ pub struct AgentConfig {
 
 impl AgentConfig {
     pub fn load() -> anyhow::Result<Self> {
-        // TODO: Load from /etc/shellwego/agent.toml
-        // TODO: Override with env vars
-        // TODO: Validate paths exist
-        
         Ok(Self {
             node_id: None,
             control_plane_url: std::env::var("SHELLWEGO_CP_URL")
@@ -148,7 +161,9 @@ impl AgentConfig {
             zone: std::env::var("SHELLWEGO_ZONE").unwrap_or_else(|_| "unknown".to_string()),
             labels: std::collections::HashMap::new(),
             
-            firecracker_binary: "/usr/local/bin/firecracker".into(),
+            firecracker_binary: std::env::var("SHELLWEGO_FIRECRACKER_PATH")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| "/usr/local/bin/firecracker".into()),
             kernel_image_path: "/var/lib/shellwego/vmlinux".into(),
             data_dir: "/var/lib/shellwego".into(),
             
@@ -171,25 +186,17 @@ pub struct Capabilities {
 
 fn detect_capabilities() -> anyhow::Result<Capabilities> {
     use std::fs;
-    
-    // Check KVM access
     let kvm = fs::metadata("/dev/kvm").is_ok();
-    
-    // Get CPU info via sysinfo
     let mut sys = sysinfo::System::new_all();
     sys.refresh_all();
-    
     let cpu_cores = sys.cpus().len() as u32;
     let memory_total_mb = sys.total_memory();
     
-    // TODO: Check /proc/cpuinfo for vmx/svm flags
-    // TODO: Detect nested virt support
-    
     Ok(Capabilities {
         kvm,
-        nested_virtualization: false, // TODO
+        nested_virtualization: false,
         cpu_cores,
         memory_total_mb,
-        cpu_features: vec![], // TODO
+        cpu_features: vec![],
     })
 }

@@ -3,17 +3,19 @@ use tokio::time::{interval, Duration};
 use tracing::{info, debug, warn, error};
 use shellwego_network::{QuinnClient, Message, QuicConfig};
 use zeroize::{Zeroize, ZeroizeOnDrop};
+use uuid::Uuid;
 
 use crate::{AgentConfig, Capabilities};
 use crate::vmm::VmmManager;
 
 #[derive(Clone)]
 pub struct Daemon {
-    config: AgentConfig,
-    quic: Arc<QuinnClient>,
-    node_id: Arc<tokio::sync::RwLock<Option<uuid::Uuid>>>,
-    capabilities: Capabilities,
-    vmm: VmmManager,
+    pub config: AgentConfig,
+    pub quic: Arc<QuinnClient>,
+    pub node_id: Arc<tokio::sync::RwLock<Option<Uuid>>>,
+    pub capabilities: Capabilities,
+    pub vmm: VmmManager,
+    pub desired_state: Arc<tokio::sync::RwLock<DesiredState>>,
 }
 
 impl Daemon {
@@ -25,12 +27,13 @@ impl Daemon {
         let quic_conf = QuicConfig::default();
         let quic = Arc::new(QuinnClient::new(quic_conf));
 
-        let mut daemon = Self {
+        let daemon = Self {
             config,
             quic,
             node_id: Arc::new(tokio::sync::RwLock::new(None)),
             capabilities,
             vmm,
+            desired_state: Arc::new(tokio::sync::RwLock::new(DesiredState::default())),
         };
 
         daemon.register().await?;
@@ -79,9 +82,23 @@ impl Daemon {
             match self.quic.receive().await {
                 Ok(Message::ScheduleApp { app_id, image, .. }) => {
                     info!("CP ordered: Start app {}", app_id);
+                    let mut state = self.desired_state.write().await;
+                    if !state.apps.iter().any(|a| a.app_id == app_id) {
+                        state.apps.push(DesiredApp {
+                            app_id,
+                            image,
+                            command: None,
+                            memory_mb: 256,
+                            cpu_shares: 1024,
+                            env: std::collections::HashMap::new(),
+                            volumes: vec![],
+                        });
+                    }
                 }
                 Ok(Message::TerminateApp { app_id }) => {
                     info!("CP ordered: Stop app {}", app_id);
+                    let mut state = self.desired_state.write().await;
+                    state.apps.retain(|a| a.app_id != app_id);
                     let _ = self.vmm.stop(app_id).await;
                 }
                 Err(e) => {
@@ -97,19 +114,23 @@ impl Daemon {
         StateClient {
             quic: self.quic.clone(),
             node_id: self.node_id.clone(),
+            desired_state: self.desired_state.clone(),
         }
     }
 }
 
 #[derive(Clone)]
 pub struct StateClient {
-    quic: Arc<QuinnClient>,
-    node_id: Arc<tokio::sync::RwLock<Option<uuid::Uuid>>>,
+    #[allow(dead_code)]
+    pub quic: Arc<QuinnClient>,
+    #[allow(dead_code)]
+    pub node_id: Arc<tokio::sync::RwLock<Option<Uuid>>>,
+    pub desired_state: Arc<tokio::sync::RwLock<DesiredState>>,
 }
 
 impl StateClient {
     pub async fn get_desired_state(&self) -> anyhow::Result<DesiredState> {
-        Ok(DesiredState::default())
+        Ok(self.desired_state.read().await.clone())
     }
 }
 
@@ -121,26 +142,28 @@ pub struct DesiredState {
 
 #[derive(Debug, Clone, Zeroize, ZeroizeOnDrop)]
 pub struct DesiredApp {
-    pub app_id: uuid::Uuid,
+    #[zeroize(skip)]
+    pub app_id: Uuid,
     pub image: String,
     pub command: Option<Vec<String>>,
     pub memory_mb: u64,
     pub cpu_shares: u64,
     #[zeroize(skip)]
     pub env: std::collections::HashMap<String, String>,
+    #[zeroize(skip)]
     pub volumes: Vec<VolumeMount>,
 }
 
 #[derive(Debug, Clone)]
 pub struct VolumeMount {
-    pub volume_id: uuid::Uuid,
+    pub volume_id: Uuid,
     pub mount_path: String,
     pub device: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct DesiredVolume {
-    pub volume_id: uuid::Uuid,
+    pub volume_id: Uuid,
     pub dataset: String,
     pub snapshot: Option<String>,
 }

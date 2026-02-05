@@ -34,6 +34,7 @@ postcard = "1.0"
 # System info
 sysinfo = "0.30"
 nix = { version = "0.27", features = ["process", "signal", "user"] }
+gethostname = "0.4"
 
 # Firecracker / VMM
 # Using local firecracker SDK placeholder
@@ -41,7 +42,7 @@ firecracker = { path = "../shellwego-firecracker" }
 
 # Utilities
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["json", "env-filter"] }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 uuid = { workspace = true }
@@ -50,6 +51,10 @@ config = { workspace = true }
 dashmap = "6.1"
 async-trait = "0.1"
 tempfile = "3.8"
+zeroize = { version = "1.8", features = ["derive"] }
+bytes = "1.9"
+futures = "0.3"
+clap = { workspace = true }
 
 [features]
 default = []

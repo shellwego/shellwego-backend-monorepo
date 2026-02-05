@@ -1,11 +1,12 @@
 //! MicroVM configuration structures
 //! 
 //! Maps to Firecracker's API types but simplified for our use case.
+use serde::{Serialize, Deserialize};
 
 use std::path::PathBuf;
 
 /// Complete microVM configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MicrovmConfig {
     pub app_id: uuid::Uuid,
     pub vm_id: uuid::Uuid,
@@ -19,7 +20,7 @@ pub struct MicrovmConfig {
 }
 
 /// Block device configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DriveConfig {
     pub drive_id: String,
     pub path_on_host: PathBuf,
@@ -29,7 +30,7 @@ pub struct DriveConfig {
 }
 
 /// Network interface configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkInterface {
     pub iface_id: String,
     pub host_dev_name: String,

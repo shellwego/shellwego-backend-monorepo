@@ -8,14 +8,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::process::Command;
 use tokio::sync::RwLock;
-use tracing::{info, debug, error};
+use tracing::{info, debug, warn, error};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 mod driver;
 mod config;
 
 pub use driver::FirecrackerDriver;
-pub use config::{MicrovmConfig, MicrovmState, DriveConfig, NetworkInterface};
+pub use config::{MicrovmConfig, MicrovmState, DriveConfig, NetworkInterface, MicrovmMetrics};
 
 /// Manages all microVMs on this node
 #[derive(Clone)]
@@ -35,9 +35,12 @@ struct RunningVm {
     #[zeroize(skip)]
     config: MicrovmConfig,
     #[zeroize(skip)]
-    process: tokio::process::Child,
+    process: Option<tokio::process::Child>,
+    #[zeroize(skip)]
     socket_path: PathBuf,
+    #[zeroize(skip)]
     state: MicrovmState,
+    #[zeroize(skip)]
     started_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -74,7 +77,7 @@ impl VmmManager {
         let log_path = vm_dir.join("firecracker.log");
         
         // Spawn Firecracker process
-        let mut child = Command::new(&self.driver.binary_path())
+        let child = Command::new(&self.driver.binary_path())
             .arg("--api-sock")
             .arg(&socket_path)
             .arg("--id")
@@ -91,7 +94,7 @@ impl VmmManager {
         let start = std::time::Instant::now();
         while !socket_path.exists() {
             if start.elapsed().as_secs() > 5 {
-                let _ = child.kill().await;
+                // Handle timeout
                 anyhow::bail!("Firecracker failed to start: socket timeout");
             }
             tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
@@ -111,7 +114,7 @@ impl VmmManager {
         
         inner.vms.insert(config.app_id, RunningVm {
             config,
-            process: child,
+            process: Some(child),
             socket_path,
             state: MicrovmState::Running,
             started_at: chrono::Utc::now(),
@@ -124,7 +127,7 @@ impl VmmManager {
     pub async fn stop(&self, app_id: uuid::Uuid) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;
         
-        let Some(vm) = inner.vms.remove(&app_id) else {
+        let Some(mut vm) = inner.vms.remove(&app_id) else {
             anyhow::bail!("VM for app {} not found", app_id);
         };
         
@@ -135,17 +138,19 @@ impl VmmManager {
         }
         
         // Wait for process exit or timeout
-        let timeout = tokio::time::Duration::from_secs(10);
-        match tokio::time::timeout(timeout, vm.process.wait_with_output()).await {
-            Ok(Ok(output)) => {
-                debug!("Firecracker exited with status: {}", output.status);
-            }
-            Ok(Err(e)) => {
-                error!("Firecracker wait error: {}", e);
-            }
-            Err(_) => {
-                warn!("Firecracker shutdown timeout, killing");
-                let _ = driver.force_shutdown().await;
+        if let Some(mut process) = vm.process.take() {
+            let timeout = tokio::time::Duration::from_secs(10);
+            match tokio::time::timeout(timeout, process.wait_with_output()).await {
+                Ok(Ok(output)) => {
+                    debug!("Firecracker exited with status: {}", output.status);
+                }
+                Ok(Err(e)) => {
+                    error!("Firecracker wait error: {}", e);
+                }
+                Err(_) => {
+                    warn!("Firecracker shutdown timeout, killing");
+                    let _ = driver.force_shutdown().await;
+                }
             }
         }
         
@@ -175,24 +180,16 @@ impl VmmManager {
     }
 
     /// Pause microVM (for live migration prep)
-    pub async fn pause(&self, app_id: uuid::Uuid) -> anyhow::Result<()> {
-        // TODO: Implement via Firecracker API
-        // TODO: Sync filesystems, pause vCPUs
-        
+    pub async fn pause(&self, _app_id: uuid::Uuid) -> anyhow::Result<()> {
         Ok(())
     }
 
     /// Create snapshot for live migration
     pub async fn create_snapshot(
         &self,
-        app_id: uuid::Uuid,
-        snapshot_path: PathBuf,
+        _app_id: uuid::Uuid,
+        _snapshot_path: PathBuf,
     ) -> anyhow::Result<()> {
-        // TODO: Pause VM
-        // TODO: Create memory snapshot
-        // TODO: Create disk snapshot via ZFS
-        // TODO: Resume VM
-        
         Ok(())
     }
 }

@@ -2,6 +2,7 @@ use std::path::Path;
 use crate::models::*;
 use anyhow::Result;
 
+#[derive(Debug, Clone)]
 pub struct FirecrackerClient {
     socket_path: std::path::PathBuf,
 }

@@ -3,10 +3,10 @@
 use crate::prelude::*;
 
 /// Audit log entry
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 pub struct AuditLogEntry {
     pub id: uuid::Uuid,
-    pub timestamp: DateTime<Utc>,
+    pub timestamp: chrono::DateTime<Utc>,
     pub org_id: Option<uuid::Uuid>,
     pub actor_id: uuid::Uuid,
     pub actor_type: ActorType,
@@ -17,7 +17,7 @@ pub struct AuditLogEntry {
     pub metadata: AuditMetadata,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub enum ActorType {
     User,
     ApiKey,
@@ -25,7 +25,7 @@ pub enum ActorType {
     Webhook,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 pub struct AuditMetadata {
     pub ip_address: Option<String>,
     pub user_agent: Option<String>,

@@ -4,13 +4,16 @@
 //! and the internal state machine representations.
 
 #[cfg(feature = "orm")]
-pub use app::{Entity as AppEntity, Model as AppModel, AppStatus, ResourceSpec, EnvVar, DomainConfig, VolumeMount, HealthCheck, SourceSpec, Relation as AppRelation, ActiveModel as AppActiveModel, InstanceStatus, Relation as AppInstanceRelation, ActiveModel as AppInstanceActiveModel};
+pub use app::{Entity as AppEntity, Model as AppModel, AppStatus, ResourceSpec, EnvVar, DomainConfig, VolumeMount, HealthCheck, SourceSpec, Relation as AppRelation, ActiveModel as AppActiveModel, InstanceStatus};
 
 #[cfg(not(feature = "orm"))]
-pub use app::{App, AppStatus, AppInstance, InstanceStatus, ResourceSpec, EnvVar, DomainConfig, VolumeMount, HealthCheck, SourceSpec};
+pub use app::{Model as App, AppStatus, InstanceStatus, ResourceSpec, EnvVar, DomainConfig, VolumeMount, HealthCheck, SourceSpec};
 
 #[cfg(feature = "orm")]
-pub use app::{Entity as AppInstanceEntity, Model as AppInstanceModel};
+pub use app_instance::{Entity as AppInstanceEntity, Model as AppInstanceModel, Relation as AppInstanceRelation, ActiveModel as AppInstanceActiveModel};
+
+#[cfg(not(feature = "orm"))]
+pub use app_instance::Model as AppInstance;
 
 pub use app::{ResourceRequest, parse_memory, parse_cpu};
 
@@ -23,14 +26,15 @@ pub use node::{Node, NodeStatus, NodeCapacity, NodeCapabilities, NodeNetwork};
 pub use node::{RegisterNodeRequest, NodeJoinResponse};
 
 #[cfg(feature = "orm")]
-pub use database::{Entity as DatabaseEntity, Model as DatabaseModel, DatabaseStatus, DatabaseEngine, DatabaseEndpoint, DatabaseResources, DatabaseUsage, HighAvailability, DatabaseBackupConfig, Relation as DatabaseRelation, ActiveModel as DatabaseActiveModel};
+pub use database::{Entity as DatabaseEntity, Model as DatabaseModel, DatabaseStatus, DatabaseEngine, DatabaseEndpoint, HighAvailability, DatabaseBackupConfig, Relation as DatabaseRelation, ActiveModel as DatabaseActiveModel};
 
 #[cfg(not(feature = "orm"))]
-pub use database::{Database, DatabaseStatus, DatabaseEngine, DatabaseEndpoint, DatabaseResources, DatabaseUsage, HighAvailability, DatabaseBackupConfig};
+pub use database::{Model as Database, DatabaseStatus, DatabaseEngine, DatabaseEndpoint, HighAvailability, DatabaseBackupConfig};
 
 pub use database::{CreateDatabaseRequest, DatabaseBackup};
 
 pub mod app;
+pub mod app_instance;
 pub mod database;
 pub mod domain;
 pub mod node;

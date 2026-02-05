@@ -12,43 +12,55 @@ pub type DatabaseId = Uuid;
 
 /// Database engine types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, strum::Display, strum::EnumString)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-#[cfg_attr(feature = "orm", derive(sea_orm::entity::prelude::DeriveActiveEnum, sea_query::IdenStatic))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema, utoipa::ToSchema))]
+#[cfg_attr(feature = "orm", derive(sea_orm::entity::prelude::DeriveActiveEnum, sea_orm::EnumIter, sea_query::IdenStatic))]
 #[cfg_attr(feature = "orm", sea_orm(rs_type = "String", db_type = "String(StringLen::N(20))"))]
 #[serde(rename_all = "snake_case")]
 pub enum DatabaseEngine {
     #[strum(serialize = "postgres")]
+    #[cfg_attr(feature = "orm", sea_orm(string_value = "postgres"))]
     Postgres,
     #[strum(serialize = "mysql")]
+    #[cfg_attr(feature = "orm", sea_orm(string_value = "mysql"))]
     Mysql,
     #[strum(serialize = "redis")]
+    #[cfg_attr(feature = "orm", sea_orm(string_value = "redis"))]
     Redis,
     #[strum(serialize = "mongodb")]
+    #[cfg_attr(feature = "orm", sea_orm(string_value = "mongodb"))]
     Mongodb,
     #[strum(serialize = "clickhouse")]
+    #[cfg_attr(feature = "orm", sea_orm(string_value = "clickhouse"))]
     Clickhouse,
 }
 
 /// Database operational status
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, strum::Display, strum::EnumString)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-#[cfg_attr(feature = "orm", derive(sea_orm::entity::prelude::DeriveActiveEnum, sea_query::IdenStatic))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema, utoipa::ToSchema))]
+#[cfg_attr(feature = "orm", derive(sea_orm::entity::prelude::DeriveActiveEnum, sea_orm::EnumIter, sea_query::IdenStatic))]
 #[cfg_attr(feature = "orm", sea_orm(rs_type = "String", db_type = "String(StringLen::N(20))"))]
 #[serde(rename_all = "snake_case")]
 pub enum DatabaseStatus {
+    #[cfg_attr(feature = "orm", sea_orm(string_value = "provisioning"))]
     Provisioning,
+    #[cfg_attr(feature = "orm", sea_orm(string_value = "ready"))]
     Ready,
+    #[cfg_attr(feature = "orm", sea_orm(string_value = "scaling"))]
     Scaling,
+    #[cfg_attr(feature = "orm", sea_orm(string_value = "backing_up"))]
     BackingUp,
+    #[cfg_attr(feature = "orm", sea_orm(string_value = "restoring"))]
     Restoring,
+    #[cfg_attr(feature = "orm", sea_orm(string_value = "deleting"))]
     Deleting,
+    #[cfg_attr(feature = "orm", sea_orm(string_value = "error"))]
     Error,
 }
 
 /// Connection information (metadata only, secrets in separate vault)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-#[cfg_attr(feature = "orm", derive(sea_orm::FromQueryResult))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema, utoipa::ToSchema))]
+#[cfg_attr(feature = "orm", derive(sea_orm::FromJsonQueryResult))]
 pub struct DatabaseEndpoint {
     pub host: String,
     pub port: u16,
@@ -58,8 +70,8 @@ pub struct DatabaseEndpoint {
 
 /// High Availability configuration
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-#[cfg_attr(feature = "orm", derive(sea_orm::FromQueryResult))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema, utoipa::ToSchema))]
+#[cfg_attr(feature = "orm", derive(sea_orm::FromJsonQueryResult))]
 pub struct HighAvailability {
     pub enabled: bool,
     pub replicas: u32,
@@ -68,8 +80,8 @@ pub struct HighAvailability {
 
 /// Backup configuration
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-#[cfg_attr(feature = "orm", derive(sea_orm::FromQueryResult))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema, utoipa::ToSchema))]
+#[cfg_attr(feature = "orm", derive(sea_orm::FromJsonQueryResult))]
 pub struct DatabaseBackupConfig {
     pub enabled: bool,
     pub retention_days: u32,
@@ -78,10 +90,10 @@ pub struct DatabaseBackupConfig {
 
 /// Database entity
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema, utoipa::ToSchema))]
 #[cfg_attr(feature = "orm", derive(DeriveEntityModel))]
 #[cfg_attr(feature = "orm", sea_orm(table_name = "databases"))]
-pub struct Database {
+pub struct Model {
     #[cfg_attr(feature = "orm", sea_orm(primary_key, auto_increment = false))]
     pub id: DatabaseId,
     pub name: String,
@@ -97,8 +109,8 @@ pub struct Database {
     #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary"))]
     pub backup_config: DatabaseBackupConfig,
     pub organization_id: Uuid,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    pub created_at: chrono::DateTime<Utc>,
+    pub updated_at: chrono::DateTime<Utc>,
 }
 
 #[cfg(feature = "orm")]
@@ -109,8 +121,8 @@ pub enum Relation {}
 impl ActiveModelBehavior for ActiveModel {}
 
 /// Create database request
-#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, Validate, PartialEq)]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema, utoipa::ToSchema))]
 pub struct CreateDatabaseRequest {
     pub name: String,
     pub engine: DatabaseEngine,
@@ -121,12 +133,12 @@ pub struct CreateDatabaseRequest {
 }
 
 /// Database backup metadata
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema, utoipa::ToSchema))]
 pub struct DatabaseBackup {
     pub id: Uuid,
     pub database_id: DatabaseId,
-    pub created_at: DateTime<Utc>,
+    pub created_at: chrono::DateTime<Utc>,
     pub size_bytes: u64,
     pub status: String,
 }

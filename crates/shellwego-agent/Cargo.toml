@@ -37,7 +37,7 @@ nix = { version = "0.27", features = ["process", "signal", "user"] }
 
 # Firecracker / VMM
 # Using local firecracker SDK placeholder
-firecracker = { path = "../shellwego-firecracker" }
+shellwego-firecracker = { path = "../shellwego-firecracker" }
 
 # Utilities
 tracing = { workspace = true }

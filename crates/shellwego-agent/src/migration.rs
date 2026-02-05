@@ -10,7 +10,6 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{info, debug};
 use uuid::Uuid;
-use tokio::io::AsyncWriteExt;
 
 use crate::snapshot::{SnapshotManager, SnapshotInfo};
 use crate::vmm::VmmManager;
@@ -94,7 +93,7 @@ impl MigrationManager {
         // Store session
         let mut sessions = self.sessions.write().await;
         sessions.insert(session_id, MigrationSession {
-            handle: handle.clone(),
+            _handle: handle.clone(),
             transfer_status: transfer_result.ok(),
         });
         
@@ -222,7 +221,7 @@ pub trait MigrationTransport {
 /// Migration session state
 #[derive(Debug)]
 struct MigrationSession {
-    handle: MigrationHandle,
+    _handle: MigrationHandle,
     transfer_status: Option<u64>,
 }
 
@@ -347,8 +346,8 @@ impl MigrationTransport for HttpMigrationTransport {
     
     async fn receive_snapshot(
         &self,
-        snapshot_id: &str,
-        source_node: &str,
+        _snapshot_id: &str,
+        _source_node: &str,
     ) -> anyhow::Result<SnapshotInfo> {
         // In a real scenario, this initiates a pull or confirms a push.
         // For this implementation, we assume the snapshot was pushed to us 

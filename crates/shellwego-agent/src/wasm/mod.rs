@@ -4,10 +4,10 @@
 
 use thiserror::Error;
 use std::sync::Arc;
-use wasmtime::{Linker, Store, Engine};
+use wasmtime::{Linker, Store};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder};
 use tokio::sync::Mutex;
-use std::path::Path;
+use wasi_common::pipe::WritePipe;
 
 pub mod runtime;
 use runtime::WasmtimeRuntime;
@@ -38,7 +38,7 @@ pub enum WasmError {
 pub struct WasmRuntime {
     runtime: WasmtimeRuntime,
     // Store modules in memory for "warm" starts
-    module_cache: Arc<Mutex<std::collections::HashMap<String, CompiledModule>>>,
+    _module_cache: Arc<Mutex<std::collections::HashMap<String, CompiledModule>>>,
 }
 
 impl WasmRuntime {
@@ -47,7 +47,7 @@ impl WasmRuntime {
         let runtime = WasmtimeRuntime::new(config)?;
         Ok(Self {
             runtime,
-            module_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            _module_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
         })
     }
 
@@ -71,8 +71,8 @@ impl WasmRuntime {
             .map_err(|e| WasmError::InstantiateError(e.to_string()))?;
 
         // Setup Pipes
-        let stdout = wasmtime_wasi::pipe::WritePipe::new_in_memory();
-        let stderr = wasmtime_wasi::pipe::WritePipe::new_in_memory();
+        let stdout = WritePipe::new_in_memory();
+        let stderr = WritePipe::new_in_memory();
         
         // Setup WASI context
         let mut builder = WasiCtxBuilder::new();
@@ -96,8 +96,8 @@ impl WasmRuntime {
         Ok(WasmInstance {
             store: Arc::new(Mutex::new(store)),
             instance,
-            stdout,
-            stderr,
+            _stdout: stdout,
+            _stderr: stderr,
         })
     }
 }
@@ -116,8 +116,8 @@ pub struct CompiledModule {
 pub struct WasmInstance {
     store: Arc<Mutex<Store<WasmContext>>>,
     instance: wasmtime::Instance,
-    stdout: wasmtime_wasi::pipe::WritePipe<std::io::Cursor<Vec<u8>>>,
-    stderr: wasmtime_wasi::pipe::WritePipe<std::io::Cursor<Vec<u8>>>,
+    _stdout: WritePipe<std::io::Cursor<Vec<u8>>>,
+    _stderr: WritePipe<std::io::Cursor<Vec<u8>>>,
 }
 
 impl WasmInstance {

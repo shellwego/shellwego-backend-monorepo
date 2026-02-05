@@ -1,12 +1,13 @@
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::{interval, Duration};
-use tracing::{info, warn, error, debug};
+use tracing::{info, warn, error};
 use shellwego_network::{QuinnClient, Message, QuicConfig};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::{AgentConfig, Capabilities};
 use crate::vmm::VmmManager;
+use crate::metrics::MetricsCollector;
 
 #[derive(Clone)]
 pub struct Daemon {
@@ -14,8 +15,9 @@ pub struct Daemon {
     quic: Arc<Mutex<QuinnClient>>,
     node_id: Arc<tokio::sync::RwLock<Option<uuid::Uuid>>>,
     capabilities: Capabilities,
-    vmm: VmmManager,
+    _vmm: VmmManager,
     state_cache: Arc<tokio::sync::RwLock<DesiredState>>,
+    metrics: Arc<MetricsCollector>,
 }
 
 impl Daemon {
@@ -23,6 +25,7 @@ impl Daemon {
         config: AgentConfig,
         capabilities: Capabilities,
         vmm: VmmManager,
+        metrics: Arc<MetricsCollector>,
     ) -> anyhow::Result<Self> {
         let quic_conf = QuicConfig::default();
         let quic = Arc::new(Mutex::new(QuinnClient::new(quic_conf)));
@@ -32,8 +35,9 @@ impl Daemon {
             quic,
             node_id: Arc::new(tokio::sync::RwLock::new(None)),
             capabilities,
-            vmm,
+            _vmm: vmm,
             state_cache: Arc::new(tokio::sync::RwLock::new(DesiredState::default())),
+            metrics,
         };
 
         daemon.register().await?;
@@ -47,7 +51,10 @@ impl Daemon {
 
         let msg = Message::Register {
             hostname: gethostname::gethostname().to_string_lossy().to_string(),
-            capabilities: vec!["kvm".to_string()],
+            capabilities: vec![
+                format!("kvm={}", self.capabilities.kvm),
+                format!("cores={}", self.capabilities.cpu_cores),
+            ],
         };
 
         self.quic.lock().await.send(msg).await?;
@@ -63,11 +70,12 @@ impl Daemon {
             ticker.tick().await;
 
             let node_id = *self.node_id.read().await;
+            let stats = self.metrics.get_snapshot();
 
             let msg = Message::Heartbeat {
                 node_id: node_id.unwrap_or_default(),
-                cpu_usage: 0.0,
-                memory_usage: 0.0,
+                cpu_usage: stats.cpu_usage_percent as f64,
+                memory_usage: (stats.memory_used as f64 / stats.memory_total as f64) * 100.0,
             };
 
             if let Err(e) = self.quic.lock().await.send(msg).await {
@@ -116,8 +124,8 @@ impl Daemon {
 
     pub fn state_client(&self) -> StateClient {
         StateClient {
-            quic: self.quic.clone(),
-            node_id: self.node_id.clone(),
+            _quic: self.quic.clone(),
+            _node_id: self.node_id.clone(),
             state_cache: self.state_cache.clone(),
         }
     }
@@ -125,8 +133,8 @@ impl Daemon {
 
 #[derive(Clone)]
 pub struct StateClient {
-    quic: Arc<Mutex<QuinnClient>>,
-    node_id: Arc<tokio::sync::RwLock<Option<uuid::Uuid>>>,
+    _quic: Arc<Mutex<QuinnClient>>,
+    _node_id: Arc<tokio::sync::RwLock<Option<uuid::Uuid>>>,
     state_cache: Arc<tokio::sync::RwLock<DesiredState>>,
 }
 

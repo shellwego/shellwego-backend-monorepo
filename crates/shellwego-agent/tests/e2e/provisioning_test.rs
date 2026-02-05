@@ -52,7 +52,8 @@ async fn test_cold_start_gauntlet_tc_e2e_1() {
     let app_id = Uuid::new_v4();
     let vm_id = Uuid::new_v4();
 
-    let vmm_manager = VmmManager::new(&test_config()).await.expect("VMM init failed");
+    let metrics = std::sync::Arc::new(shellwego_agent::metrics::MetricsCollector::new(Uuid::new_v4()));
+    let vmm_manager = VmmManager::new(&test_config(), metrics).await.expect("VMM init failed");
     let zfs_manager = ZfsManager::new("shellwego").await.expect("ZFS init failed");
 
     let rootfs_path = zfs_manager.init_app_storage(app_id).await.expect("ZFS init failed");
@@ -138,7 +139,8 @@ async fn test_secret_injection_security_tc_e2e_2() {
     let secrets_path = std::path::Path::new(&secrets_dir).join("env.json");
     tokio::fs::write(&secrets_path, secrets_content).await.expect("Failed to write secrets");
 
-    let vmm_manager = VmmManager::new(&test_config()).await.expect("VMM init failed");
+    let metrics = std::sync::Arc::new(shellwego_agent::metrics::MetricsCollector::new(Uuid::new_v4()));
+    let vmm_manager = VmmManager::new(&test_config(), metrics).await.expect("VMM init failed");
     let zfs_manager = ZfsManager::new("shellwego").await.expect("ZFS init failed");
     let rootfs_path = zfs_manager.init_app_storage(app_id).await.expect("ZFS init failed");
 
@@ -197,7 +199,8 @@ async fn test_secret_injection_security_tc_e2e_2() {
 async fn test_no_downtime_reconciliation_tc_e2e_3() {
     hardware_checks();
 
-    let vmm_manager = VmmManager::new(&test_config()).await.expect("VMM init failed");
+    let metrics = std::sync::Arc::new(shellwego_agent::metrics::MetricsCollector::new(Uuid::new_v4()));
+    let vmm_manager = VmmManager::new(&test_config(), metrics).await.expect("VMM init failed");
     let zfs_manager = ZfsManager::new("shellwego").await.expect("ZFS init failed");
 
     let app_id = Uuid::new_v4();
@@ -260,7 +263,8 @@ async fn test_full_provisioning_pipeline() {
     let app_id = Uuid::new_v4();
     let vm_id = Uuid::new_v4();
 
-    let vmm_manager = VmmManager::new(&test_config()).await.expect("VMM init failed");
+    let metrics = std::sync::Arc::new(shellwego_agent::metrics::MetricsCollector::new(Uuid::new_v4()));
+    let vmm_manager = VmmManager::new(&test_config(), metrics).await.expect("VMM init failed");
     let zfs_manager = ZfsManager::new("shellwego").await.expect("ZFS init failed");
 
     let rootfs_path = zfs_manager.init_app_storage(app_id).await.expect("ZFS init failed");

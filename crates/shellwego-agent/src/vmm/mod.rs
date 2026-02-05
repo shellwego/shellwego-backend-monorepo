@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::process::Command;
 use tokio::sync::RwLock;
-use tracing::{info, debug, error, warn};
+use tracing::{info, error, warn};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 mod driver;
@@ -17,12 +17,15 @@ mod config;
 pub use driver::FirecrackerDriver;
 pub use config::{MicrovmConfig, MicrovmState, DriveConfig, NetworkInterface, MicrovmMetrics};
 
+use crate::metrics::MetricsCollector;
+
 /// Manages all microVMs on this node
 #[derive(Clone)]
 pub struct VmmManager {
     inner: Arc<RwLock<VmmInner>>,
     driver: FirecrackerDriver,
     data_dir: PathBuf,
+    metrics: Arc<MetricsCollector>,
 }
 
 struct VmmInner {
@@ -45,7 +48,7 @@ struct RunningVm {
 }
 
 impl VmmManager {
-    pub async fn new(config: &crate::AgentConfig) -> anyhow::Result<Self> {
+    pub async fn new(config: &crate::AgentConfig, metrics: Arc<MetricsCollector>) -> anyhow::Result<Self> {
         let driver = FirecrackerDriver::new(&config.firecracker_binary).await?;
         
         // Ensure runtime directories exist
@@ -59,6 +62,7 @@ impl VmmManager {
             })),
             driver,
             data_dir: config.data_dir.clone(),
+            metrics,
         })
     }
 
@@ -112,6 +116,7 @@ impl VmmManager {
             config.vm_id, config.app_id, config.memory_mb, config.cpu_shares
         );
         
+        self.metrics.record_spawn(start.elapsed().as_millis() as u64, true);
         inner.vms.insert(config.app_id, RunningVm {
             config,
             process: Some(child),
@@ -213,11 +218,10 @@ impl VmmManager {
                 mem_path.to_str().unwrap(),
                 snap_path.to_str().unwrap()
             ).await?;
-            Ok(())
+            return Ok(());
         } else {
             anyhow::bail!("VM not found for snapshotting");
         }
-        Ok(())
     }
 
     /// Create snapshot for live migration

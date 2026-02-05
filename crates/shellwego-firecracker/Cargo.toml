@@ -1,5 +1,5 @@
 [package]
-name = "firecracker"
+name = "shellwego-firecracker"
 version = "0.4.0"
 edition = "2021"
 authors = ["ShellWeGo Contributors"]

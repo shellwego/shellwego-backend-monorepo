@@ -11,8 +11,8 @@
 //! - Easier maintenance
 
 use std::path::{Path, PathBuf};
-use firecracker::vmm::client::FirecrackerClient;
-pub use firecracker::models::{InstanceInfo, VmState, BootSource, MachineConfig, Drive, NetworkInterface, ActionInfo, SnapshotCreateParams, SnapshotLoadParams, Vm, Metrics};
+use shellwego_firecracker::vmm::client::FirecrackerClient;
+pub use shellwego_firecracker::models::{InstanceInfo, VmState, BootSource, MachineConfig, Drive, NetworkInterface, ActionInfo, SnapshotCreateParams, SnapshotLoadParams, Vm, Metrics};
 
 /// Firecracker API driver for a specific VM socket
 pub struct FirecrackerDriver {
@@ -417,6 +417,7 @@ impl FirecrackerDriver {
 
 // === Helper functions for converting between types ===
 
+/*
 impl FirecrackerDriver {
     /// Convert firecracker-rs VmState to MicrovmState
     fn to_microvm_state(_state: VmState) -> super::MicrovmState {
@@ -430,3 +431,4 @@ impl FirecrackerDriver {
         }
     }
 }
+*/

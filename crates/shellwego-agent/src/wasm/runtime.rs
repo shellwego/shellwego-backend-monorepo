@@ -2,7 +2,6 @@
 
 use crate::wasm::{WasmError, WasmConfig, CompiledModule};
 use wasmtime::{Engine, Config, Module};
-use anyhow::Context;
 
 /// Wasmtime runtime wrapper
 #[derive(Clone)]
@@ -12,7 +11,7 @@ pub struct WasmtimeRuntime {
 
 impl WasmtimeRuntime {
     /// Create engine with custom config
-    pub fn new(config: &WasmConfig) -> Result<Self, WasmError> {
+    pub fn new(_config: &WasmConfig) -> Result<Self, WasmError> {
         let mut wasm_config = Config::new();
         
         // Security & Performance defaults

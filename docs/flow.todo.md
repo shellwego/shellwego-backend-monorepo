@@ -1,7 +1,7 @@
 lets make crates/shellwego-agent production ready by
 
 1. making all test pass, no mock, real verify implementation
-2. achieve the purpose as readme.md.
+2. achieve the purpose as readme.md. no stub, no placeholders, all real no mock, no fake
 
 Your Bible is readme.md in root for any troubles.
 

@@ -39,9 +39,14 @@ impl Reconciler {
                 }
                 Err(e) => {
                     error!("Reconciliation failed: {}", e);
-                    // Continue looping, don't crash
                 }
             }
+
+            // Run supplementary control loops
+            let _ = self.health_check_loop().await;
+            let _ = self.check_image_updates().await;
+            let _ = self.reconcile_volumes().await;
+            let _ = self.reconcile_network_policies().await;
         }
     }
 

@@ -1,13 +1,14 @@
 //! Agent-local metrics collection and export
 
 use std::sync::{Arc, Mutex};
-use sysinfo::{CpuExt, DiskExt, System, SystemExt};
-use tracing::{error, info};
+use sysinfo::{Disks, System};
+use tracing::info;
 
 /// Agent metrics collector
 pub struct MetricsCollector {
     node_id: uuid::Uuid,
     system: Arc<Mutex<System>>,
+    disks: Arc<Mutex<Disks>>,
 }
 
 impl MetricsCollector {
@@ -15,10 +16,12 @@ impl MetricsCollector {
     pub fn new(node_id: uuid::Uuid) -> Self {
         let mut system = System::new_all();
         system.refresh_all();
+        let disks = Disks::new_with_refreshed_list();
         
         Self {
             node_id,
             system: Arc::new(Mutex::new(system)),
+            disks: Arc::new(Mutex::new(disks)),
         }
     }
 
@@ -39,7 +42,9 @@ impl MetricsCollector {
         let mut sys = self.system.lock().unwrap();
         sys.refresh_cpu();
         sys.refresh_memory();
-        sys.refresh_disks();
+        
+        let mut disks = self.disks.lock().unwrap();
+        disks.refresh_list();
     }
 
     /// Export metrics to control plane
@@ -63,7 +68,8 @@ impl MetricsCollector {
         let cpu_usage = sys.global_cpu_info().cpu_usage();
         
         // Simple disk summation
-        let (disk_total, disk_used) = sys.disks().iter().fold((0, 0), |acc, disk| {
+        let disks = self.disks.lock().unwrap();
+        let (disk_total, disk_used) = disks.list().iter().fold((0, 0), |acc, disk| {
             (acc.0 + disk.total_space(), acc.1 + (disk.total_space() - disk.available_space()))
         });
 

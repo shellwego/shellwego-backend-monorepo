@@ -54,6 +54,7 @@ zeroize = { version = "1.7", features = ["derive"] }
 bytes = "1.5"
 gethostname = "0.4"
 futures = "0.3"
+libc = "0.2"
 
 # WASM Runtime
 wasmtime = "14.0"

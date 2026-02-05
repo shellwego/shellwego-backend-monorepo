@@ -4,10 +4,12 @@ use std::io::{Read, Write};
 use shellwego_agent::vmm::{FirecrackerDriver, MicrovmConfig, DriveConfig, NetworkInterface};
 use uuid::Uuid;
 
-fn kvm_required() {
+fn kvm_available() -> bool {
     if !PathBuf::from("/dev/kvm").exists() {
-        panic!("SKIPPING: No /dev/kvm found. This test requires hardware acceleration.");
+        println!("SKIPPING: No /dev/kvm found. This test requires hardware acceleration.");
+        return false;
     }
+    true
 }
 
 #[tokio::test]
@@ -21,7 +23,7 @@ async fn test_firecracker_driver_new_binary_missing() {
 
 #[tokio::test]
 async fn test_firecracker_driver_new_binary_exists() {
-    kvm_required();
+    if !kvm_available() { return; }
 
     let paths = vec![
         PathBuf::from("/usr/local/bin/firecracker"),
@@ -40,17 +42,19 @@ async fn test_firecracker_driver_new_binary_exists() {
     }
 
     if !found {
-        panic!("No Firecracker binary found in standard locations");
+        println!("SKIPPING: No Firecracker binary found in standard locations");
+        return;
     }
 }
 
 #[tokio::test]
 async fn test_firecracker_api_handshake_tc_i1() {
-    kvm_required();
+    if !kvm_available() { return; }
 
     let bin_path = PathBuf::from("/usr/local/bin/firecracker");
     if !bin_path.exists() {
-        panic!("Firecracker binary not found at {:?}", bin_path);
+        println!("SKIPPING: Firecracker binary not found at {:?}", bin_path);
+        return;
     }
 
     let driver = FirecrackerDriver::new(&bin_path).await.expect("Binary missing");
@@ -59,11 +63,12 @@ async fn test_firecracker_api_handshake_tc_i1() {
 
 #[tokio::test]
 async fn test_firecracker_version_via_uds() {
-    kvm_required();
+    if !kvm_available() { return; }
 
     let bin_path = PathBuf::from("/usr/local/bin/firecracker");
     if !bin_path.exists() {
-        panic!("Firecracker binary not found");
+        println!("SKIPPING: Firecracker binary not found");
+        return;
     }
 
     let socket_path = tempfile::NamedTempFile::new().unwrap().path().with_extension("sock");

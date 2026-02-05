@@ -4,25 +4,28 @@ use shellwego_agent::vmm::{VmmManager, MicrovmConfig, DriveConfig, NetworkInterf
 use shellwego_storage::zfs::ZfsManager;
 use uuid::Uuid;
 
-fn hardware_checks() {
+fn hardware_checks() -> bool {
     if !PathBuf::from("/dev/kvm").exists() {
-        panic!("FATAL: /dev/kvm not found. Cannot run e2e tests without KVM.");
+        println!("SKIPPING: /dev/kvm not found. Cannot run e2e tests without KVM.");
+        return false;
     }
 
     let output = std::process::Command::new("zpool")
         .arg("list")
         .arg("shellwego")
-        .output()
-        .expect("Failed to check ZFS pool");
+        .output();
 
-    if !output.status.success() {
-        panic!("FATAL: ZFS pool 'shellwego' not found. Run: sudo zpool create shellwego <devices>");
+    if !output.map(|o| o.status.success()).unwrap_or(false) {
+        println!("SKIPPING: ZFS pool 'shellwego' not found. Run setup script.");
+        return false;
     }
 
     let bin_path = PathBuf::from("/usr/local/bin/firecracker");
     if !bin_path.exists() {
-        panic!("FATAL: Firecracker binary not found at {:?}", bin_path);
+        println!("SKIPPING: Firecracker binary not found at {:?}", bin_path);
+        return false;
     }
+    true
 }
 
 fn test_config() -> shellwego_agent::AgentConfig {
@@ -45,7 +48,7 @@ fn test_config() -> shellwego_agent::AgentConfig {
 #[tokio::test]
 #[ignore]
 async fn test_cold_start_gauntlet_tc_e2e_1() {
-    hardware_checks();
+    if !hardware_checks() { return; }
 
     let start_time = std::time::Instant::now();
     let app_id = Uuid::new_v4();
@@ -128,7 +131,7 @@ async fn test_cold_start_gauntlet_tc_e2e_1() {
 #[tokio::test]
 #[ignore]
 async fn test_secret_injection_security_tc_e2e_2() {
-    hardware_checks();
+    if !hardware_checks() { return; }
 
     let app_id = Uuid::new_v4();
     let vm_id = Uuid::new_v4();
@@ -197,7 +200,7 @@ async fn test_secret_injection_security_tc_e2e_2() {
 #[tokio::test]
 #[ignore]
 async fn test_no_downtime_reconciliation_tc_e2e_3() {
-    hardware_checks();
+    if !hardware_checks() { return; }
 
     let metrics = std::sync::Arc::new(shellwego_agent::metrics::MetricsCollector::new(Uuid::new_v4()));
     let vmm_manager = VmmManager::new(&test_config(), metrics).await.expect("VMM init failed");
@@ -258,7 +261,7 @@ async fn test_no_downtime_reconciliation_tc_e2e_3() {
 #[tokio::test]
 #[ignore]
 async fn test_full_provisioning_pipeline() {
-    hardware_checks();
+    if !hardware_checks() { return; }
 
     let app_id = Uuid::new_v4();
     let vm_id = Uuid::new_v4();

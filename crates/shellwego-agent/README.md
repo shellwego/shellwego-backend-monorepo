@@ -5,3 +5,10 @@
 - **WASM:** Alternative `wasmtime` runtime for <10ms cold starts on serverless-style functions.
 - **Reconciler:** A K8s-style control loop that converges local state with CP orders.
 - **Live Migration:** Snapshot-based VM migration (work in progress).
+
+## Testing
+
+Integration tests require **Firecracker**, **ZFS**, and **Root privileges** (for CNI/Tap creation). 
+Use the setup script to prepare a dev environment (Ubuntu/Debian):
+
+

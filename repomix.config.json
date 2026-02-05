@@ -30,7 +30,7 @@
   "include": [
     "crates/shellwego-agent",
     // "crates/shellwego-firecracker",
-    "readme.md"
+    // "readme.md"
     // "crates/shellwego-storage"
   ],
   "ignore": {

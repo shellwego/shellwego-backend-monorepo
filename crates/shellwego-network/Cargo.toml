@@ -13,22 +13,26 @@ description = "Network drivers: CNI plugins, bridge setup, eBPF filtering"
 tokio = { workspace = true, features = ["process", "rt", "net"] }
 serde = { workspace = true, features = ["derive"] }
 postcard = { version = "1.0", features = ["use-std"] }
+uuid = { workspace = true }
+futures-util = "0.3"
 
 # DNS for service discovery (hickory-dns - trust-dns successor)
 hickory-resolver = { version = "0.24", features = ["tokio-runtime", "system-config"] }
 
-quinn = { version = "0.11", optional = true }
-rustls = { version = "0.23", features = ["ring"], optional = true }
-webpki = { version = "0.22", features = ["std"], optional = true }
-rcgen = { version = "0.11", optional = true }
+quinn = { version = "0.11", features = ["rustls"], optional = true }
+rustls = { version = "0.23", optional = true }
+rustls-pki-types = { version = "1.0", optional = true }
+rustls-pemfile = { version = "2.1", optional = true }
+webpki = { workspace = true, optional = true }
+rcgen = { workspace = true, optional = true }
 
 # Netlink for network interface management
 rtnetlink = "0.14"
 netlink-packet-route = "0.14"
 
 # eBPF - Moving from "future" to "foundation"
-aya = { version = "0.12", features = ["async_tokio"], optional = true }
-aya-log = { version = "0.2", optional = true }
+aya = { workspace = true, features = ["async_tokio"], optional = true }
+aya-log = { workspace = true, optional = true }
 
 # IP address management
 ipnetwork = "0.20"
@@ -42,10 +46,10 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 
 # System interface
-nix = { version = "0.27", features = ["net"], optional = true }
+nix = { version = "0.27", features = ["net"] }
 libc = "0.2"
 
 [features]
 default = ["quinn"]
-ebpf = ["aya", "aya-log", "nix"]
-quinn = ["dep:quinn", "dep:rustls", "dep:webpki", "dep:rcgen"]
+ebpf = ["aya", "aya-log"]
+quinn = ["dep:quinn", "dep:rustls", "dep:rustls-pki-types", "dep:rustls-pemfile", "dep:webpki", "dep:rcgen"]

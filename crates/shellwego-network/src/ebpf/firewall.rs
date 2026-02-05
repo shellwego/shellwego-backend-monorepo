@@ -1,21 +1,22 @@
 //! XDP-based firewall for DDoS protection and filtering
 
-use crate::ebpf::{EbpfManager, EbpfError, XdpProgram, ProgramHandle};
+use crate::ebpf::{EbpfManager, EbpfError};
 
 /// XDP firewall controller
 pub struct XdpFirewall {
-    // TODO: Add ebpf_manager, attached_handles, rules_map
+    _manager: EbpfManager,
 }
 
 impl XdpFirewall {
     /// Create new firewall instance
     pub fn new(manager: &EbpfManager) -> Self {
-        // TODO: Store reference to manager
-        unimplemented!("XdpFirewall::new")
+        Self {
+            _manager: manager.clone(),
+        }
     }
 
     /// Attach firewall to network interface
-    pub async fn attach(&mut self, iface: &str) -> Result<(), EbpfError> {
+    pub async fn attach(&mut self, _iface: &str) -> Result<(), EbpfError> {
         // TODO: Load xdp_firewall.o
         // TODO: Attach XDP program
         // TODO: Store handle for later detach
@@ -23,14 +24,14 @@ impl XdpFirewall {
     }
 
     /// Add IP to blocklist
-    pub async fn block_ip(&self, ip: std::net::IpAddr) -> Result<(), EbpfError> {
+    pub async fn block_ip(&self, _ip: std::net::IpAddr) -> Result<(), EbpfError> {
         // TODO: Convert IP to u32/u128
         // TODO: Insert into blocked_ips map
         unimplemented!("XdpFirewall::block_ip")
     }
 
     /// Remove IP from blocklist
-    pub async fn unblock_ip(&self, ip: std::net::IpAddr) -> Result<(), EbpfError> {
+    pub async fn unblock_ip(&self, _ip: std::net::IpAddr) -> Result<(), EbpfError> {
         // TODO: Remove from blocked_ips map
         unimplemented!("XdpFirewall::unblock_ip")
     }
@@ -38,8 +39,8 @@ impl XdpFirewall {
     /// Add rate limit rule
     pub async fn add_rate_limit(
         &self,
-        ip: std::net::IpAddr,
-        packets_per_sec: u32,
+        _ip: std::net::IpAddr,
+        _packets_per_sec: u32,
     ) -> Result<(), EbpfError> {
         // TODO: Insert into rate_limits map
         unimplemented!("XdpFirewall::add_rate_limit")

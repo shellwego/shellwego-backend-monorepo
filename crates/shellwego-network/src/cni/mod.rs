@@ -4,7 +4,8 @@
 //! Compatible with standard CNI plugins but optimized for Firecracker.
 
 use std::net::Ipv4Addr;
-use tracing::{info, debug, warn};
+use tracing::{info, debug};
+use uuid::Uuid;
 
 use crate::{
     NetworkConfig, NetworkSetup, NetworkError,
@@ -51,7 +52,7 @@ impl CniNetwork {
         Ok(Self {
             bridge,
             ipam,
-            ebpf: EbpfManager::new().await?,
+            ebpf: EbpfManager::new().await.map_err(|e| NetworkError::InvalidConfig(e.to_string()))?,
             mtu: 1500,
         })
     }
@@ -78,9 +79,9 @@ impl CniNetwork {
         
         // Replaced legacy tc-htb with eBPF-QoS
         if let Some(limit_mbps) = config.bandwidth_limit_mbps {
-            self.ebpf.apply_qos(&config.tap_name, limit_mbps).await?;
+            self.ebpf.apply_qos(&config.tap_name, limit_mbps).await.map_err(|e| NetworkError::InvalidConfig(e.to_string()))?;
         }
-        self.ebpf.attach_firewall(&config.tap_name).await?;
+        self.ebpf.attach_firewall(&config.tap_name).await.map_err(|e| NetworkError::InvalidConfig(e.to_string()))?;
         
         info!(
             "Network ready for {}: TAP {} with IP {}/{}",
@@ -96,7 +97,7 @@ impl CniNetwork {
     }
 
     /// Teardown network for a microVM
-    pub async fn teardown(&self, app_id: uuid::Uuid, tap_name: &str) -> Result<(), NetworkError> {
+    pub async fn teardown(&self, app_id: Uuid, tap_name: &str) -> Result<(), NetworkError> {
         debug!("Tearing down network for {}", app_id);
         
         // Release IP
@@ -118,6 +119,8 @@ impl CniNetwork {
 }
 
 async fn enable_ip_forwarding() -> Result<(), NetworkError> {
+    // This will likely fail if not root, but that's expected at runtime.
+    // For build it's fine.
     tokio::fs::write("/proc/sys/net/ipv4/ip_forward", "1").await
         .map_err(|e| NetworkError::Io(e))?;
         

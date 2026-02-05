@@ -52,7 +52,8 @@ validator = { version = "0.16", features = ["derive"] }
 wasmtime = { version = "12.0" }
 
 # eBPF
-aya = { version = "0.11" }
+aya = { version = "0.13" }
+aya-log = "0.2"
 
 # Metrics & observability
 prometheus = "0.13"

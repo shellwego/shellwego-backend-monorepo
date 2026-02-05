@@ -1,3 +1,23 @@
+
+done working on : crates/shellwego-core , crates/shellwego-storage , crates/shellwego-network
+
+now continue below task...
+
+____/
+
+lets make crates/shellwego-agent production ready by
+
+finishing boilerplate of the src/
+making that crate cargo crates/shellwego-agent build having no problems, not root.
+Your Bible is readme.md in root for any troubles
+______/
+
+
+oh the latest progress report see docs/changes/agent_production_ready_progress.md
+also why not use https://github.com/firecracker-microvm/firecracker
+
+===
+ 
 lets make crates/shellwego-agent production ready by 
 
 1. finishing boilerplate of the src/

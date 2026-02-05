@@ -4,10 +4,11 @@
 //! - Bridge creation and management
 //! - TAP device allocation
 //! - IPAM (IP address management)
-//! - eBPF-based filtering and QoS (future)
+//! - eBPF-based filtering and QoS
 
 use std::net::Ipv4Addr;
 use thiserror::Error;
+use uuid::Uuid;
 
 pub mod cni;
 pub mod bridge;
@@ -15,6 +16,9 @@ pub mod tap;
 pub mod ipam;
 pub mod discovery;
 pub mod quinn;
+pub mod ebpf;
+pub mod vxlan;
+pub mod wireguard;
 
 pub use cni::CniNetwork;
 pub use bridge::Bridge;
@@ -25,8 +29,8 @@ pub use quinn::{QuinnClient, QuinnServer, Message, QuicConfig, AgentConnection};
 /// Network configuration for a microVM
 #[derive(Debug, Clone)]
 pub struct NetworkConfig {
-    pub app_id: uuid::Uuid,
-    pub vm_id: uuid::Uuid,
+    pub app_id: Uuid,
+    pub vm_id: Uuid,
     pub bridge_name: String,
     pub tap_name: String,
     pub guest_mac: String,
@@ -79,7 +83,7 @@ pub enum NetworkError {
 }
 
 /// Generate deterministic MAC address from UUID
-pub fn generate_mac(uuid: &uuid::Uuid) -> String {
+pub fn generate_mac(uuid: &Uuid) -> String {
     let bytes = uuid.as_bytes();
     // Locally administered unicast MAC
     format!(
@@ -102,4 +106,30 @@ pub fn parse_mac(mac: &str) -> Result<[u8; 6], NetworkError> {
     }
     
     Ok(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_generate_mac() {
+        let uuid = Uuid::nil();
+        let mac = generate_mac(&uuid);
+        assert_eq!(mac, "02:00:00:00:00:00");
+
+        let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let mac = generate_mac(&uuid);
+        assert_eq!(mac, "02:00:00:55:0e:84");
+    }
+
+    #[test]
+    fn test_parse_mac() {
+        let mac_str = "02:00:00:55:0e:84";
+        let bytes = parse_mac(mac_str).unwrap();
+        assert_eq!(bytes, [0x02, 0x00, 0x00, 0x55, 0x0e, 0x84]);
+
+        assert!(parse_mac("invalid").is_err());
+        assert!(parse_mac("02:00:00:55:0e:8G").is_err());
+    }
 }

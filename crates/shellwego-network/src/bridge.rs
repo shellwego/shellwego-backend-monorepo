@@ -3,6 +3,7 @@
 use rtnetlink::{new_connection, Handle};
 use std::net::Ipv4Addr;
 use tracing::{info, debug};
+use futures_util::TryStreamExt;
 
 use crate::NetworkError;
 
@@ -14,7 +15,7 @@ pub struct Bridge {
 
 impl Bridge {
     /// Create new bridge or get existing
-    pub async fn create_or_get(name: &str) -> Result<Self, Bridge> {
+    pub async fn create_or_get(name: &str) -> Result<Self, NetworkError> {
         let (connection, handle, _) = new_connection().map_err(|e| {
             NetworkError::Netlink(format!("Failed to create netlink connection: {}", e))
         })?;
@@ -25,9 +26,8 @@ impl Bridge {
         // Check if exists
         let mut links = handle.link().get().match_name(name.to_string()).execute();
         
-        if let Some(link) = links.try_next().await.map_err(|e| {
-            NetworkError::Netlink(e.to_string())
-        })? {
+        if let Some(link) = links.try_next().await.map_err(|e| NetworkError::Netlink(e.to_string()))? {
+            let _link = link;
             debug!("Using existing bridge: {}", name);
             return Ok(Self {
                 name: name.to_string(),
@@ -69,9 +69,7 @@ impl Bridge {
         
         // Flush existing addresses
         let mut addrs = self.handle.address().get().set_link_index_filter(index).execute();
-        while let Some(addr) = addrs.try_next().await.map_err(|e| {
-            NetworkError::Netlink(e.to_string())
-        })? {
+        while let Some(addr) = addrs.try_next().await.map_err(|e| NetworkError::Netlink(e.to_string()))? {
             self.handle.address().del(addr).execute().await.ok();
         }
         
@@ -123,9 +121,9 @@ impl Bridge {
             .match_name(self.name.clone())
             .execute();
             
-        let link = links.try_next().await.map_err(|e| {
-            NetworkError::Netlink(e.to_string())
-        })?.ok_or_else(|| NetworkError::InterfaceNotFound(self.name.clone()))?;
+        let link = links.try_next().await
+            .map_err(|e| NetworkError::Netlink(e.to_string()))?
+            .ok_or_else(|| NetworkError::InterfaceNotFound(self.name.clone()))?;
         
         Ok(link.header.index)
     }

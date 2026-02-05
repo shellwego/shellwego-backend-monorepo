@@ -40,14 +40,32 @@ impl DiscoveryResolver {
         let lookup = self.resolver.srv_lookup(query).await
             .map_err(|e| DiscoveryError::ResolverError(e.to_string()))?;
 
-        // TODO: Map SRV records to SocketAddrs using IP lookups for targets
-        Ok(vec![])
+        let mut addrs = Vec::new();
+        for srv in lookup.iter() {
+            // SRV target is a name, we need to resolve it to IP
+            let target = srv.target().to_utf8();
+            let port = srv.port();
+
+            if let Ok(ips) = self.resolver.lookup_ip(target).await {
+                for ip in ips.iter() {
+                    addrs.push(SocketAddr::new(ip, port));
+                }
+            }
+        }
+
+        Ok(addrs)
     }
 }
 
 /// The Registry handles the "server" side (Control Plane tracking state)
 pub struct DiscoveryRegistry {
     pub instances: Arc<tokio::sync::RwLock<HashMap<String, ServiceInstance>>>,
+}
+
+impl Default for DiscoveryRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DiscoveryRegistry {
@@ -58,5 +76,18 @@ impl DiscoveryRegistry {
     pub async fn register(&self, instance: ServiceInstance) {
         let mut instances = self.instances.write().await;
         instances.insert(instance.id.clone(), instance);
+    }
+
+    pub async fn unregister(&self, id: &str) {
+        let mut instances = self.instances.write().await;
+        instances.remove(id);
+    }
+
+    pub async fn get_instances_by_service(&self, service_name: &str) -> Vec<ServiceInstance> {
+        let instances = self.instances.read().await;
+        instances.values()
+            .filter(|i| i.service_name == service_name)
+            .cloned()
+            .collect()
     }
 }

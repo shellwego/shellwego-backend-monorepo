@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::sync::Mutex;
+use uuid::Uuid;
 
 use crate::NetworkError;
 
@@ -12,7 +13,7 @@ use crate::NetworkError;
 pub struct Ipam {
     subnet: ipnetwork::Ipv4Network,
     gateway: Ipv4Addr,
-    allocated: Mutex<HashMap<uuid::Uuid, Ipv4Addr>>,
+    allocated: Mutex<HashMap<Uuid, Ipv4Addr>>,
     reserved: Vec<Ipv4Addr>, // Gateway, broadcast, etc
 }
 
@@ -33,7 +34,7 @@ impl Ipam {
     }
 
     /// Allocate IP for app
-    pub fn allocate(&self, app_id: uuid::Uuid) -> Result<Ipv4Addr, NetworkError> {
+    pub fn allocate(&self, app_id: Uuid) -> Result<Ipv4Addr, NetworkError> {
         let mut allocated = self.allocated.lock().unwrap();
         
         // Check if already has IP
@@ -60,7 +61,7 @@ impl Ipam {
     /// Allocate specific IP
     pub fn allocate_specific(
         &self,
-        app_id: uuid::Uuid,
+        app_id: Uuid,
         requested: Ipv4Addr,
     ) -> Result<Ipv4Addr, NetworkError> {
         if !self.subnet.contains(requested) {
@@ -88,7 +89,7 @@ impl Ipam {
     }
 
     /// Release IP
-    pub fn release(&self, app_id: uuid::Uuid) {
+    pub fn release(&self, app_id: Uuid) {
         let mut allocated = self.allocated.lock().unwrap();
         allocated.remove(&app_id);
     }
@@ -104,8 +105,52 @@ impl Ipam {
     }
 
     /// List allocations
-    pub fn list(&self) -> Vec<(uuid::Uuid, Ipv4Addr)> {
+    pub fn list(&self) -> Vec<(Uuid, Ipv4Addr)> {
         let allocated = self.allocated.lock().unwrap();
         allocated.iter().map(|(&k, &v)| (k, v)).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ipnetwork::Ipv4Network;
+
+    #[test]
+    fn test_ipam_allocation() {
+        let subnet: Ipv4Network = "10.0.0.0/24".parse().unwrap();
+        let ipam = Ipam::new(subnet);
+
+        let app1 = Uuid::new_v4();
+        let ip1 = ipam.allocate(app1).unwrap();
+        assert_eq!(ip1, Ipv4Addr::new(10, 0, 0, 2)); // .0 is net, .1 is gateway, .2 is first usable
+
+        let app2 = Uuid::new_v4();
+        let ip2 = ipam.allocate(app2).unwrap();
+        assert_eq!(ip2, Ipv4Addr::new(10, 0, 0, 3));
+
+        // Re-allocation returns same IP
+        assert_eq!(ipam.allocate(app1).unwrap(), ip1);
+
+        ipam.release(app1);
+        let app3 = Uuid::new_v4();
+        let ip3 = ipam.allocate(app3).unwrap();
+        assert_eq!(ip3, ip1); // Should reuse released IP
+    }
+
+    #[test]
+    fn test_ipam_specific_allocation() {
+        let subnet: Ipv4Network = "10.0.0.0/24".parse().unwrap();
+        let ipam = Ipam::new(subnet);
+
+        let app1 = Uuid::new_v4();
+        let requested = Ipv4Addr::new(10, 0, 0, 10);
+        let ip1 = ipam.allocate_specific(app1, requested).unwrap();
+        assert_eq!(ip1, requested);
+
+        // Allocation from pool should skip 10
+        let app2 = Uuid::new_v4();
+        let ip2 = ipam.allocate(app2).unwrap();
+        assert_eq!(ip2, Ipv4Addr::new(10, 0, 0, 2));
     }
 }

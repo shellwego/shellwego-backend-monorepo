@@ -7,7 +7,7 @@ use std::sync::Arc;
 pub struct QuinnClient {
     connection: Option<quinn::Connection>,
     config: QuicConfig,
-    endpoint: Option<Arc<quinn::Endpoint>>,
+    endpoint: Option<quinn::Endpoint>,
 }
 
 impl QuinnClient {
@@ -22,18 +22,22 @@ impl QuinnClient {
     pub async fn connect(&mut self, endpoint_url: &str) -> Result<()> {
         let addr: SocketAddr = endpoint_url.parse().context("Invalid endpoint URL")?;
 
+        let root_store = rustls::RootCertStore::empty();
+        // Should add real roots in production
+
         let mut tls_config = rustls::ClientConfig::builder()
-            .with_safe_defaults()
+            .with_root_certificates(root_store)
             .with_no_client_auth();
 
-        tls_config.alpn_protocols = vec![b"shellwego/1"];
+        tls_config.alpn_protocols = vec![self.config.alpn_protocol.clone()];
 
         let endpoint = quinn::Endpoint::client("[::]:0".parse().unwrap()).context("Create endpoint")?;
-        let endpoint = Arc::new(endpoint);
 
-        let quinn_config = quinn::ClientConfig::with_tls(Arc::new(tls_config));
+        let crypto = quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)
+            .context("Failed to create QUIC crypto config")?;
+        let quinn_config = quinn::ClientConfig::new(Arc::new(crypto));
 
-        let connecting = endpoint.connect_with(quinn_config, &addr, "control-plane").context("Connect")?;
+        let connecting = endpoint.connect_with(quinn_config, addr, "control-plane").context("Connect")?;
         let connection = connecting.await.context("Handshake")?;
 
         self.connection = Some(connection);
@@ -45,22 +49,21 @@ impl QuinnClient {
     pub async fn send(&self, message: Message) -> Result<()> {
         let connection = self.connection.as_ref().context("Not connected")?;
         let data = postcard::to_allocvec(&message).context("Serialize")?;
-        let (mut send_stream, _) = connection.open_bi().await.context("Open stream")?;
+        let (mut send_stream, _recv_stream) = connection.open_bi().await.context("Open stream")?;
         send_stream.write_all(&data).await.context("Write")?;
-        send_stream.finish().await.context("Finish")?;
+        send_stream.finish().context("Finish")?;
         Ok(())
     }
 
     pub async fn receive(&self) -> Result<Message> {
         let connection = self.connection.as_ref().context("Not connected")?;
-        let (mut recv_stream, _) = connection.accept_bi().await.context("Accept stream")?;
-        let mut buf = Vec::new();
-        recv_stream.read_to_end(&mut buf).await.context("Read")?;
-        postcard::from_bytes(&buf).context("Deserialize")
+        let (_send_stream, mut recv_stream) = connection.accept_bi().await.context("Accept stream")?;
+        let data = recv_stream.read_to_end(10 * 1024 * 1024).await.context("Read")?;
+        postcard::from_bytes(&data).context("Deserialize")
     }
 
     pub fn is_connected(&self) -> bool {
-        self.connection.as_ref().map(|c| c.state() == quinn::ConnectionState::Established).unwrap_or(false)
+        self.connection.as_ref().map(|c| c.close_reason().is_none()).unwrap_or(false)
     }
 
     pub async fn close(&self) {

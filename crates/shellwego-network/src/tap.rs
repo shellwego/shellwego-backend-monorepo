@@ -1,10 +1,18 @@
 //! TAP device management for Firecracker
 
-use std::os::unix::io::{RawFd, AsRawFd};
-use tokio::fs::OpenOptions;
-use tracing::{info, debug};
+use std::os::unix::io::{RawFd};
+use tracing::{debug};
+use futures_util::TryStreamExt;
 
 use crate::NetworkError;
+
+#[repr(C)]
+struct IfReq {
+    ifr_name: [libc::c_char; libc::IF_NAMESIZE],
+    ifr_flags: libc::c_short,
+    // Padding for union
+    _padding: [u8; 24],
+}
 
 /// TAP device handle
 pub struct TapDevice {
@@ -76,9 +84,9 @@ impl TapDevice {
         tokio::spawn(connection);
         
         let mut links = handle.link().get().match_name(self.name.clone()).execute();
-        let link = links.try_next().await.map_err(|e| {
-            NetworkError::Netlink(e.to_string())
-        })?.ok_or_else(|| NetworkError::InterfaceNotFound(self.name.clone()))?;
+        let link = links.try_next().await
+            .map_err(|e| NetworkError::Netlink(e.to_string()))?
+            .ok_or_else(|| NetworkError::InterfaceNotFound(self.name.clone()))?;
         
         handle.link().set(link.header.index).mtu(mtu).execute().await.map_err(|e| {
             NetworkError::Netlink(e.to_string())
@@ -96,9 +104,9 @@ impl TapDevice {
         tokio::spawn(connection);
         
         let mut links = handle.link().get().match_name(self.name.clone()).execute();
-        let link = links.try_next().await.map_err(|e| {
-            NetworkError::Netlink(e.to_string())
-        })?.ok_or_else(|| NetworkError::InterfaceNotFound(self.name.clone()))?;
+        let link = links.try_next().await
+            .map_err(|e| NetworkError::Netlink(e.to_string()))?
+            .ok_or_else(|| NetworkError::InterfaceNotFound(self.name.clone()))?;
         
         handle.link().set(link.header.index).up().execute().await.map_err(|e| {
             NetworkError::Netlink(e.to_string())
@@ -117,15 +125,15 @@ impl TapDevice {
         
         // Get bridge index
         let mut links = handle.link().get().match_name(bridge.to_string()).execute();
-        let bridge_link = links.try_next().await.map_err(|e| {
-            NetworkError::Netlink(e.to_string())
-        })?.ok_or_else(|| NetworkError::InterfaceNotFound(bridge.to_string()))?;
+        let bridge_link = links.try_next().await
+            .map_err(|e| NetworkError::Netlink(e.to_string()))?
+            .ok_or_else(|| NetworkError::InterfaceNotFound(bridge.to_string()))?;
         
         // Get TAP index
         let mut links = handle.link().get().match_name(self.name.clone()).execute();
-        let tap_link = links.try_next().await.map_err(|e| {
-            NetworkError::Netlink(e.to_string())
-        })?.ok_or_else(|| NetworkError::InterfaceNotFound(self.name.clone()))?;
+        let tap_link = links.try_next().await
+            .map_err(|e| NetworkError::Netlink(e.to_string()))?
+            .ok_or_else(|| NetworkError::InterfaceNotFound(self.name.clone()))?;
         
         // Attach
         handle.link().set(tap_link.header.index)
@@ -150,14 +158,6 @@ impl TapDevice {
         } else {
             Ok(fd)
         }
-    }
-
-    #[repr(C)]
-    struct IfReq {
-        ifr_name: [libc::c_char; libc::IF_NAMESIZE],
-        ifr_flags: libc::c_short,
-        // Padding for union
-        _padding: [u8; 24],
     }
 
     fn create_ifreq(name: &str, flags: libc::c_short) -> IfReq {

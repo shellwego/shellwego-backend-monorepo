@@ -4,9 +4,12 @@
 
 use std::process::Stdio;
 use tokio::process::Command;
-use tracing::{debug, trace, error};
+use tracing::{trace, error};
 
-use crate::{StorageError, VolumeInfo, SnapshotInfo, PoolMetrics};
+use crate::StorageError;
+use crate::VolumeInfo;
+use crate::SnapshotInfo;
+use crate::zfs::PoolMetrics;
 
 /// ZFS command interface
 #[derive(Clone)]
@@ -68,7 +71,7 @@ impl ZfsCli {
         let mut cmd = Command::new("zfs");
         cmd.arg("create");
         
-        if let Some(p) = parent {
+        if let Some(_p) = parent {
             cmd.arg("-p"); // Create parents
         }
         

@@ -12,19 +12,16 @@
 //! - Generic OCI-compliant registries
 
 use std::path::PathBuf;
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tracing::{debug, info, warn, error};
+use tracing::{debug, info};
 use tokio::fs::File;
 use tokio::io::{AsyncWriteExt, BufWriter};
-use flate2::write::GzEncoder;
-use flate2::Compression;
+use futures_util::StreamExt;
 use crate::StorageError;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 
-const OCI_API_VERSION: &str = "v2";
 const MAX_MANIFEST_SIZE: usize = 10 * 1024 * 1024; // 10MB
-const BUFFER_SIZE: usize = 64 * 1024; // 64KB
 
 #[derive(Debug, Error)]
 pub enum OciError {
@@ -68,7 +65,7 @@ pub struct Platform {
 pub struct OciClient {
     config: OciConfig,
     http_client: reqwest::Client,
-    auth_cache: HashMap<String, String>,
+    auth_cache: dashmap::DashMap<String, String>,
 }
 
 impl OciClient {
@@ -84,7 +81,7 @@ impl OciClient {
         Ok(Self {
             config,
             http_client,
-            auth_cache: HashMap::new(),
+            auth_cache: dashmap::DashMap::new(),
         })
     }
 
@@ -108,7 +105,7 @@ impl OciClient {
         let auth_url = format!("{}/token?scope=repository:{}:pull", registry_url, repository);
 
         if let (Some(username), Some(password)) = (&self.config.username, &self.config.password) {
-            let basic = format!("Basic {}", base64::encode(&format!("{}:{}", username, password)));
+            let basic = format!("Basic {}", STANDARD.encode(format!("{}:{}", username, password)));
             let resp = self.http_client
                 .get(&auth_url)
                 .header("Authorization", basic)
@@ -187,7 +184,7 @@ impl OciClient {
         Ok(manifest)
     }
 
-    async fn get_blob(&self, repository: &str, digest: &str, writer: &mut impl AsyncWriteExt) -> Result<(), OciError> {
+    async fn get_blob(&self, repository: &str, digest: &str, writer: &mut (impl AsyncWriteExt + Unpin)) -> Result<(), OciError> {
         let token = self.get_auth_token(repository).await?;
         let url = format!("{}/{}/blobs/{}", self.registry_url(), repository, digest);
 
@@ -219,7 +216,7 @@ impl OciClient {
     pub async fn pull_image(
         &self,
         image_ref: &str,
-        target_dataset: &str,
+        _target_dataset: &str,
         mountpoint: PathBuf,
     ) -> Result<(), OciError> {
         let (repository, reference) = self.parse_reference(image_ref)?;
@@ -228,7 +225,7 @@ impl OciClient {
         debug!("Repository: {}, Reference: {}", repository, reference);
 
         let manifest = self.get_manifest(&repository, &reference).await?;
-        debug!("Manifest mediaType: {}", manifest.media_type);
+        debug!("Manifest mediaType: {:?}", manifest.media_type);
         debug!("Schema version: {}", manifest.schema_version);
 
         tokio::fs::create_dir_all(&mountpoint).await
@@ -255,8 +252,11 @@ impl OciClient {
         let temp_path = temp_file.path().to_owned();
 
         {
-            let mut writer = BufWriter::new(temp_file);
+            let std_file = temp_file.reopen().map_err(|e| OciError::Io(e))?;
+            let tokio_file = File::from_std(std_file);
+            let mut writer = BufWriter::new(tokio_file);
             self.get_blob(repository, digest, &mut writer).await?;
+            writer.flush().await.map_err(|e| OciError::Io(e))?;
         }
 
         info!("Extracting layer {}...", digest);
@@ -342,8 +342,8 @@ pub struct LayerDescriptor {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_parse_reference_with_tag() {
+    #[tokio::test]
+    async fn test_parse_reference_with_tag() {
         let client = OciClient::new(OciConfig {
             registry: "docker.io".to_string(),
             username: None,
@@ -357,8 +357,8 @@ mod tests {
         assert_eq!(ref_, "3.18");
     }
 
-    #[test]
-    fn test_parse_reference_with_registry() {
+    #[tokio::test]
+    async fn test_parse_reference_with_registry() {
         let client = OciClient::new(OciConfig {
             registry: "ghcr.io".to_string(),
             username: None,
@@ -372,8 +372,8 @@ mod tests {
         assert_eq!(ref_, "v1.0");
     }
 
-    #[test]
-    fn test_parse_reference_latest() {
+    #[tokio::test]
+    async fn test_parse_reference_latest() {
         let client = OciClient::new(OciConfig {
             registry: "docker.io".to_string(),
             username: None,

@@ -8,8 +8,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{info, warn, error, debug};
+use tracing::{info, debug};
 use uuid::Uuid;
+use tokio::io::AsyncWriteExt;
 
 use crate::snapshot::{SnapshotManager, SnapshotInfo};
 use crate::vmm::VmmManager;
@@ -48,7 +49,7 @@ impl MigrationManager {
         &mut self,
         transport: Arc<T>,
     ) {
-        self.network_client = Some(transport);
+        self.network_client = Some(transport); 
     }
 
     /// Initiate live migration to target node
@@ -118,7 +119,7 @@ impl MigrationManager {
         
         // Restore VM from snapshot
         let new_app_id = Uuid::new_v4();
-        let config = self.snapshot_manager
+        self.snapshot_manager
             .restore_snapshot(&self.vmm_manager, &snapshot_info.id, new_app_id)
             .await?;
         
@@ -299,6 +300,63 @@ impl Default for MigrationConfig {
             max_bandwidth: 0,
             preserve_mac: false,
         }
+    }
+}
+
+/// HTTP-based implementation of migration transport
+pub struct HttpMigrationTransport {
+    client: reqwest::Client,
+    port: u16,
+}
+
+impl HttpMigrationTransport {
+    pub fn new(port: u16) -> Self {
+        Self {
+            client: reqwest::Client::new(),
+            port,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl MigrationTransport for HttpMigrationTransport {
+    async fn transfer_snapshot(
+        &self,
+        snapshot: &SnapshotInfo,
+        target_node: &str,
+    ) -> anyhow::Result<u64> {
+        let file_path = std::path::PathBuf::from(&snapshot.memory_path);
+        let file_size = tokio::fs::metadata(&file_path).await?.len();
+        
+        let file = tokio::fs::File::open(&file_path).await?;
+        let stream = tokio_util::io::ReaderStream::new(file);
+        
+        let url = format!("http://{}:{}/internal/migration/upload/{}", target_node, self.port, snapshot.id);
+        
+        let res = self.client.post(&url)
+            .body(reqwest::Body::wrap_stream(stream))
+            .send()
+            .await?;
+            
+        if !res.status().is_success() {
+            anyhow::bail!("Upload failed: {}", res.status());
+        }
+        
+        Ok(file_size)
+    }
+    
+    async fn receive_snapshot(
+        &self,
+        snapshot_id: &str,
+        source_node: &str,
+    ) -> anyhow::Result<SnapshotInfo> {
+        // In a real scenario, this initiates a pull or confirms a push.
+        // For this implementation, we assume the snapshot was pushed to us 
+        // via an HTTP handler (not shown) and we are just validating/registering it.
+        
+        // Placeholder: Return dummy info assuming handler saved it
+        // Real impl requires coupling with the HTTP server layer
+        Err(anyhow::anyhow!("Pull-based migration not yet implemented"))
     }
 }
 

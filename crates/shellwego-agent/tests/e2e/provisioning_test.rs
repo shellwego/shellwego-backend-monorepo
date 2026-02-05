@@ -26,6 +26,23 @@ fn hardware_checks() {
     }
 }
 
+fn test_config() -> shellwego_agent::AgentConfig {
+    shellwego_agent::AgentConfig {
+        node_id: Some(Uuid::new_v4()),
+        control_plane_url: "http://localhost".into(),
+        join_token: None,
+        region: "local".into(),
+        zone: "local".into(),
+        labels: Default::default(),
+        firecracker_binary: PathBuf::from("/usr/local/bin/firecracker"),
+        kernel_image_path: PathBuf::from("/var/lib/shellwego/vmlinux"),
+        data_dir: PathBuf::from("/var/lib/shellwego"),
+        max_microvms: 10,
+        reserved_memory_mb: 128,
+        reserved_cpu_percent: 0.0,
+    }
+}
+
 #[tokio::test]
 #[ignore]
 async fn test_cold_start_gauntlet_tc_e2e_1() {
@@ -35,7 +52,7 @@ async fn test_cold_start_gauntlet_tc_e2e_1() {
     let app_id = Uuid::new_v4();
     let vm_id = Uuid::new_v4();
 
-    let vmm_manager = VmmManager::new(&Default::default()).await.expect("VMM init failed");
+    let vmm_manager = VmmManager::new(&test_config()).await.expect("VMM init failed");
     let zfs_manager = ZfsManager::new("shellwego").await.expect("ZFS init failed");
 
     let rootfs_path = zfs_manager.init_app_storage(app_id).await.expect("ZFS init failed");
@@ -121,7 +138,7 @@ async fn test_secret_injection_security_tc_e2e_2() {
     let secrets_path = std::path::Path::new(&secrets_dir).join("env.json");
     tokio::fs::write(&secrets_path, secrets_content).await.expect("Failed to write secrets");
 
-    let vmm_manager = VmmManager::new(&Default::default()).await.expect("VMM init failed");
+    let vmm_manager = VmmManager::new(&test_config()).await.expect("VMM init failed");
     let zfs_manager = ZfsManager::new("shellwego").await.expect("ZFS init failed");
     let rootfs_path = zfs_manager.init_app_storage(app_id).await.expect("ZFS init failed");
 
@@ -180,7 +197,7 @@ async fn test_secret_injection_security_tc_e2e_2() {
 async fn test_no_downtime_reconciliation_tc_e2e_3() {
     hardware_checks();
 
-    let vmm_manager = VmmManager::new(&Default::default()).await.expect("VMM init failed");
+    let vmm_manager = VmmManager::new(&test_config()).await.expect("VMM init failed");
     let zfs_manager = ZfsManager::new("shellwego").await.expect("ZFS init failed");
 
     let app_id = Uuid::new_v4();
@@ -243,7 +260,7 @@ async fn test_full_provisioning_pipeline() {
     let app_id = Uuid::new_v4();
     let vm_id = Uuid::new_v4();
 
-    let vmm_manager = VmmManager::new(&Default::default()).await.expect("VMM init failed");
+    let vmm_manager = VmmManager::new(&test_config()).await.expect("VMM init failed");
     let zfs_manager = ZfsManager::new("shellwego").await.expect("ZFS init failed");
 
     let rootfs_path = zfs_manager.init_app_storage(app_id).await.expect("ZFS init failed");

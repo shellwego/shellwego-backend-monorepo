@@ -14,8 +14,9 @@
 
 use std::path::PathBuf;
 use async_trait::async_trait;
-use aws_sdk_s3::{Client, Config, Error as SdkError, types::tagging};
-use aws_types::{region::Region, credentials::Credentials};
+use aws_sdk_s3::{Client, Config, Error as SdkError, types::{Tagging, Tag}};
+use aws_types::region::Region;
+use aws_credential_types::Credentials;
 use thiserror::Error;
 use crate::{StorageBackend, StorageError, VolumeInfo, SnapshotInfo};
 
@@ -74,7 +75,7 @@ impl S3Backend {
         let sdk_config = Config::builder()
             .region(region)
             .credentials_provider(credentials)
-            .endpoint_url(config.endpoint.as_deref())
+            .endpoint_url(config.endpoint.clone().unwrap_or_default())
             .build();
 
         let client = Client::from_conf(sdk_config);
@@ -89,6 +90,7 @@ impl S3Backend {
         format!("{}{}", self.prefix, name)
     }
 
+    #[allow(dead_code)]
     fn parse_snapshot_key(&self, key: &str) -> Option<(String, String)> {
         let without_prefix = key.strip_prefix(&self.prefix)?;
         let parts: Vec<&str> = without_prefix.split('@').collect();
@@ -137,11 +139,9 @@ impl StorageBackend for S3Backend {
         {
             Ok(_) => Ok(()),
             Err(e) => {
-                if e.is_not_found() {
-                    Ok(())
-                } else {
-                    Err(StorageError::Backend(format!("S3 delete: {}", e)))
-                }
+                // S3 delete_object is idempotent and doesn't return 404 for missing objects normally.
+                // If it does, it's a ServiceError.
+                Err(StorageError::Backend(format!("S3 delete: {}", e)))
             }
         }
     }
@@ -207,27 +207,27 @@ impl StorageBackend for S3Backend {
 
         let mut volumes = Vec::new();
         
-        if let Some(contents) = resp.contents() {
-            for obj in contents {
-                if let Some(key) = obj.key() {
-                    if !key.contains('@') && key != prefix {
-                        let name = key.strip_prefix(&self.prefix).unwrap_or(key);
-                        let name = name.trim_end_matches('/');
-                        
-                        volumes.push(VolumeInfo {
-                            name: name.to_string(),
-                            mountpoint: None,
-                            used_bytes: obj.size() as u64,
-                            available_bytes: 0,
-                            referenced_bytes: obj.size() as u64,
-                            compression_ratio: 1.0,
-                            created: chrono::Utc::now(),
-                            properties: std::collections::HashMap::new(),
-                        });
-                    }
+        for obj in resp.contents() {
+            if let Some(key) = obj.key() {
+                if !key.contains('@') && key != prefix {
+                    let name = key.strip_prefix(&self.prefix).unwrap_or(key);
+                    let name = name.trim_end_matches('/');
+                    
+                    volumes.push(VolumeInfo {
+                        name: name.to_string(),
+                        mountpoint: None,
+                        used_bytes: obj.size().unwrap_or(0) as u64,
+                        available_bytes: 0,
+                        referenced_bytes: obj.size().unwrap_or(0) as u64,
+                        compression_ratio: 1.0,
+                        created: chrono::Utc::now(),
+                        properties: std::collections::HashMap::new(),
+                    });
                 }
             }
         }
+        
+        // resp.contents() returns a slice directly
 
         Ok(volumes)
     }
@@ -245,9 +245,9 @@ impl StorageBackend for S3Backend {
         Ok(VolumeInfo {
             name: name.to_string(),
             mountpoint: None,
-            used_bytes: resp.content_length() as u64,
+            used_bytes: resp.content_length().unwrap_or(0) as u64,
             available_bytes: 0,
-            referenced_bytes: resp.content_length() as u64,
+            referenced_bytes: resp.content_length().unwrap_or(0) as u64,
             compression_ratio: 1.0,
             created: chrono::Utc::now(),
             properties: std::collections::HashMap::new(),
@@ -272,14 +272,16 @@ impl StorageBackend for S3Backend {
         self.client.put_object_tagging()
             .bucket(&self.bucket)
             .key(&s3_key)
-            .tagging(tagging::Tagging::builder()
-                .tag_set(vec![
-                    tagging::Tag::builder()
+            .tagging(Tagging::builder()
+                .tag_set(
+                    Tag::builder()
                         .key(key)
                         .value(value)
                         .build()
-                ])
-                .build())
+                        .map_err(|e| StorageError::Backend(format!("Failed to build tag: {}", e)))?
+                )
+                .build()
+                .map_err(|e| StorageError::Backend(format!("Failed to build tagging: {}", e)))?)
             .send()
             .await
             .map_err(|e| StorageError::Backend(format!("S3 set tag: {}", e)))?;
@@ -297,11 +299,9 @@ impl StorageBackend for S3Backend {
             .await
             .map_err(|e| StorageError::Backend(format!("S3 get tag: {}", e)))?;
 
-        if let Some(tag_set) = resp.tag_set() {
-            for tag in tag_set {
-                if tag.key() == Some(key) {
-                    return Ok(tag.value().unwrap_or("").to_string());
-                }
+        for tag in resp.tag_set() {
+            if tag.key() == key {
+                return Ok(tag.value().to_string());
             }
         }
 

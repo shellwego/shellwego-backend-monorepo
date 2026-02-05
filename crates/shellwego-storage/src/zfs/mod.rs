@@ -4,15 +4,13 @@
 //! be replaced with libzfs_core FFI for lower overhead.
 
 use std::path::PathBuf;
-use std::process::Stdio;
 use std::time::Duration;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::process::Command;
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn, error};
+use tracing::{debug, info};
 
-use crate::{StorageBackend, StorageError, VolumeInfo, SnapshotInfo, OciClient, OciConfig};
+use crate::{StorageError, VolumeInfo, SnapshotInfo, OciClient, OciConfig};
 
 pub mod cli;
 
@@ -126,7 +124,7 @@ impl ZfsManager {
         }
         
         // Clone to app rootfs (writable overlay)
-        let app_storage = self.init_app_storage(app_id).await?;
+        let _app_storage = self.init_app_storage(app_id).await?;
         let app_rootfs = format!("{}/rootfs", self.full_path(&format!("apps/{}", app_id)));
         
         // Destroy if exists (fresh deploy)
@@ -260,7 +258,7 @@ impl ZfsManager {
         let mut cache = self.cache.write().await;
         cache.entries.clear();
     }
-}
+
 
     async fn pull_image_to_dataset(
         &self,
@@ -286,7 +284,7 @@ impl ZfsManager {
         })?;
 
         let (_, reference) = self.parse_image_ref(image_ref)?;
-        oci_client.pull_image(reference, target_dataset, mountpoint).await?;
+        oci_client.pull_image(&reference, target_dataset, mountpoint).await?;
 
         self.cli.snapshot(target_dataset, "base").await?;
 

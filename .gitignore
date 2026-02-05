@@ -17,3 +17,5 @@ Cargo.lock
 *.db
 *.db-journal
 node_modules
+# relay state
+/.relay/

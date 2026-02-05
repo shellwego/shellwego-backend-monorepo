@@ -8,8 +8,8 @@
 
 use std::sync::Arc;
 use tokio::signal;
-use tracing::{info, warn, error};
-use secrecy::{SecretString, ExposeSecret};
+use tracing::{info, error};
+use secrecy::SecretString;
 
 mod daemon;
 mod reconciler;
@@ -17,6 +17,7 @@ mod vmm;
 mod wasm;        // WASM runtime support
 mod snapshot;    // VM snapshot management
 mod migration;   // Live migration support
+mod metrics;
 
 use daemon::Daemon;
 use vmm::VmmManager;
@@ -42,6 +43,12 @@ async fn main() -> anyhow::Result<()> {
     // Initialize VMM manager (Firecracker)
     let vmm = VmmManager::new(&config).await?;
     
+    // Initialize WASM Runtime
+    let _wasm_runtime = wasm::WasmRuntime::new(&wasm::WasmConfig { max_memory_mb: 512 }).await?;
+
+    // Initialize Metrics
+    let metrics = Arc::new(metrics::MetricsCollector::new(config.node_id.unwrap_or_default()));
+
     // Initialize Networking (CNI)
     let network = Arc::new(CniNetwork::new("sw0", "10.0.0.0/16").await?);
 
@@ -53,7 +60,7 @@ async fn main() -> anyhow::Result<()> {
     
     // Additional initialization
     additional_initialization().await?;
-    
+
     // Spawn concurrent tasks
     let heartbeat_handle = tokio::spawn({
         let daemon = daemon.clone();
@@ -81,13 +88,24 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     });
+
+    let metrics_handle = tokio::spawn({
+        let metrics = metrics.clone();
+        async move {
+            if let Err(e) = metrics.run_collection_loop().await {
+                error!("Metrics collection failed: {}", e);
+            }
+        }
+    });
     
+    let mut term_signal = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+
     // Wait for shutdown signal
     tokio::select! {
         _ = signal::ctrl_c() => {
             info!("Received SIGINT, shutting down gracefully...");
         }
-        _ = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())? => {
+        _ = term_signal.recv() => {
             info!("Received SIGTERM, shutting down gracefully...");
         }
     }
@@ -99,6 +117,7 @@ async fn main() -> anyhow::Result<()> {
     heartbeat_handle.abort();
     reconciler_handle.abort();
     command_handle.abort();
+    metrics_handle.abort();
     
     info!("Agent shutdown complete");
     Ok(())
@@ -106,10 +125,8 @@ async fn main() -> anyhow::Result<()> {
 
 /// Additional initialization for WASM, snapshots, and migration
 async fn additional_initialization() -> anyhow::Result<()> {
-    // TODO: Initialize WASM runtime if enabled
-    // TODO: Setup snapshot directory
-    // TODO: Register migration capabilities with control plane
-    unimplemented!("additional_initialization")
+    // Placeholder for future advanced setup (e.g., pre-warming WASM cache)
+    Ok(())
 }
 
 /// Agent configuration

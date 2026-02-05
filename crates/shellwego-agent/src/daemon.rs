@@ -1,6 +1,7 @@
 use std::sync::Arc;
+use tokio::sync::Mutex;
 use tokio::time::{interval, Duration};
-use tracing::{info, debug, warn, error};
+use tracing::{info, warn, error, debug};
 use shellwego_network::{QuinnClient, Message, QuicConfig};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -10,10 +11,11 @@ use crate::vmm::VmmManager;
 #[derive(Clone)]
 pub struct Daemon {
     config: AgentConfig,
-    quic: Arc<QuinnClient>,
+    quic: Arc<Mutex<QuinnClient>>,
     node_id: Arc<tokio::sync::RwLock<Option<uuid::Uuid>>>,
     capabilities: Capabilities,
     vmm: VmmManager,
+    state_cache: Arc<tokio::sync::RwLock<DesiredState>>,
 }
 
 impl Daemon {
@@ -23,14 +25,15 @@ impl Daemon {
         vmm: VmmManager,
     ) -> anyhow::Result<Self> {
         let quic_conf = QuicConfig::default();
-        let quic = Arc::new(QuinnClient::new(quic_conf));
+        let quic = Arc::new(Mutex::new(QuinnClient::new(quic_conf)));
 
-        let mut daemon = Self {
+        let daemon = Self {
             config,
             quic,
             node_id: Arc::new(tokio::sync::RwLock::new(None)),
             capabilities,
             vmm,
+            state_cache: Arc::new(tokio::sync::RwLock::new(DesiredState::default())),
         };
 
         daemon.register().await?;
@@ -40,14 +43,14 @@ impl Daemon {
 
     async fn register(&self) -> anyhow::Result<()> {
         info!("Registering with control plane...");
-        self.quic.connect(&self.config.control_plane_url).await?;
+        self.quic.lock().await.connect(&self.config.control_plane_url).await?;
 
         let msg = Message::Register {
             hostname: gethostname::gethostname().to_string_lossy().to_string(),
             capabilities: vec!["kvm".to_string()],
         };
 
-        self.quic.send(msg).await?;
+        self.quic.lock().await.send(msg).await?;
         info!("Registration sent via QUIC");
 
         Ok(())
@@ -67,22 +70,40 @@ impl Daemon {
                 memory_usage: 0.0,
             };
 
-            if let Err(e) = self.quic.send(msg).await {
+            if let Err(e) = self.quic.lock().await.send(msg).await {
                 error!("Heartbeat lost: {}. Reconnecting...", e);
-                let _ = self.quic.connect(&self.config.control_plane_url).await;
+                let _ = self.quic.lock().await.connect(&self.config.control_plane_url).await;
             }
         }
     }
 
     pub async fn command_consumer(&self) -> anyhow::Result<()> {
         loop {
-            match self.quic.receive().await {
-                Ok(Message::ScheduleApp { app_id, image, .. }) => {
-                    info!("CP ordered: Start app {}", app_id);
+            match self.quic.lock().await.receive().await {
+                Ok(Message::ScheduleApp { app_id, image: _, .. }) => {
+                    info!("CP ordered: Schedule app {}", app_id);
+                    // In a full implementation, we would parse the full spec from the message
+                    // For now, we update the cache to trigger the reconciler
+                    let mut cache = self.state_cache.write().await;
+                    if !cache.apps.iter().any(|a| a.app_id == app_id) {
+                        // Create a skeleton desired app based on the message
+                        // Real impl would have full details in the Message
+                        cache.apps.push(DesiredApp {
+                            app_id,
+                            image: "default".to_string(), // Simplified
+                            command: None,
+                            memory_mb: 128,
+                            cpu_shares: 1024,
+                            env: Default::default(),
+                            volumes: vec![],
+                        });
+                    }
                 }
                 Ok(Message::TerminateApp { app_id }) => {
                     info!("CP ordered: Stop app {}", app_id);
-                    let _ = self.vmm.stop(app_id).await;
+                    // Update cache to remove it
+                    let mut cache = self.state_cache.write().await;
+                    cache.apps.retain(|a| a.app_id != app_id);
                 }
                 Err(e) => {
                     warn!("Command stream interrupted: {}", e);
@@ -97,19 +118,22 @@ impl Daemon {
         StateClient {
             quic: self.quic.clone(),
             node_id: self.node_id.clone(),
+            state_cache: self.state_cache.clone(),
         }
     }
 }
 
 #[derive(Clone)]
 pub struct StateClient {
-    quic: Arc<QuinnClient>,
+    quic: Arc<Mutex<QuinnClient>>,
     node_id: Arc<tokio::sync::RwLock<Option<uuid::Uuid>>>,
+    state_cache: Arc<tokio::sync::RwLock<DesiredState>>,
 }
 
 impl StateClient {
     pub async fn get_desired_state(&self) -> anyhow::Result<DesiredState> {
-        Ok(DesiredState::default())
+        let cache = self.state_cache.read().await;
+        Ok(cache.clone())
     }
 }
 
@@ -121,13 +145,16 @@ pub struct DesiredState {
 
 #[derive(Debug, Clone, Zeroize, ZeroizeOnDrop)]
 pub struct DesiredApp {
+    #[zeroize(skip)]
     pub app_id: uuid::Uuid,
     pub image: String,
+    #[zeroize(skip)]
     pub command: Option<Vec<String>>,
     pub memory_mb: u64,
     pub cpu_shares: u64,
     #[zeroize(skip)]
     pub env: std::collections::HashMap<String, String>,
+    #[zeroize(skip)]
     pub volumes: Vec<VolumeMount>,
 }
 

@@ -23,7 +23,7 @@ tokio-util = { workspace = true }
 
 # HTTP client (talks to control plane)
 hyper = { workspace = true }
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = ["stream"] }
 
 # Serialization
 serde = { workspace = true }
@@ -50,6 +50,16 @@ config = { workspace = true }
 dashmap = "6.1"
 async-trait = "0.1"
 tempfile = "3.8"
+zeroize = { version = "1.7", features = ["derive"] }
+bytes = "1.5"
+gethostname = "0.4"
+futures = "0.3"
+
+# WASM Runtime
+wasmtime = "14.0"
+wasmtime-wasi = "14.0"
+wasi-common = "14.0"
+cap-std = "2.0"
 
 [features]
 default = []

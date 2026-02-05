@@ -16,7 +16,10 @@ tracing = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 aws-sdk-s3 = "1.50"
+aws-credential-types = "1.2"
 aws-types = "1.2"
 aws-smithy-runtime = "1.7"
 aes-gcm = "0.10"
@@ -26,8 +29,10 @@ base64 = "0.22"
 hex = "0.4"
 hmac = "0.12"
 subtle = "2.5"
-reqwest = { workspace = true, features = ["json"] }
-tokio-tar = "0.4"
+reqwest = { workspace = true, features = ["json", "stream"] }
+dashmap = "6.1"
+futures-util = "0.3"
+tokio-tar = "0.3"
 flate2 = "1.0"
 tempfile = "3.8"
 

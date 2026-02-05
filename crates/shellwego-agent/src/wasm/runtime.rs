@@ -1,53 +1,54 @@
 //! Wasmtime-based runtime implementation
 
-use crate::wasm::{WasmError, WasmConfig, CompiledModule, WasmInstance, ExitStatus};
+use crate::wasm::{WasmError, WasmConfig, CompiledModule};
+use wasmtime::{Engine, Config, Module};
+use anyhow::Context;
 
 /// Wasmtime runtime wrapper
+#[derive(Clone)]
 pub struct WasmtimeRuntime {
-    // TODO: Add wasmtime::Engine, config
+    engine: Engine,
 }
 
 impl WasmtimeRuntime {
     /// Create engine with custom config
     pub fn new(config: &WasmConfig) -> Result<Self, WasmError> {
-        // TODO: Configure wasmtime::Config
-        // TODO: Enable Cranelift optimizations
-        // TODO: Setup epoch interruption for timeouts
-        unimplemented!("WasmtimeRuntime::new")
+        let mut wasm_config = Config::new();
+        
+        // Security & Performance defaults
+        wasm_config.consume_fuel(true); // Enable CPU limits
+        wasm_config.epoch_interruption(true); // Enable timeouts
+        wasm_config.cranelift_nan_canonicalization(true); // Determinism
+        wasm_config.parallel_compilation(true);
+        
+        // Memory limits
+        // static_memory_maximum_size = 4GB usually, but we limit at Linker/Store level
+        
+        let engine = Engine::new(&wasm_config)
+            .map_err(|e| WasmError::InstantiateError(format!("Failed to create engine: {}", e)))?;
+            
+        Ok(Self { engine })
     }
 
     /// Compile module
     pub fn compile(&self, wasm: &[u8]) -> Result<CompiledModule, WasmError> {
-        // TODO: Use engine.precompile_module or Module::new
-        unimplemented!("WasmtimeRuntime::compile")
+        let module = Module::new(&self.engine, wasm)
+            .map_err(|e| WasmError::CompileError(e.to_string()))?;
+            
+        Ok(CompiledModule { inner: module })
     }
 
     /// Load pre-compiled artifact
     pub fn load_precompiled(&self, data: &[u8]) -> Result<CompiledModule, WasmError> {
-        // TODO: unsafe { Module::deserialize(engine, data) }
-        unimplemented!("WasmtimeRuntime::load_precompiled")
+        // SAFETY: The artifact must have been compiled by the same Engine configuration.
+        // In production, we would sign artifacts to verify origin.
+        let module = unsafe { Module::deserialize(&self.engine, data) }
+            .map_err(|e| WasmError::CompileError(format!("Deserialize failed: {}", e)))?;
+            
+        Ok(CompiledModule { inner: module })
     }
-}
-
-/// WASI preview2 component support
-pub struct ComponentRuntime {
-    // TODO: Add wasmtime::component::Component support
-}
-
-impl ComponentRuntime {
-    /// Compile WebAssembly component
-    pub fn compile_component(&self, wasm: &[u8]) -> Result<Component, WasmError> {
-        // TODO: Component::from_binary
-        unimplemented!("ComponentRuntime::compile_component")
+    
+    pub fn engine(&self) -> &Engine {
+        &self.engine
     }
-}
-
-/// Component handle
-pub struct Component {
-    // TODO: Wrap wasmtime::component::Component
-}
-
-/// Capability provider for WASI
-pub struct CapabilityProvider {
-    // TODO: Implement wasi-http, wasi-sockets, wasi-filesystem
 }

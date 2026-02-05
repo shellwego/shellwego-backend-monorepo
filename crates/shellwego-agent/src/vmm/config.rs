@@ -3,9 +3,10 @@
 //! Maps to Firecracker's API types but simplified for our use case.
 
 use std::path::PathBuf;
+use serde::{Serialize, Deserialize};
 
 /// Complete microVM configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MicrovmConfig {
     pub app_id: uuid::Uuid,
     pub vm_id: uuid::Uuid,
@@ -19,7 +20,7 @@ pub struct MicrovmConfig {
 }
 
 /// Block device configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DriveConfig {
     pub drive_id: String,
     pub path_on_host: PathBuf,
@@ -29,7 +30,7 @@ pub struct DriveConfig {
 }
 
 /// Network interface configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkInterface {
     pub iface_id: String,
     pub host_dev_name: String,
@@ -40,7 +41,7 @@ pub struct NetworkInterface {
 }
 
 /// Runtime state of a microVM
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MicrovmState {
     Uninitialized,
     Configured,
@@ -50,7 +51,7 @@ pub enum MicrovmState {
 }
 
 /// Metrics from a running microVM
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MicrovmMetrics {
     pub cpu_usage_usec: u64,
     pub memory_rss_bytes: u64,

@@ -13,7 +13,7 @@
 //!   4. Decrypt: fetch wrapped_dek, decrypt with KEK -> plaintext DEK
 
 use std::fmt;
-use aes_gcm::{Aes256Gcm, Key, Nonce};
+use aes_gcm::{Aes256Gcm, Nonce, KeyInit};
 use aes_gcm::aead::{Aead, OsRng};
 use sha2::Sha256;
 use hmac::{Hmac, Mac as _};
@@ -135,7 +135,6 @@ impl EncryptionProvider {
         let expected_hmac: [u8; HMAC_SIZE] = expected_tag.try_into()
             .map_err(|_| EncryptionError::InvalidKey)?;
 
-        use subtle::ConstantTimeEq;
         if actual_tag.as_slice() != expected_hmac.as_slice() {
             return Err(EncryptionError::AuthFailed);
         }
@@ -150,7 +149,7 @@ impl EncryptionProvider {
     }
 
     fn compute_hmac(&self, data: &[u8]) -> Vec<u8> {
-        let mut mac = Hmac::<Sha256>::new_from_slice(&self.master_key)
+        let mut mac: Hmac<Sha256> = hmac::Mac::new_from_slice(&self.master_key)
             .expect("HMAC key size valid");
         mac.update(data);
         let result = mac.finalize().into_bytes();
@@ -179,31 +178,39 @@ impl DataKey {
     }
 
     pub fn to_base64(&self) -> String {
-        let combined = [self.iv.len().to_be_bytes(),
-                        &self.iv,
-                        self.ciphertext.len().to_be_bytes(),
-                        &self.ciphertext].concat();
+        let iv_len_bytes = (self.iv.len() as u32).to_be_bytes();
+        let ciphertext_len_bytes = (self.ciphertext.len() as u32).to_be_bytes();
+        
+        let mut combined = Vec::with_capacity(8 + self.iv.len() + self.ciphertext.len());
+        combined.extend_from_slice(&iv_len_bytes);
+        combined.extend_from_slice(&self.iv);
+        combined.extend_from_slice(&ciphertext_len_bytes);
+        combined.extend_from_slice(&self.ciphertext);
+        
         STANDARD.encode(combined)
     }
 
     pub fn from_base64(s: &str) -> Result<Self, EncryptionError> {
         let combined = STANDARD.decode(s)
-            .map_err(|e| EncryptionError::InvalidKey)?;
+            .map_err(|_| EncryptionError::InvalidKey)?;
 
-        if combined.len() < 8 + IV_SIZE + 8 {
+        if combined.len() < 8 {
             return Err(EncryptionError::InvalidKey);
         }
 
         let iv_len = u32::from_be_bytes(combined[0..4].try_into().unwrap()) as usize;
-        let ciphertext_len = u32::from_be_bytes(combined[4+IV_SIZE..8+IV_SIZE].try_into().unwrap()) as usize;
+        if combined.len() < 8 + iv_len {
+            return Err(EncryptionError::InvalidKey);
+        }
 
-        let expected_len = 8 + iv_len + 8 + ciphertext_len;
-        if combined.len() != expected_len {
+        let ciphertext_len = u32::from_be_bytes(combined[4+iv_len..8+iv_len].try_into().unwrap()) as usize;
+
+        if combined.len() != 8 + iv_len + ciphertext_len {
             return Err(EncryptionError::InvalidKey);
         }
 
         let iv = combined[4..4+iv_len].to_vec();
-        let ciphertext = combined[8+IV_SIZE..].to_vec();
+        let ciphertext = combined[8+iv_len..].to_vec();
 
         Ok(DataKey {
             ciphertext,
@@ -212,6 +219,7 @@ impl DataKey {
         })
     }
 }
+
 
 impl fmt::Display for DataKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

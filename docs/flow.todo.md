@@ -1,3 +1,13 @@
+lets make crates/shellwego-agent production ready by
+
+1. making all test pass, no mock, real verify implementation
+2. achieve the purpose as readme.md.
+
+Your Bible is readme.md in root for any troubles.
+
+response me in many parts... now give me the 1/x part first
+
+===
 
 done working on : crates/shellwego-core , crates/shellwego-storage , crates/shellwego-network
 
@@ -14,7 +24,7 @@ ______/
 
 
 oh the latest progress report see docs/changes/agent_production_ready_progress.md
-also why not use https://github.com/firecracker-microvm/firecracker
+also why not use https://github.com/firecracker-microvm/firecracker or context7 mcp
 
 ===
  

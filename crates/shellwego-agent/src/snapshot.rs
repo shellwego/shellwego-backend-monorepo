@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{info, debug, warn};
+use tracing::info;
 use uuid::Uuid;
 use serde::{Serialize, Deserialize};
 
@@ -59,9 +59,20 @@ impl SnapshotManager {
         let snapshot_id = format!("{}-{}", snapshot_name, Uuid::new_v4());
         info!("Creating snapshot {} for app {}", snapshot_id, app_id);
 
-        // TODO: Call VmmManager::pause()
-        // TODO: Call Firecracker API to create memory snapshot
-        // TODO: Call ZFS to create disk snapshot
+        let base_path = self.snapshot_dir.join("memory").join(&snapshot_id);
+        let mem_path = base_path.with_extension("mem");
+        let snap_path = base_path.with_extension("snap");
+
+        // 1. Pause VM to ensure consistency
+        vmm_manager.pause(app_id).await?;
+
+        // 2. Take memory snapshot
+        vmm_manager.snapshot_vm_state(app_id, mem_path.clone(), snap_path.clone()).await?;
+
+        // 3. TODO: Take ZFS disk snapshot here (requires ZFS integration from storage crate)
+        
+        // 4. Resume VM
+        vmm_manager.resume(app_id).await?;
 
         let info = SnapshotInfo {
             id: snapshot_id,
@@ -69,7 +80,7 @@ impl SnapshotManager {
             name: snapshot_name.to_string(),
             created_at: chrono::Utc::now(),
             size_bytes: 0,
-            memory_path: "".into(),
+            memory_path: mem_path.to_string_lossy().to_string(),
             disk_snapshot: None,
         };
 
@@ -78,7 +89,7 @@ impl SnapshotManager {
 
     pub async fn restore_snapshot(
         &self,
-        vmm_manager: &VmmManager,
+        _vmm_manager: &VmmManager,
         snapshot_id: &str,
         new_app_id: Uuid,
     ) -> anyhow::Result<()> {

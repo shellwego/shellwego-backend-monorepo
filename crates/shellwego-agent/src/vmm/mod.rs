@@ -8,14 +8,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::process::Command;
 use tokio::sync::RwLock;
-use tracing::{info, debug, error};
+use tracing::{info, debug, error, warn};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 mod driver;
 mod config;
 
 pub use driver::FirecrackerDriver;
-pub use config::{MicrovmConfig, MicrovmState, DriveConfig, NetworkInterface};
+pub use config::{MicrovmConfig, MicrovmState, DriveConfig, NetworkInterface, MicrovmMetrics};
 
 /// Manages all microVMs on this node
 #[derive(Clone)]
@@ -35,9 +35,12 @@ struct RunningVm {
     #[zeroize(skip)]
     config: MicrovmConfig,
     #[zeroize(skip)]
-    process: tokio::process::Child,
+    process: Option<tokio::process::Child>,
+    #[zeroize(skip)]
     socket_path: PathBuf,
+    #[zeroize(skip)]
     state: MicrovmState,
+    #[zeroize(skip)]
     started_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -111,7 +114,7 @@ impl VmmManager {
         
         inner.vms.insert(config.app_id, RunningVm {
             config,
-            process: child,
+            process: Some(child),
             socket_path,
             state: MicrovmState::Running,
             started_at: chrono::Utc::now(),
@@ -124,7 +127,7 @@ impl VmmManager {
     pub async fn stop(&self, app_id: uuid::Uuid) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;
         
-        let Some(vm) = inner.vms.remove(&app_id) else {
+        let Some(mut vm) = inner.vms.remove(&app_id) else {
             anyhow::bail!("VM for app {} not found", app_id);
         };
         
@@ -136,16 +139,17 @@ impl VmmManager {
         
         // Wait for process exit or timeout
         let timeout = tokio::time::Duration::from_secs(10);
-        match tokio::time::timeout(timeout, vm.process.wait_with_output()).await {
-            Ok(Ok(output)) => {
-                debug!("Firecracker exited with status: {}", output.status);
-            }
-            Ok(Err(e)) => {
-                error!("Firecracker wait error: {}", e);
-            }
-            Err(_) => {
-                warn!("Firecracker shutdown timeout, killing");
-                let _ = driver.force_shutdown().await;
+        let child_opt = vm.process.take();
+        if let Some(mut child) = child_opt {
+            // We use child.wait() instead of wait_with_output() to keep ownership on timeout
+            if let Err(_) = tokio::time::timeout(timeout, child.wait()).await {
+                warn!("Firecracker shutdown timeout, forcing SIGKILL");
+                // Graceful shutdown failed, kill the process directly
+                if let Err(e) = child.start_kill() {
+                    error!("Failed to kill firecracker process: {}", e);
+                }
+                // Reap the zombie
+                let _ = child.wait().await;
             }
         }
         
@@ -175,18 +179,52 @@ impl VmmManager {
     }
 
     /// Pause microVM (for live migration prep)
-    pub async fn pause(&self, app_id: uuid::Uuid) -> anyhow::Result<()> {
-        // TODO: Implement via Firecracker API
-        // TODO: Sync filesystems, pause vCPUs
-        
+    pub async fn pause(&self, _app_id: uuid::Uuid) -> anyhow::Result<()> {
+        let inner = self.inner.read().await;
+        if let Some(vm) = inner.vms.get(&_app_id) {
+            let driver = self.driver.for_socket(&vm.socket_path);
+            driver.pause_vm().await?;
+            info!("Paused microVM for app {}", _app_id);
+            Ok(())
+        } else {
+            anyhow::bail!("VM not found");
+        }
+    }
+
+    /// Resume microVM
+    pub async fn resume(&self, _app_id: uuid::Uuid) -> anyhow::Result<()> {
+        let inner = self.inner.read().await;
+        if let Some(vm) = inner.vms.get(&_app_id) {
+            let driver = self.driver.for_socket(&vm.socket_path);
+            driver.resume_vm().await?;
+            info!("Resumed microVM for app {}", _app_id);
+            Ok(())
+        } else {
+            anyhow::bail!("VM not found");
+        }
+    }
+
+    /// Execute snapshot on the VMM level
+    pub async fn snapshot_vm_state(&self, app_id: uuid::Uuid, mem_path: PathBuf, snap_path: PathBuf) -> anyhow::Result<()> {
+        let inner = self.inner.read().await;
+        if let Some(vm) = inner.vms.get(&app_id) {
+            let driver = self.driver.for_socket(&vm.socket_path);
+            driver.create_snapshot(
+                mem_path.to_str().unwrap(),
+                snap_path.to_str().unwrap()
+            ).await?;
+            Ok(())
+        } else {
+            anyhow::bail!("VM not found for snapshotting");
+        }
         Ok(())
     }
 
     /// Create snapshot for live migration
     pub async fn create_snapshot(
         &self,
-        app_id: uuid::Uuid,
-        snapshot_path: PathBuf,
+        _app_id: uuid::Uuid,
+        _snapshot_path: PathBuf,
     ) -> anyhow::Result<()> {
         // TODO: Pause VM
         // TODO: Create memory snapshot

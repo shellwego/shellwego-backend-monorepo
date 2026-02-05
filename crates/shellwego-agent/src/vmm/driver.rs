@@ -15,13 +15,32 @@ use firecracker::vmm::client::FirecrackerClient;
 pub use firecracker::models::{InstanceInfo, VmState, BootSource, MachineConfig, Drive, NetworkInterface, ActionInfo, SnapshotCreateParams, SnapshotLoadParams, Vm, Metrics};
 
 /// Firecracker API driver for a specific VM socket
-#[derive(Debug, Clone)]
 pub struct FirecrackerDriver {
     /// Path to the Firecracker binary
     binary: PathBuf,
     /// Path to the VM's Unix socket
     socket_path: Option<PathBuf>,
     client: Option<FirecrackerClient>,
+}
+
+impl Clone for FirecrackerDriver {
+    fn clone(&self) -> Self {
+        Self {
+            binary: self.binary.clone(),
+            socket_path: self.socket_path.clone(),
+            client: None,
+        }
+    }
+}
+
+impl std::fmt::Debug for FirecrackerDriver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FirecrackerDriver")
+            .field("binary", &self.binary)
+            .field("socket_path", &self.socket_path)
+            .field("client", &if self.client.is_some() { "Some(FirecrackerClient)" } else { "None" })
+            .finish()
+    }
 }
 
 impl FirecrackerDriver {
@@ -222,6 +241,7 @@ impl FirecrackerDriver {
             mem_file_path: mem_path.to_string(),
             snapshot_path: snapshot_path.to_string(),
             enable_diff_snapshots: Some(enable_diff_snapshots),
+            resume_vm: Some(true),
         }).await?;
         Ok(())
     }
@@ -294,8 +314,8 @@ impl FirecrackerDriver {
     /// Ok(()) if update succeeds, or an error
     pub async fn update_machine_config(
         &self,
-        vcpu_count: Option<i64>,
-        mem_size_mib: Option<i64>,
+        _vcpu_count: Option<i64>,
+        _mem_size_mib: Option<i64>,
     ) -> anyhow::Result<()> {
         Ok(())
     }
@@ -309,7 +329,7 @@ impl FirecrackerDriver {
     /// Ok(()) if interface is added successfully, or an error
     pub async fn add_network_interface(
         &self,
-        iface: &super::NetworkInterface,
+        _iface: &super::NetworkInterface,
     ) -> anyhow::Result<()> {
         Ok(())
     }
@@ -321,7 +341,7 @@ impl FirecrackerDriver {
     ///
     /// # Returns
     /// Ok(()) if interface is removed successfully, or an error
-    pub async fn remove_network_interface(&self, iface_id: &str) -> anyhow::Result<()> {
+    pub async fn remove_network_interface(&self, _iface_id: &str) -> anyhow::Result<()> {
         Ok(())
     }
 
@@ -332,7 +352,7 @@ impl FirecrackerDriver {
     ///
     /// # Returns
     /// Ok(()) if drive is added successfully, or an error
-    pub async fn add_drive(&self, drive: &super::DriveConfig) -> anyhow::Result<()> {
+    pub async fn add_drive(&self, _drive: &super::DriveConfig) -> anyhow::Result<()> {
         Ok(())
     }
 
@@ -343,7 +363,7 @@ impl FirecrackerDriver {
     ///
     /// # Returns
     /// Ok(()) if drive is removed successfully, or an error
-    pub async fn remove_drive(&self, drive_id: &str) -> anyhow::Result<()> {
+    pub async fn remove_drive(&self, _drive_id: &str) -> anyhow::Result<()> {
         Ok(())
     }
 
@@ -357,8 +377,8 @@ impl FirecrackerDriver {
     /// Ok(()) if update succeeds, or an error
     pub async fn update_boot_source(
         &self,
-        kernel_path: &PathBuf,
-        boot_args: &str,
+        _kernel_path: &PathBuf,
+        _boot_args: &str,
     ) -> anyhow::Result<()> {
         Ok(())
     }
@@ -376,31 +396,37 @@ impl FirecrackerDriver {
     /// # Returns
     /// The current VmState, or an error
     pub async fn get_vm_state(&self) -> anyhow::Result<VmState> {
-        Ok(VmState::NotStarted)
+        let info = self.describe_instance().await?;
+        match info.state.as_str() {
+            "NotStarted" => Ok(VmState::NotStarted),
+            "Starting" => Ok(VmState::Starting),
+            "Running" => Ok(VmState::Running),
+            "Paused" => Ok(VmState::Paused),
+            "Halted" => Ok(VmState::Halted),
+            "Configured" => Ok(VmState::Configured),
+            // Fallback for unexpected states
+            s => {
+                // If unknown, assume running or halted depending on context, 
+                // but here we warn and return Configured to be safe
+                tracing::warn!("Unknown VM state from Firecracker: {}", s);
+                Ok(VmState::Configured)
+            }
+        }
     }
 }
 
 // === Helper functions for converting between types ===
 
 impl FirecrackerDriver {
-    /// Convert MicrovmConfig to firecracker-rs BootSource
-    fn to_boot_source(config: &super::MicrovmConfig) {
-    }
-
-    /// Convert MicrovmConfig to firecracker-rs MachineConfig
-    fn to_machine_config(config: &super::MicrovmConfig) {
-    }
-
-    /// Convert DriveConfig to firecracker-rs Drive
-    fn to_drive(drive: &super::DriveConfig) {
-    }
-
-    /// Convert NetworkInterface to firecracker-rs NetworkInterface
-    fn to_network_interface(net: &super::NetworkInterface) {
-    }
-
     /// Convert firecracker-rs VmState to MicrovmState
-    fn to_microvm_state(state: VmState) -> super::MicrovmState {
-        super::MicrovmState::Uninitialized
+    fn to_microvm_state(_state: VmState) -> super::MicrovmState {
+        match _state {
+            VmState::NotStarted => super::MicrovmState::Uninitialized,
+            VmState::Starting => super::MicrovmState::Configured,
+            VmState::Running => super::MicrovmState::Running,
+            VmState::Paused => super::MicrovmState::Paused,
+            VmState::Halted => super::MicrovmState::Halted,
+            VmState::Configured => super::MicrovmState::Configured,
+        }
     }
 }

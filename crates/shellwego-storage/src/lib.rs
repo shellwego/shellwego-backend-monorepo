@@ -126,4 +126,8 @@ pub fn sanitize_name(name: &str) -> Result<String, StorageError> {
     }
     
     Ok(sanitized)
+}impl From<crate::oci::OciError> for StorageError {
+    fn from(e: crate::oci::OciError) -> Self {
+        StorageError::Backend(format!("OCI: {}", e))
+    }
 }

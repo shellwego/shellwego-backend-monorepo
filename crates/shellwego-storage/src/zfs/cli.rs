@@ -6,7 +6,7 @@ use std::process::Stdio;
 use tokio::process::Command;
 use tracing::{debug, trace, error};
 
-use crate::{StorageError, VolumeInfo, SnapshotInfo, PoolMetrics};
+use crate::{StorageError, VolumeInfo, SnapshotInfo}; use crate::zfs::PoolMetrics;
 
 /// ZFS command interface
 #[derive(Clone)]

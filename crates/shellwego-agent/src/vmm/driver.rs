@@ -222,6 +222,7 @@ impl FirecrackerDriver {
             mem_file_path: mem_path.to_string(),
             snapshot_path: snapshot_path.to_string(),
             enable_diff_snapshots: Some(enable_diff_snapshots),
+resume_vm: Some(true),
         }).await?;
         Ok(())
     }

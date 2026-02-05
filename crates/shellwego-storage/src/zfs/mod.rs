@@ -5,10 +5,14 @@
 
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::process::Command;
+use tokio::sync::RwLock;
 use tracing::{debug, info, warn, error};
 
-use crate::{StorageBackend, StorageError, VolumeInfo, SnapshotInfo};
+use crate::{StorageBackend, StorageError, VolumeInfo, SnapshotInfo, OciClient, OciConfig};
 
 pub mod cli;
 
@@ -20,7 +24,12 @@ pub struct ZfsManager {
     pool: String,
     base_dataset: String,
     cli: ZfsCli,
-    // TODO: Add cache of dataset properties
+    cache: Arc<RwLock<PropertyCache>>,
+}
+
+struct PropertyCache {
+    entries: HashMap<String, (VolumeInfo, std::time::Instant)>,
+    ttl: Duration,
 }
 
 impl ZfsManager {
@@ -48,6 +57,10 @@ impl ZfsManager {
             pool: pool.to_string(),
             base_dataset,
             cli,
+            cache: Arc::new(RwLock::new(PropertyCache {
+                entries: HashMap::new(),
+                ttl: Duration::from_secs(30),
+            })),
         })
     }
 
@@ -215,22 +228,121 @@ impl ZfsManager {
         self.cli.get_pool_info(&self.pool).await
     }
 
+    /// Get dataset info with caching
+    pub async fn get_info_cached(&self, name: &str) -> Result<VolumeInfo, StorageError> {
+        let now = std::time::Instant::now();
+        {
+            let cache = self.cache.read().await;
+            if let Some((info, cached_at)) = cache.entries.get(name) {
+                if now.duration_since(*cached_at) < cache.ttl {
+                    debug!("Cache hit for {}", name);
+                    return Ok(info.clone());
+                }
+            }
+        }
+
+        let info = self.cli.get_info(name).await?;
+
+        let mut cache = self.cache.write().await;
+        cache.entries.insert(name.to_string(), (info.clone(), now));
+
+        Ok(info)
+    }
+
+    /// Invalidate cache for a dataset
+    pub async fn invalidate_cache(&self, name: &str) {
+        let mut cache = self.cache.write().await;
+        cache.entries.remove(name);
+    }
+
+    /// Clear all cached entries
+    pub async fn clear_cache(&self) {
+        let mut cache = self.cache.write().await;
+        cache.entries.clear();
+    }
+}
+
     async fn pull_image_to_dataset(
         &self,
         image_ref: &str,
         target_dataset: &str,
     ) -> Result<(), StorageError> {
-        // TODO: Integrate with container runtime
-        // 1. skopeo copy docker://$image oci:/tmp/...
-        // 2. umoci unpack --image ...
-        // 3. rsync to mounted dataset
-        // 4. snapshot @base
-        
-        // Placeholder: create empty dataset
-        self.cli.create_dataset(target_dataset, None).await?;
+        let oci_config = OciConfig {
+            registry: self.parse_registry(image_ref),
+            username: None,
+            password: None,
+            insecure: false,
+            platform: None,
+        };
+
+        let oci_client = OciClient::new(oci_config).await?;
+
+        let info = self.cli.get_info(target_dataset).await?;
+        let mountpoint = info.mountpoint.ok_or_else(|| {
+            StorageError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "No mountpoint for dataset"
+            ))
+        })?;
+
+        let (_, reference) = self.parse_image_ref(image_ref)?;
+        oci_client.pull_image(reference, target_dataset, mountpoint).await?;
+
         self.cli.snapshot(target_dataset, "base").await?;
-        
+
         Ok(())
+    }
+
+    fn parse_registry(&self, image_ref: &str) -> String {
+        if image_ref.contains("://") {
+            if let Some(colon_pos) = image_ref.find("://") {
+                if let Some(slash_pos) = image_ref[colon_pos + 3..].find('/') {
+                    return image_ref[colon_pos + 3..colon_pos + 3 + slash_pos].to_string();
+                }
+            }
+        }
+        if image_ref.contains('/') {
+            let first_slash = image_ref.find('/').unwrap();
+            let host_port = &image_ref[..first_slash];
+            if host_port.contains(':') || host_port.contains("docker.io") || host_port.contains("ghcr.io") {
+                return host_port.to_string();
+            }
+        }
+        "docker.io".to_string()
+    }
+
+    fn parse_image_ref(&self, image_ref: &str) -> Result<(String, String), StorageError> {
+        let without_registry = if let Some(protocol_end) = image_ref.find("://") {
+            &image_ref[protocol_end + 3..]
+        } else {
+            image_ref
+        };
+
+        let (registry, rest) = if let Some(slash_pos) = without_registry.find('/') {
+            let host_port = &without_registry[..slash_pos];
+            if host_port.contains(':') || host_port.contains('.') {
+                (host_port, &without_registry[slash_pos + 1..])
+            } else {
+                ("docker.io", without_registry)
+            }
+        } else {
+            ("docker.io", without_registry)
+        };
+
+        let (repository, reference) = if let Some(colon_pos) = rest.rfind(':') {
+            let after_last_slash = rest[(rest.rfind('/').unwrap_or(0) + 1)..].to_string();
+            if after_last_slash.starts_with(char::is_numeric) {
+                (rest.to_string(), "latest".to_string())
+            } else {
+                let tag_or_digest = &rest[colon_pos + 1..];
+                let repo = &rest[..colon_pos];
+                (repo.to_string(), tag_or_digest.to_string())
+            }
+        } else {
+            (rest.to_string(), "latest".to_string())
+        };
+
+        Ok((registry.to_string(), format!("{}:{}", repository, reference)))
     }
 }
 

@@ -4,7 +4,7 @@
 
 use std::process::Stdio;
 use tokio::process::Command;
-use tracing::{debug, trace};
+use tracing::{debug, trace, error};
 
 use crate::{StorageError, VolumeInfo, SnapshotInfo, PoolMetrics};
 
@@ -206,23 +206,24 @@ impl ZfsCli {
             ])
             .output()
             .await?;
-            
+
         if !output.status.success() {
             return Err(StorageError::NotFound(dataset.to_string()));
         }
-        
+
         let line = String::from_utf8_lossy(&output.stdout);
         let parts: Vec<&str> = line.trim().split('\t').collect();
-        
+
         if parts.len() < 7 {
             return Err(StorageError::Parse(format!("Unexpected zfs list output: {}", line)));
         }
-        
-        // Parse timestamps and sizes
+
         let created_ts: i64 = parts[6].parse().map_err(|e| {
             StorageError::Parse(format!("Invalid creation timestamp: {}", e))
         })?;
-        
+
+        let properties = self.get_all_properties(dataset).await?;
+
         Ok(VolumeInfo {
             name: parts[0].to_string(),
             used_bytes: parts[1].parse().unwrap_or(0),
@@ -236,8 +237,41 @@ impl ZfsCli {
             },
             created: chrono::DateTime::from_timestamp(created_ts, 0)
                 .unwrap_or_else(|| chrono::Utc::now()),
-            properties: std::collections::HashMap::new(), // TODO: Fetch all properties
+            properties,
         })
+    }
+
+    async fn get_all_properties(&self, dataset: &str) -> Result<std::collections::HashMap<String, String>, StorageError> {
+        let output = Command::new("zfs")
+            .args([
+                "get",
+                "-H",
+                "-p",
+                "-o", "name,property,value",
+                "all",
+                dataset,
+            ])
+            .output()
+            .await?;
+
+        if !output.status.success() {
+            return Ok(std::collections::HashMap::new());
+        }
+
+        let mut properties = std::collections::HashMap::new();
+
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            let parts: Vec<&str> = line.split('\t').collect();
+            if parts.len() >= 3 {
+                let property = parts[1].to_string();
+                let value = parts[2].to_string();
+                if property != "name" {
+                    properties.insert(property, value);
+                }
+            }
+        }
+
+        Ok(properties)
     }
 
     pub async fn list_snapshots(

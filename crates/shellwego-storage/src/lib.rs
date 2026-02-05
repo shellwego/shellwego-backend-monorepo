@@ -1,5 +1,5 @@
 //! Storage management for ShellWeGo
-//! 
+//!
 //! Abstracts ZFS operations for container rootfs and persistent volumes.
 //! All dataset operations go through this crate for consistency and safety.
 
@@ -7,8 +7,14 @@ use std::path::PathBuf;
 use thiserror::Error;
 
 pub mod zfs;
+pub mod s3;
+pub mod encryption;
+pub mod oci;
 
 pub use zfs::ZfsManager;
+pub use s3::{S3Backend, S3Config};
+pub use encryption::{EncryptionProvider, EncryptionConfig, DataKey};
+pub use oci::{OciClient, OciConfig, OciError};
 
 /// Storage backend trait for pluggability
 #[async_trait::async_trait]
@@ -99,6 +105,12 @@ pub enum StorageError {
     
     #[error("Parse error: {0}")]
     Parse(String),
+
+    #[error("Unsupported operation: {0}")]
+    Unsupported(String),
+
+    #[error("Backend error: {0}")]
+    Backend(String),
 }
 
 /// Helper to sanitize dataset names

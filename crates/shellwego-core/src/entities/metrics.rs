@@ -1,18 +1,19 @@
 //! Time-series metrics entities
 
+use std::collections::HashMap;
 use crate::prelude::*;
 
 /// Metric sample
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 pub struct MetricSample {
-    pub timestamp: DateTime<Utc>,
+    pub timestamp: chrono::DateTime<Utc>,
     pub name: String,
     pub value: f64,
     pub labels: HashMap<String, String>,
 }
 
 /// Metric series metadata
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 pub struct MetricSeries {
     pub name: String,
     pub labels: HashMap<String, String>,
@@ -20,7 +21,7 @@ pub struct MetricSeries {
 }
 
 /// Alert rule
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 pub struct AlertRule {
     pub id: uuid::Uuid,
     pub org_id: uuid::Uuid,
@@ -32,13 +33,13 @@ pub struct AlertRule {
     pub notification_channels: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 pub struct AlertCondition {
     pub comparison: ComparisonOp,
     pub threshold: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub enum ComparisonOp {
     Gt, // >
     Lt, // <
@@ -46,7 +47,7 @@ pub enum ComparisonOp {
     Ne, // !=
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub enum AlertSeverity {
     Warning,
     Critical,

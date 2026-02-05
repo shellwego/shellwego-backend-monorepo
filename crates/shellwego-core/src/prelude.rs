@@ -8,5 +8,4 @@ pub use strum::{Display, EnumString};
 pub use uuid::Uuid;
 pub use validator::Validate;
 
-// TODO: Add custom Result and Error types here once defined
-// pub type Result<T> = std::result::Result<T, crate::Error>;
+pub use crate::error::{CoreError, CoreResult};

@@ -49,10 +49,10 @@ strum = { version = "0.25", features = ["derive"] }
 validator = { version = "0.16", features = ["derive"] }
 
 # WASM runtime
-wasmtime = { version = "12.0", optional = true }
+wasmtime = { version = "12.0" }
 
 # eBPF
-aya = { version = "0.11", optional = true }
+aya = { version = "0.11" }
 
 # Metrics & observability
 prometheus = "0.13"

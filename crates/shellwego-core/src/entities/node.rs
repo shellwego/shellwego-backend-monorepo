@@ -2,10 +2,11 @@
 //!
 //! Infrastructure that runs the actual Firecracker microVMs.
 
+use crate::prelude::*;
 #[cfg(feature = "orm")]
 use sea_orm::entity::prelude::*;
-
-use crate::prelude::*;
+#[cfg(feature = "orm")]
+use sea_query::IdenStatic;
 
 pub type NodeId = Uuid;
 
@@ -25,7 +26,7 @@ pub enum NodeStatus {
 }
 
 /// Hardware/OS capabilities
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "orm", derive(sea_orm::FromQueryResult))]
 pub struct NodeCapabilities {
@@ -37,7 +38,7 @@ pub struct NodeCapabilities {
 }
 
 /// Resource capacity and current usage
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "orm", derive(sea_orm::FromQueryResult))]
 pub struct NodeCapacity {
@@ -49,7 +50,7 @@ pub struct NodeCapacity {
 }
 
 /// Node networking configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "orm", derive(sea_orm::FromQueryResult))]
 pub struct NodeNetwork {
@@ -62,7 +63,7 @@ pub struct NodeNetwork {
 }
 
 /// Worker Node entity
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "orm", derive(DeriveEntityModel))]
 #[cfg_attr(feature = "orm", sea_orm(table_name = "nodes"))]
@@ -88,9 +89,7 @@ pub struct Node {
     pub kernel_version: String,
     pub firecracker_version: String,
     pub agent_version: String,
-    #[cfg_attr(feature = "orm", sea_orm(default_value = "sea_orm::prelude::DateTimeWithchrono::Utc::now()"))]
     pub last_seen: DateTime<Utc>,
-    #[cfg_attr(feature = "orm", sea_orm(default_value = "sea_orm::prelude::DateTimeWithchrono::Utc::now()"))]
     pub created_at: DateTime<Utc>,
     pub organization_id: Uuid,
 }

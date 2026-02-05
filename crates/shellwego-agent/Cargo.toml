@@ -36,8 +36,8 @@ sysinfo = "0.30"
 nix = { version = "0.27", features = ["process", "signal", "user"] }
 
 # Firecracker / VMM
-# Using official AWS firecracker-rs SDK
-firecracker = "0.4"
+# Using local firecracker SDK placeholder
+firecracker = { path = "../shellwego-firecracker" }
 
 # Utilities
 tracing = { workspace = true }

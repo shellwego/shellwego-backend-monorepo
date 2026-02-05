@@ -15,35 +15,20 @@ serde = { workspace = true, features = ["derive"] }
 postcard = { version = "1.0", features = ["use-std"] }
 
 # DNS for service discovery (hickory-dns - trust-dns successor)
-hickory-dns = { version = "0.24", features = ["tokio-runtime", "system-config"] }
 hickory-resolver = { version = "0.24", features = ["tokio-runtime", "system-config"] }
 
-[dependencies.quinn]
-version = "0.11"
-
-[dependencies.rustls]
-version = "0.23"
-features = ["ring"]
-
-[dependencies.webpki]
-version = "0.22"
-features = ["std"]
-
-[dependencies.rcgen]
-version = "0.11"
-
-[features]
-default = ["quinn"]
-ebpf = ["aya", "aya-log", "nix"]
-quinn = ["dep:quinn", "dep:rustls", "dep:webpki", "dep:rcgen"]
+quinn = { version = "0.11", optional = true }
+rustls = { version = "0.23", features = ["ring"], optional = true }
+webpki = { version = "0.22", features = ["std"], optional = true }
+rcgen = { version = "0.11", optional = true }
 
 # Netlink for network interface management
 rtnetlink = "0.14"
 netlink-packet-route = "0.14"
 
 # eBPF - Moving from "future" to "foundation"
-aya = { version = "0.12", features = ["async-tokio"], optional = true }
-aya-log = "0.2"
+aya = { version = "0.12", features = ["async_tokio"], optional = true }
+aya-log = { version = "0.2", optional = true }
 
 # IP address management
 ipnetwork = "0.20"
@@ -57,5 +42,10 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 
 # System interface
-nix = { version = "0.27", features = ["net"] }
+nix = { version = "0.27", features = ["net"], optional = true }
 libc = "0.2"
+
+[features]
+default = ["quinn"]
+ebpf = ["aya", "aya-log", "nix"]
+quinn = ["dep:quinn", "dep:rustls", "dep:webpki", "dep:rcgen"]

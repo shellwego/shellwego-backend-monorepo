@@ -20,7 +20,7 @@ sqlx = { workspace = true, features = ["postgres"] }
 # clickhouse-rs = "1.1"
 
 # Payment providers
-stripe-rust = "0.20"
+async-stripe = "0.34"
 # paystack-rs = "0.1"
 
 # PDF generation

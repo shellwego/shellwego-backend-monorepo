@@ -1,96 +1,83 @@
-//! Managed Database entity definitions.
+//! Managed database entity definitions.
 //!
-//! DBaaS: Postgres, MySQL, Redis, etc.
+//! Lifecycle management for Postgres, MySQL, Redis, etc.
 
 use crate::prelude::*;
-
 #[cfg(feature = "orm")]
 use sea_orm::entity::prelude::*;
+#[cfg(feature = "orm")]
+use sea_query::IdenStatic;
 
 pub type DatabaseId = Uuid;
 
-/// Supported database engines
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Database engine types
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, strum::Display, strum::EnumString)]
 #[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-#[serde(rename_all = "lowercase")]
+#[cfg_attr(feature = "orm", derive(sea_orm::entity::prelude::DeriveActiveEnum, sea_query::IdenStatic))]
+#[cfg_attr(feature = "orm", sea_orm(rs_type = "String", db_type = "String(StringLen::N(20))"))]
+#[serde(rename_all = "snake_case")]
 pub enum DatabaseEngine {
+    #[strum(serialize = "postgres")]
     Postgres,
+    #[strum(serialize = "mysql")]
     Mysql,
+    #[strum(serialize = "redis")]
     Redis,
+    #[strum(serialize = "mongodb")]
     Mongodb,
+    #[strum(serialize = "clickhouse")]
     Clickhouse,
 }
 
 /// Database operational status
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, strum::Display, strum::EnumString)]
 #[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "orm", derive(sea_orm::entity::prelude::DeriveActiveEnum, sea_query::IdenStatic))]
+#[cfg_attr(feature = "orm", sea_orm(rs_type = "String", db_type = "String(StringLen::N(20))"))]
 #[serde(rename_all = "snake_case")]
 pub enum DatabaseStatus {
-    Creating,
-    Available,
+    Provisioning,
+    Ready,
+    Scaling,
     BackingUp,
     Restoring,
-    Maintenance,
-    Upgrading,
     Deleting,
     Error,
 }
 
-/// Connection endpoint
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Connection information (metadata only, secrets in separate vault)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "orm", derive(sea_orm::FromQueryResult))]
 pub struct DatabaseEndpoint {
     pub host: String,
     pub port: u16,
-    pub username: String,
-    // TODO: This should reference a secret, not expose value
-    pub password: String,
     pub database: String,
-    pub ssl_mode: String,
+    pub username: String,
 }
 
-/// Resource allocation
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// High Availability configuration
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-pub struct DatabaseResources {
-    pub storage_gb: u64,
-    pub memory_gb: u64,
-    pub cpu_cores: f64,
-}
-
-/// Current usage stats
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
-pub struct DatabaseUsage {
-    pub storage_used_gb: u64,
-    pub connections_active: u32,
-    pub connections_max: u32,
-    pub transactions_per_sec: f64,
-}
-
-/// High availability config
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "orm", derive(sea_orm::FromQueryResult))]
 pub struct HighAvailability {
     pub enabled: bool,
-    pub mode: String, // "synchronous", "asynchronous"
-    pub replica_regions: Vec<String>,
-    pub failover_enabled: bool,
+    pub replicas: u32,
+    pub synchronous: bool,
 }
 
 /// Backup configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "orm", derive(sea_orm::FromQueryResult))]
 pub struct DatabaseBackupConfig {
     pub enabled: bool,
-    pub frequency: String,
     pub retention_days: u32,
-    pub window_start: String, // "02:00"
-    pub window_duration_hours: u32,
+    pub schedule: String, // Cron expression
 }
 
 /// Database entity
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "orm", derive(DeriveEntityModel))]
 #[cfg_attr(feature = "orm", sea_orm(table_name = "databases"))]
@@ -104,17 +91,13 @@ pub struct Database {
     #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary"))]
     pub endpoint: DatabaseEndpoint,
     #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary"))]
-    pub resources: DatabaseResources,
-    #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary"))]
-    pub usage: DatabaseUsage,
+    pub resources: super::app::ResourceSpec,
     #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary"))]
     pub ha: HighAvailability,
     #[cfg_attr(feature = "orm", sea_orm(column_type = "JsonBinary"))]
     pub backup_config: DatabaseBackupConfig,
     pub organization_id: Uuid,
-    #[cfg_attr(feature = "orm", sea_orm(default_value = "sea_orm::prelude::DateTimeWithchrono::Utc::now()"))]
     pub created_at: DateTime<Utc>,
-    #[cfg_attr(feature = "orm", sea_orm(default_value = "sea_orm::prelude::DateTimeWithchrono::Utc::now()"))]
     pub updated_at: DateTime<Utc>,
 }
 
@@ -131,20 +114,13 @@ impl ActiveModelBehavior for ActiveModel {}
 pub struct CreateDatabaseRequest {
     pub name: String,
     pub engine: DatabaseEngine,
-    #[serde(default = "default_version")]
-    pub version: Option<String>,
-    pub resources: DatabaseResources,
+    pub version: String,
+    pub resources: super::app::ResourceSpec,
     #[serde(default)]
-    pub ha: Option<HighAvailability>,
-    #[serde(default)]
-    pub backup_config: Option<DatabaseBackupConfig>,
+    pub ha_enabled: bool,
 }
 
-fn default_version() -> Option<String> {
-    Some("15".to_string()) // Default Postgres
-}
-
-/// Backup metadata
+/// Database backup metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(schemars::JsonSchema))]
 pub struct DatabaseBackup {
@@ -152,9 +128,5 @@ pub struct DatabaseBackup {
     pub database_id: DatabaseId,
     pub created_at: DateTime<Utc>,
     pub size_bytes: u64,
-    pub status: String, // completed, failed, in_progress
-    #[serde(default)]
-    pub wal_segment_start: Option<String>,
-    #[serde(default)]
-    pub wal_segment_end: Option<String>,
+    pub status: String,
 }

@@ -83,7 +83,7 @@ async fn test_zfs_dataset_lifecycle_tc_i2() {
     assert!(result.is_ok(), "Clone creation failed: {:?}", result.err());
 
     let clone_exists = cli.dataset_exists(&clone_name).await;
-    assert!(clone_exists, "Cloned dataset should exist");
+    assert!(clone_exists.unwrap_or(false), "Cloned dataset should exist");
 
     let cleanup = mgr.cleanup_app(app_id).await;
     assert!(cleanup.is_ok(), "Cleanup failed");

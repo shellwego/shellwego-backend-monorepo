@@ -17,7 +17,7 @@
     "showLineNumbers": false,
     "truncateBase64": false,
     "copyToClipboard": true,
-    "includeFullDirectoryStructure": true,
+    "includeFullDirectoryStructure": false,
     "tokenCountTree": false,
     "git": {
       "sortByChanges": true,
@@ -29,7 +29,7 @@
   },
   "include": [
     "crates/shellwego-agent",
-    "crates/shellwego-firecracker",
+    // "crates/shellwego-firecracker",
     "readme.md"
     // "crates/shellwego-storage"
   ],

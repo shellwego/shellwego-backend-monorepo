@@ -1,6 +1,5 @@
 use std::path::PathBuf;
-use std::net::SocketAddrV4;
-use tokio::time::{timeout, Duration};
+use tokio::time::Duration;
 use shellwego_agent::vmm::{VmmManager, MicrovmConfig, DriveConfig, NetworkInterface, MicrovmState};
 use shellwego_storage::zfs::ZfsManager;
 use uuid::Uuid;
@@ -108,7 +107,8 @@ async fn test_cold_start_gauntlet_tc_e2e_1() {
     let output = std::process::Command::new("tc")
         .arg("class")
         .arg("show")
-        .dev(&tap_name)
+        .arg("dev")
+        .arg(&tap_name)
         .output();
     assert!(output.is_ok(), "TC should be queryable");
 
@@ -181,8 +181,8 @@ async fn test_secret_injection_security_tc_e2e_2() {
             .arg(vsock_path.to_string_lossy().to_string())
             .arg("http://localhost/v1/health")
             .output();
-        if output.is_ok() {
-            let stdout = String::from_utf8_lossy(&output.unwrap().stdout);
+        if let Ok(out) = output {
+            let stdout = String::from_utf8_lossy(&out.stdout);
             assert!(stdout.contains("ok") || stdout.contains("OK") || stdout.is_empty());
         }
     }

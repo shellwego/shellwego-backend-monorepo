@@ -1,5 +1,4 @@
-use std::path::PathBuf;
-use shellwego_network::{CniNetwork, NetworkConfig};
+use shellwego_network::NetworkConfig;
 use uuid::Uuid;
 
 fn cni_required() {
@@ -49,9 +48,8 @@ async fn test_tap_bridge_connectivity_tc_i3() {
         .arg(bridge_name)
         .output();
 
-    if !output.map(|o| o.status.success()).unwrap_or(false) {
-        let stderr = output.unwrap_or_default().stderr;
-        if !stderr.is_empty() {
+    if let Ok(o) = output {
+        if !o.status.success() && !o.stderr.is_empty() {
             assert!(true, "Tap creation works but may not be in bridge");
         }
     }
@@ -133,10 +131,12 @@ async fn test_tap_device_creation() {
         .arg("tap")
         .output();
 
-    if !output.as_ref().map(|o| o.status.success()).unwrap_or(false) {
-        let stderr = String::from_utf8_lossy(&output.unwrap_or_default().stderr);
-        if stderr.contains("Operation not permitted") {
-            panic!("SKIPPING: Requires elevated privileges for tuntap");
+    if let Ok(o) = output {
+        if !o.status.success() {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            if stderr.contains("Operation not permitted") {
+                panic!("SKIPPING: Requires elevated privileges for tuntap");
+            }
         }
     }
 
@@ -159,7 +159,8 @@ async fn test_ebpf_qos_rules() {
         .output();
 
     if !output.as_ref().map(|o| o.status.success()).unwrap_or(false) {
-        if output.as_ref().map(|o| o.stderr.contains("cannot find")).unwrap_or(false) {
+        let stderr = output.as_ref().map(|o| String::from_utf8_lossy(&o.stderr).to_string()).unwrap_or_default();
+        if stderr.contains("cannot find") {
             assert!(true, "Device doesn't exist, QoS rules cannot be verified");
         }
     }

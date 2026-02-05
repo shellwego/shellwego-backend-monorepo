@@ -1,6 +1,5 @@
 # Directory Structure
 ```
-.relay/
 crates/
   shellwego-agent/
     src/
@@ -13,6 +12,7 @@ crates/
         runtime.rs
       daemon.rs
       discovery.rs
+      lib.rs
       main.rs
       metrics.rs
       migration.rs
@@ -22,262 +22,136 @@ crates/
       docs/
         1.md
       e2e/
+        mod.rs
         provisioning_test.rs
       integration/
+        mod.rs
         network_test.rs
         snapshot_test.rs
         storage_test.rs
         vmm_test.rs
       unit/
+        mod.rs
         reconciler_test.rs
+      e2e_tests.rs
+      integration_tests.rs
+      unit_tests.rs
     Cargo.toml
     README.md
-  shellwego-billing/
-    src/
-      invoices.rs
-      lib.rs
-      metering.rs
-    Cargo.toml
-    README.md
-  shellwego-cli/
-    src/
-      commands/
-        apps.rs
-        auth.rs
-        build.rs
-        compose.rs
-        config.rs
-        databases.rs
-        domains.rs
-        exec.rs
-        logs.rs
-        mod.rs
-        nodes.rs
-        secrets.rs
-        ssh.rs
-        status.rs
-        top.rs
-        tunnel.rs
-        update.rs
-        volumes.rs
-      client.rs
-      completion.rs
-      config.rs
-      main.rs
-      shell.rs
-    Cargo.toml
-    README.md
-  shellwego-control-plane/
-    src/
-      api/
-        handlers/
-          apps.rs
-          auth.rs
-          databases.rs
-          discovery.rs
-          domains.rs
-          events.rs
-          health.rs
-          marketplace.rs
-          metrics.rs
-          mod.rs
-          nodes.rs
-          secrets.rs
-          volumes.rs
-          webhooks.rs
-        docs.rs
-        mod.rs
-      events/
-        bus.rs
-      federation/
-        gossip.rs
-        mod.rs
-      git/
-        builder.rs
-        mod.rs
-        webhook.rs
-      kms/
-        mod.rs
-        providers.rs
-      operators/
-        mod.rs
-        mysql.rs
-        postgres.rs
-        redis.rs
-      orm/
-        entities/
-          app.rs
-          audit_log.rs
-          backup.rs
-          database.rs
-          deployment.rs
-          domain.rs
-          mod.rs
-          node.rs
-          organization.rs
-          secret.rs
-          user.rs
-          volume.rs
-          webhook.rs
-        migration/
-          m20240101_000001_create_organizations_table.rs
-          m20240101_000002_create_users_table.rs
-          m20240101_000003_create_apps_table.rs
-          m20240101_000004_create_nodes_table.rs
-          m20240101_000005_create_databases_table.rs
-          m20240101_000006_create_domains_table.rs
-          m20240101_000007_create_secrets_table.rs
-          m20240101_000008_create_volumes_table.rs
-          m20240101_000009_create_deployments_table.rs
-          m20240101_000010_create_backups_table.rs
-          m20240101_000011_create_webhooks_table.rs
-          m20240101_000012_create_audit_logs_table.rs
-          m20240101_000013_create_app_instances_table.rs
-          m20240101_000014_create_webhook_deliveries_table.rs
-          m20240101_000015_create_app_volumes_join_table.rs
-          m20240101_000016_create_app_domains_join_table.rs
-          m20240101_000017_create_app_databases_join_table.rs
-          mod.rs
-        repository/
-          app_repository.rs
-          audit_log_repository.rs
-          backup_repository.rs
-          database_repository.rs
-          deployment_repository.rs
-          domain_repository.rs
-          mod.rs
-          node_repository.rs
-          organization_repository.rs
-          secret_repository.rs
-          user_repository.rs
-          volume_repository.rs
-          webhook_repository.rs
-        mod.rs
-      services/
-        audit.rs
-        backup.rs
-        certificate.rs
-        deployment.rs
-        discovery.rs
-        health_check.rs
-        marketplace.rs
-        mod.rs
-        rate_limiter.rs
-        scheduler.rs
-        webhook_delivery.rs
-      config.rs
-      main.rs
-      state.rs
-    tests/
-      docs/
-        1.md
-    Cargo.toml
-    README.md
-  shellwego-core/
-    src/
-      entities/
-        app_instance.rs
-        app.rs
-        audit.rs
-        backup.rs
-        build.rs
-        database.rs
-        domain.rs
-        metrics.rs
-        mod.rs
-        node.rs
-        organization.rs
-        secret.rs
-        volume.rs
-        webhook.rs
-      error.rs
-      lib.rs
-      prelude.rs
-    Cargo.toml
-    README.md
-  shellwego-edge/
-    src/
-      lib.rs
-      proxy.rs
-      router.rs
-      tls.rs
-    tests/
-      docs/
-        1.md
-    Cargo.toml
-    README.md
-  shellwego-firecracker/
-    src/
-      vmm/
-        client/
-          mod.rs
-        mod.rs
-      lib.rs
-      models.rs
-    Cargo.toml
-  shellwego-network/
-    src/
-      cni/
-        mod.rs
-      ebpf/
-        bin/
-          shellwego.bin
-        firewall.rs
-        mod.rs
-        qos.rs
-      quinn/
-        client.rs
-        common.rs
-        mod.rs
-        server.rs
-      bridge.rs
-      discovery.rs
-      ipam.rs
-      lib.rs
-      tap.rs
-      vxlan.rs
-      wireguard.rs
-    Cargo.toml
-    README.md
-  shellwego-observability/
-    src/
-      lib.rs
-      logs.rs
-      metrics.rs
-      tracing.rs
-    Cargo.toml
-    README.md
-  shellwego-registry/
-    src/
-      cache.rs
-      lib.rs
-      pull.rs
-    Cargo.toml
-    README.md
-  shellwego-storage/
-    src/
-      zfs/
-        cli.rs
-        mod.rs
-      encryption.rs
-      lib.rs
-      oci.rs
-      s3.rs
-    Cargo.toml
-    README.md
-.dockerignore
-.gitignore
-Cargo.toml
-docker-compose.yml
-lib.guide.md
-Makefile
-package.json
 readme.md
-relay.config.json
-rust-toolchain.toml
 ```
 
 # Files
+
+## File: crates/shellwego-agent/tests/e2e/mod.rs
+````rust
+mod provisioning_test;
+````
+
+## File: crates/shellwego-agent/tests/integration/mod.rs
+````rust
+mod network_test;
+mod snapshot_test;
+mod storage_test;
+mod vmm_test;
+````
+
+## File: crates/shellwego-agent/tests/unit/mod.rs
+````rust
+mod reconciler_test;
+````
+
+## File: crates/shellwego-agent/tests/e2e_tests.rs
+````rust
+mod e2e;
+````
+
+## File: crates/shellwego-agent/tests/integration_tests.rs
+````rust
+mod integration;
+````
+
+## File: crates/shellwego-agent/tests/unit_tests.rs
+````rust
+mod unit;
+````
+
+## File: crates/shellwego-agent/src/lib.rs
+````rust
+pub mod daemon;
+pub mod discovery;
+pub mod metrics;
+pub mod migration;
+pub mod reconciler;
+pub mod snapshot;
+pub mod vmm;
+pub mod wasm;
+
+use secrecy::SecretString;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use uuid::Uuid;
+
+#[derive(Debug, Clone)]
+pub struct AgentConfig {
+    pub node_id: Option<Uuid>,
+    pub control_plane_url: String,
+    pub join_token: Option<SecretString>,
+    pub region: String,
+    pub zone: String,
+    pub labels: HashMap<String, String>,
+    pub firecracker_binary: PathBuf,
+    pub kernel_image_path: PathBuf,
+    pub data_dir: PathBuf,
+    pub max_microvms: u32,
+    pub reserved_memory_mb: u64,
+    pub reserved_cpu_percent: f64,
+}
+
+impl AgentConfig {
+    pub fn load() -> anyhow::Result<Self> {
+        Ok(Self {
+            node_id: None,
+            control_plane_url: std::env::var("SHELLWEGO_CP_URL")
+                .unwrap_or_else(|_| "127.0.0.1:4433".to_string()),
+            join_token: std::env::var("SHELLWEGO_JOIN_TOKEN").ok().map(SecretString::from),
+            region: std::env::var("SHELLWEGO_REGION").unwrap_or_else(|_| "unknown".to_string()),
+            zone: std::env::var("SHELLWEGO_ZONE").unwrap_or_else(|_| "unknown".to_string()),
+            labels: HashMap::new(),
+            firecracker_binary: "/usr/local/bin/firecracker".into(),
+            kernel_image_path: "/var/lib/shellwego/vmlinux".into(),
+            data_dir: "/var/lib/shellwego".into(),
+            max_microvms: 500,
+            reserved_memory_mb: 512,
+            reserved_cpu_percent: 10.0,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Capabilities {
+    pub kvm: bool,
+    pub nested_virtualization: bool,
+    pub cpu_cores: u32,
+    pub memory_total_mb: u64,
+    pub cpu_features: Vec<String>,
+}
+
+pub fn detect_capabilities() -> anyhow::Result<Capabilities> {
+    let kvm = std::fs::metadata("/dev/kvm").is_ok();
+    let mut sys = sysinfo::System::new_all();
+    sys.refresh_all();
+    let cpu_cores = sys.cpus().len() as u32;
+    let memory_total_mb = sys.total_memory();
+    Ok(Capabilities {
+        kvm,
+        nested_virtualization: false,
+        cpu_cores,
+        memory_total_mb,
+        cpu_features: vec![],
+    })
+}
+````
 
 ## File: crates/shellwego-agent/tests/docs/1.md
 ````markdown
@@ -1261,104 +1135,6 @@ fn test_reconciliation_plan_generation() {
 - **Live Migration:** Snapshot-based VM migration (work in progress).
 ````
 
-## File: crates/shellwego-firecracker/src/vmm/mod.rs
-````rust
-pub mod client;
-````
-
-## File: crates/shellwego-firecracker/src/lib.rs
-````rust
-pub mod models;
-pub mod vmm;
-````
-
-## File: crates/shellwego-firecracker/src/models.rs
-````rust
-use serde::{Serialize, Deserialize};
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct InstanceInfo {
-    pub app_id: Option<String>,
-    pub id: String,
-    pub state: String,
-    pub vmm_version: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum VmState {
-    NotStarted,
-    Starting,
-    Running,
-    Paused,
-    Halted,
-    Configured,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct BootSource {
-    pub kernel_image_path: String,
-    pub boot_args: Option<String>,
-    pub initrd_path: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct MachineConfig {
-    pub vcpu_count: i64,
-    pub mem_size_mib: i64,
-    pub smt: Option<bool>,
-    pub track_dirty_pages: Option<bool>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct Drive {
-    pub drive_id: String,
-    pub path_on_host: String,
-    pub is_root_device: bool,
-    pub is_read_only: bool,
-    pub rate_limiter: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct NetworkInterface {
-    pub iface_id: String,
-    pub host_dev_name: String,
-    pub guest_mac: Option<String>,
-    pub rx_rate_limiter: Option<serde_json::Value>,
-    pub tx_rate_limiter: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ActionInfo {
-    pub action_type: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct SnapshotCreateParams {
-    pub mem_file_path: String,
-    pub snapshot_path: String,
-    pub snapshot_type: Option<String>,
-    pub version: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct SnapshotLoadParams {
-    pub mem_file_path: String,
-    pub snapshot_path: String,
-    pub enable_diff_snapshots: Option<bool>,
-    pub resume_vm: Option<bool>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct Vm {
-    pub state: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct Metrics {
-    pub metrics_path: String,
-}
-````
-
 ## File: crates/shellwego-agent/src/vmm/config.rs
 ````rust
 //! MicroVM configuration structures
@@ -1467,7 +1243,7 @@ pub enum WasmError {
 pub struct WasmRuntime {
     runtime: WasmtimeRuntime,
     // Store modules in memory for "warm" starts
-    module_cache: Arc<Mutex<std::collections::HashMap<String, CompiledModule>>>,
+    _module_cache: Arc<Mutex<std::collections::HashMap<String, CompiledModule>>>,
 }
 
 impl WasmRuntime {
@@ -1476,7 +1252,7 @@ impl WasmRuntime {
         let runtime = WasmtimeRuntime::new(config)?;
         Ok(Self {
             runtime,
-            module_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            _module_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
         })
     }
 
@@ -1525,8 +1301,8 @@ impl WasmRuntime {
         Ok(WasmInstance {
             store: Arc::new(Mutex::new(store)),
             instance,
-            stdout,
-            stderr,
+            _stdout: stdout,
+            _stderr: stderr,
         })
     }
 }
@@ -1545,8 +1321,8 @@ pub struct CompiledModule {
 pub struct WasmInstance {
     store: Arc<Mutex<Store<WasmContext>>>,
     instance: wasmtime::Instance,
-    stdout: WritePipe<std::io::Cursor<Vec<u8>>>,
-    stderr: WritePipe<std::io::Cursor<Vec<u8>>>,
+    _stdout: WritePipe<std::io::Cursor<Vec<u8>>>,
+    _stderr: WritePipe<std::io::Cursor<Vec<u8>>>,
 }
 
 impl WasmInstance {
@@ -1656,6 +1432,31 @@ impl WasmtimeRuntime {
     
     pub fn engine(&self) -> &Engine {
         &self.engine
+    }
+}
+````
+
+## File: crates/shellwego-agent/src/discovery.rs
+````rust
+//! Agent-side Service Discovery
+//! Wraps shared discovery logic from shellwego-network
+
+pub use shellwego_network::discovery::{DiscoveryResolver, ServiceInstance, DiscoveryError};
+
+pub struct ServiceDiscovery {
+    inner: DiscoveryResolver,
+}
+
+impl ServiceDiscovery {
+    pub fn new(domain: String) -> Self {
+        Self {
+            inner: DiscoveryResolver::new(domain),
+        }
+    }
+
+    pub async fn discover_cp(&self) -> Result<std::net::SocketAddr, DiscoveryError> {
+        let instances = self.inner.resolve_srv("control-plane").await?;
+        instances.into_iter().next().ok_or(DiscoveryError::NotFound("cp".to_string()))
     }
 }
 ````
@@ -1836,7 +1637,8 @@ async fn test_cold_start_gauntlet_tc_e2e_1() {
     let app_id = Uuid::new_v4();
     let vm_id = Uuid::new_v4();
 
-    let vmm_manager = VmmManager::new(&test_config()).await.expect("VMM init failed");
+    let metrics = std::sync::Arc::new(shellwego_agent::metrics::MetricsCollector::new(Uuid::new_v4()));
+    let vmm_manager = VmmManager::new(&test_config(), metrics).await.expect("VMM init failed");
     let zfs_manager = ZfsManager::new("shellwego").await.expect("ZFS init failed");
 
     let rootfs_path = zfs_manager.init_app_storage(app_id).await.expect("ZFS init failed");
@@ -1922,7 +1724,8 @@ async fn test_secret_injection_security_tc_e2e_2() {
     let secrets_path = std::path::Path::new(&secrets_dir).join("env.json");
     tokio::fs::write(&secrets_path, secrets_content).await.expect("Failed to write secrets");
 
-    let vmm_manager = VmmManager::new(&test_config()).await.expect("VMM init failed");
+    let metrics = std::sync::Arc::new(shellwego_agent::metrics::MetricsCollector::new(Uuid::new_v4()));
+    let vmm_manager = VmmManager::new(&test_config(), metrics).await.expect("VMM init failed");
     let zfs_manager = ZfsManager::new("shellwego").await.expect("ZFS init failed");
     let rootfs_path = zfs_manager.init_app_storage(app_id).await.expect("ZFS init failed");
 
@@ -1981,7 +1784,8 @@ async fn test_secret_injection_security_tc_e2e_2() {
 async fn test_no_downtime_reconciliation_tc_e2e_3() {
     hardware_checks();
 
-    let vmm_manager = VmmManager::new(&test_config()).await.expect("VMM init failed");
+    let metrics = std::sync::Arc::new(shellwego_agent::metrics::MetricsCollector::new(Uuid::new_v4()));
+    let vmm_manager = VmmManager::new(&test_config(), metrics).await.expect("VMM init failed");
     let zfs_manager = ZfsManager::new("shellwego").await.expect("ZFS init failed");
 
     let app_id = Uuid::new_v4();
@@ -2044,7 +1848,8 @@ async fn test_full_provisioning_pipeline() {
     let app_id = Uuid::new_v4();
     let vm_id = Uuid::new_v4();
 
-    let vmm_manager = VmmManager::new(&test_config()).await.expect("VMM init failed");
+    let metrics = std::sync::Arc::new(shellwego_agent::metrics::MetricsCollector::new(Uuid::new_v4()));
+    let vmm_manager = VmmManager::new(&test_config(), metrics).await.expect("VMM init failed");
     let zfs_manager = ZfsManager::new("shellwego").await.expect("ZFS init failed");
 
     let rootfs_path = zfs_manager.init_app_storage(app_id).await.expect("ZFS init failed");
@@ -2110,824 +1915,6 @@ async fn test_full_provisioning_pipeline() {
     zfs_manager.cleanup_app(app_id).await.expect("Cleanup failed");
 
     println!("Full provisioning pipeline PASSED");
-}
-````
-
-## File: crates/shellwego-firecracker/src/vmm/client/mod.rs
-````rust
-use std::path::{Path, PathBuf};
-use crate::models::*;
-use anyhow::{Result, Context};
-use hyper::{Request, Method, StatusCode};
-use hyper_util::rt::TokioIo;
-use http_body_util::{BodyExt, Full};
-use bytes::Bytes;
-use tokio::net::UnixStream;
-
-#[derive(Clone)]
-pub struct FirecrackerClient {
-    socket_path: PathBuf,
-}
-
-impl FirecrackerClient {
-    pub fn new(socket_path: &Path) -> Self {
-        Self {
-            socket_path: socket_path.to_path_buf(),
-        }
-    }
-
-    /// Internal helper to perform HTTP requests over UDS
-    async fn request<T: serde::Serialize>(&self, method: Method, uri: &str, body: Option<T>) -> Result<String> {
-        let stream = UnixStream::connect(&self.socket_path).await
-            .with_context(|| format!("Failed to connect to firecracker socket at {:?}", self.socket_path))?;
-        
-        let io = TokioIo::new(stream);
-        let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await?;
-        
-        tokio::task::spawn(async move {
-            if let Err(_err) = conn.await {
-                // Connection errors are common when closing sockets, ignore
-            }
-        });
-
-        let req_body = if let Some(b) = body {
-            let json = serde_json::to_string(&b)?;
-            Full::new(Bytes::from(json))
-        } else {
-            Full::new(Bytes::new())
-        };
-
-        let req = Request::builder()
-            .method(method)
-            .uri(format!("http://localhost{}", uri))
-            .header("Host", "localhost")
-            .header("Content-Type", "application/json")
-            .header("Accept", "application/json")
-            .body(req_body)?;
-
-        let res = sender.send_request(req).await?;
-        let status = res.status();
-        let body_bytes = res.collect().await?.to_bytes();
-        let body_str = String::from_utf8(body_bytes.to_vec())?;
-
-        if !status.is_success() && status != StatusCode::NO_CONTENT {
-             // Try to parse error message from Firecracker
-             if let Ok(err_obj) = serde_json::from_str::<serde_json::Value>(&body_str) {
-                 if let Some(msg) = err_obj.get("fault_message").and_then(|v| v.as_str()) {
-                     anyhow::bail!("Firecracker API Error ({}): {}", status, msg);
-                 }
-             }
-             anyhow::bail!("Firecracker API Error ({}): {}", status, body_str);
-        }
-
-        Ok(body_str)
-    }
-
-    pub async fn put_guest_boot_source(&self, boot_source: BootSource) -> Result<()> {
-        self.request(Method::PUT, "/boot-source", Some(boot_source)).await?;
-        Ok(())
-    }
-
-    pub async fn put_machine_configuration(&self, machine_config: MachineConfig) -> Result<()> {
-        self.request(Method::PUT, "/machine-config", Some(machine_config)).await?;
-        Ok(())
-    }
-
-    pub async fn put_drive(&self, drive_id: &str, drive: Drive) -> Result<()> {
-        self.request(Method::PUT, &format!("/drives/{}", drive_id), Some(drive)).await?;
-        Ok(())
-    }
-
-    pub async fn put_network_interface(&self, iface_id: &str, net: NetworkInterface) -> Result<()> {
-        self.request(Method::PUT, &format!("/network-interfaces/{}", iface_id), Some(net)).await?;
-        Ok(())
-    }
-
-    pub async fn put_actions(&self, action: ActionInfo) -> Result<()> {
-        self.request(Method::PUT, "/actions", Some(action)).await?;
-        Ok(())
-    }
-
-    pub async fn get_vm_info(&self) -> Result<InstanceInfo> {
-        let body = self.request::<()>(Method::GET, "/", None).await?;
-        let info = serde_json::from_str(&body)?;
-        Ok(info)
-    }
-
-    pub async fn put_snapshot_create(&self, params: SnapshotCreateParams) -> Result<()> {
-        self.request(Method::PUT, "/snapshot/create", Some(params)).await?;
-        Ok(())
-    }
-
-    pub async fn put_snapshot_load(&self, params: SnapshotLoadParams) -> Result<()> {
-        self.request(Method::PUT, "/snapshot/load", Some(params)).await?;
-        Ok(())
-    }
-
-    pub async fn patch_vm_state(&self, vm: Vm) -> Result<()> {
-        self.request(Method::PATCH, "/vm", Some(vm)).await?;
-        Ok(())
-    }
-
-    pub async fn put_metrics(&self, metrics: Metrics) -> Result<()> {
-        self.request(Method::PUT, "/metrics", Some(metrics)).await?;
-        Ok(())
-    }
-}
-````
-
-## File: crates/shellwego-firecracker/Cargo.toml
-````toml
-[package]
-name = "shellwego-firecracker"
-version = "0.4.0"
-edition = "2021"
-authors = ["ShellWeGo Contributors"]
-license = "AGPL-3.0-or-later"
-description = "Firecracker MicroVM API SDK (placeholder/impl)"
-
-[dependencies]
-serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true }
-tokio = { workspace = true, features = ["full"] }
-hyper = { workspace = true, features = ["full"] }
-bytes = "1.5"
-http-body-util = "0.1"
-anyhow = { workspace = true }
-thiserror = { workspace = true }
-tracing = { workspace = true }
-async-trait = "0.1"
-hyper-util = { version = "0.1", features = ["full"] }
-````
-
-## File: crates/shellwego-agent/src/vmm/mod.rs
-````rust
-//! Virtual Machine Manager
-//! 
-//! Firecracker microVM lifecycle: start, stop, pause, resume.
-//! Communicates with Firecracker via Unix socket HTTP API.
-
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::Arc;
-use tokio::process::Command;
-use tokio::sync::RwLock;
-use tracing::{info, error, warn};
-use zeroize::{Zeroize, ZeroizeOnDrop};
-
-mod driver;
-mod config;
-
-pub use driver::FirecrackerDriver;
-pub use config::{MicrovmConfig, MicrovmState, DriveConfig, NetworkInterface, MicrovmMetrics};
-
-/// Manages all microVMs on this node
-#[derive(Clone)]
-pub struct VmmManager {
-    inner: Arc<RwLock<VmmInner>>,
-    driver: FirecrackerDriver,
-    data_dir: PathBuf,
-}
-
-struct VmmInner {
-    vms: HashMap<uuid::Uuid, RunningVm>,
-    // TODO: Add metrics collector
-}
-
-#[derive(Zeroize, ZeroizeOnDrop)]
-struct RunningVm {
-    #[zeroize(skip)]
-    config: MicrovmConfig,
-    #[zeroize(skip)]
-    process: Option<tokio::process::Child>,
-    #[zeroize(skip)]
-    socket_path: PathBuf,
-    #[zeroize(skip)]
-    state: MicrovmState,
-    #[zeroize(skip)]
-    started_at: chrono::DateTime<chrono::Utc>,
-}
-
-impl VmmManager {
-    pub async fn new(config: &crate::AgentConfig) -> anyhow::Result<Self> {
-        let driver = FirecrackerDriver::new(&config.firecracker_binary).await?;
-        
-        // Ensure runtime directories exist
-        tokio::fs::create_dir_all(&config.data_dir).await?;
-        tokio::fs::create_dir_all(config.data_dir.join("vms")).await?;
-        tokio::fs::create_dir_all(config.data_dir.join("run")).await?;
-        
-        Ok(Self {
-            inner: Arc::new(RwLock::new(VmmInner {
-                vms: HashMap::new(),
-            })),
-            driver,
-            data_dir: config.data_dir.clone(),
-        })
-    }
-
-    /// Start a new microVM
-    pub async fn start(&self, config: MicrovmConfig) -> anyhow::Result<()> {
-        let mut inner = self.inner.write().await;
-        
-        if inner.vms.contains_key(&config.app_id) {
-            anyhow::bail!("VM for app {} already exists", config.app_id);
-        }
-        
-        let vm_dir = self.data_dir.join("vms").join(config.app_id.to_string());
-        tokio::fs::create_dir_all(&vm_dir).await?;
-        
-        let socket_path = vm_dir.join("firecracker.sock");
-        let log_path = vm_dir.join("firecracker.log");
-        
-        // Spawn Firecracker process
-        let mut child = Command::new(&self.driver.binary_path())
-            .arg("--api-sock")
-            .arg(&socket_path)
-            .arg("--id")
-            .arg(config.app_id.to_string())
-            .arg("--log-path")
-            .arg(&log_path)
-            .arg("--level")
-            .arg("Debug")
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()?;
-            
-        // Wait for socket to be created
-        let start = std::time::Instant::now();
-        while !socket_path.exists() {
-            if start.elapsed().as_secs() > 5 {
-                let _ = child.kill().await;
-                anyhow::bail!("Firecracker failed to start: socket timeout");
-            }
-            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-        }
-        
-        // Configure VM via API
-        let driver = self.driver.for_socket(&socket_path);
-        driver.configure_vm(&config).await?;
-        
-        // Start microVM
-        driver.start_vm().await?;
-        
-        info!(
-            "Started microVM {} for app {} ({}MB, {} CPU)",
-            config.vm_id, config.app_id, config.memory_mb, config.cpu_shares
-        );
-        
-        inner.vms.insert(config.app_id, RunningVm {
-            config,
-            process: Some(child),
-            socket_path,
-            state: MicrovmState::Running,
-            started_at: chrono::Utc::now(),
-        });
-        
-        Ok(())
-    }
-
-    /// Stop and remove a microVM
-    pub async fn stop(&self, app_id: uuid::Uuid) -> anyhow::Result<()> {
-        let mut inner = self.inner.write().await;
-        
-        let Some(mut vm) = inner.vms.remove(&app_id) else {
-            anyhow::bail!("VM for app {} not found", app_id);
-        };
-        
-        // Graceful shutdown via API
-        let driver = self.driver.for_socket(&vm.socket_path);
-        if let Err(e) = driver.stop_vm().await {
-            warn!("Graceful shutdown failed: {}, forcing", e);
-        }
-        
-        // Wait for process exit or timeout
-        let timeout = tokio::time::Duration::from_secs(10);
-        let child_opt = vm.process.take();
-        if let Some(mut child) = child_opt {
-            // We use child.wait() instead of wait_with_output() to keep ownership on timeout
-            if let Err(_) = tokio::time::timeout(timeout, child.wait()).await {
-                warn!("Firecracker shutdown timeout, forcing SIGKILL");
-                // Graceful shutdown failed, kill the process directly
-                if let Err(e) = child.start_kill() {
-                    error!("Failed to kill firecracker process: {}", e);
-                }
-                // Reap the zombie
-                let _ = child.wait().await;
-            }
-        }
-        
-        // Cleanup socket and logs
-        let _ = tokio::fs::remove_dir_all(vm.socket_path.parent().unwrap()).await;
-        
-        info!("Stopped microVM for app {}", app_id);
-        Ok(())
-    }
-
-    /// List all running microVMs
-    pub async fn list_running(&self) -> anyhow::Result<Vec<MicrovmSummary>> {
-        let inner = self.inner.read().await;
-        
-        Ok(inner.vms.values().map(|vm| MicrovmSummary {
-            app_id: vm.config.app_id,
-            vm_id: vm.config.vm_id,
-            state: vm.state,
-            started_at: vm.started_at,
-        }).collect())
-    }
-
-    /// Get detailed state of a specific microVM
-    pub async fn get_state(&self, app_id: uuid::Uuid) -> anyhow::Result<Option<MicrovmState>> {
-        let inner = self.inner.read().await;
-        Ok(inner.vms.get(&app_id).map(|vm| vm.state))
-    }
-
-    /// Pause microVM (for live migration prep)
-    pub async fn pause(&self, _app_id: uuid::Uuid) -> anyhow::Result<()> {
-        let inner = self.inner.read().await;
-        if let Some(vm) = inner.vms.get(&_app_id) {
-            let driver = self.driver.for_socket(&vm.socket_path);
-            driver.pause_vm().await?;
-            info!("Paused microVM for app {}", _app_id);
-            Ok(())
-        } else {
-            anyhow::bail!("VM not found");
-        }
-    }
-
-    /// Resume microVM
-    pub async fn resume(&self, _app_id: uuid::Uuid) -> anyhow::Result<()> {
-        let inner = self.inner.read().await;
-        if let Some(vm) = inner.vms.get(&_app_id) {
-            let driver = self.driver.for_socket(&vm.socket_path);
-            driver.resume_vm().await?;
-            info!("Resumed microVM for app {}", _app_id);
-            Ok(())
-        } else {
-            anyhow::bail!("VM not found");
-        }
-    }
-
-    /// Execute snapshot on the VMM level
-    pub async fn snapshot_vm_state(&self, app_id: uuid::Uuid, mem_path: PathBuf, snap_path: PathBuf) -> anyhow::Result<()> {
-        let inner = self.inner.read().await;
-        if let Some(vm) = inner.vms.get(&app_id) {
-            let driver = self.driver.for_socket(&vm.socket_path);
-            driver.create_snapshot(
-                mem_path.to_str().unwrap(),
-                snap_path.to_str().unwrap()
-            ).await?;
-            return Ok(());
-        } else {
-            anyhow::bail!("VM not found for snapshotting");
-        }
-    }
-
-    /// Create snapshot for live migration
-    pub async fn create_snapshot(
-        &self,
-        _app_id: uuid::Uuid,
-        _snapshot_path: PathBuf,
-    ) -> anyhow::Result<()> {
-        // TODO: Pause VM
-        // TODO: Create memory snapshot
-        // TODO: Create disk snapshot via ZFS
-        // TODO: Resume VM
-        
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct MicrovmSummary {
-    pub app_id: uuid::Uuid,
-    pub vm_id: uuid::Uuid,
-    pub state: MicrovmState,
-    pub started_at: chrono::DateTime<chrono::Utc>,
-}
-````
-
-## File: crates/shellwego-agent/src/discovery.rs
-````rust
-//! Agent-side Service Discovery
-//! Wraps shared discovery logic from shellwego-network
-
-pub use shellwego_network::discovery::{DiscoveryResolver, ServiceInstance, DiscoveryError};
-
-pub struct ServiceDiscovery {
-    inner: DiscoveryResolver,
-}
-
-impl ServiceDiscovery {
-    pub fn new(domain: String) -> Self {
-        Self {
-            inner: DiscoveryResolver::new(domain),
-        }
-    }
-
-    pub async fn discover_cp(&self) -> Result<std::net::SocketAddr, DiscoveryError> {
-        let instances = self.inner.resolve_srv("control-plane").await?;
-        instances.into_iter().next().ok_or(DiscoveryError::NotFound("cp".to_string()))
-    }
-}
-````
-
-## File: crates/shellwego-agent/src/migration.rs
-````rust
-//! Live migration of microVMs between nodes
-//!
-//! This module implements live migration using a snapshot-based approach.
-//! For true live migration (zero downtime), we would need Firecracker's
-//! snapshot-transfer feature, but this implementation provides a solid
-//! foundation that can be extended.
-
-use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::RwLock;
-use tracing::{info, debug};
-use uuid::Uuid;
-
-use crate::snapshot::{SnapshotManager, SnapshotInfo};
-use crate::vmm::VmmManager;
-
-/// Migration coordinator that manages VM migration between nodes
-#[derive(Clone)]
-pub struct MigrationManager {
-    /// Snapshot manager for creating/restoring snapshots
-    snapshot_manager: SnapshotManager,
-    /// VMM for controlling VMs
-    vmm_manager: VmmManager,
-    /// Active migration sessions
-    sessions: Arc<RwLock<HashMap<String, MigrationSession>>>,
-    /// Network client for peer communication
-    network_client: Option<Arc<dyn MigrationTransport + Send + Sync>>,
-}
-
-impl MigrationManager {
-    /// Create a new migration manager
-    pub async fn new(
-        data_dir: &std::path::Path,
-        vmm_manager: VmmManager,
-    ) -> anyhow::Result<Self> {
-        let snapshot_manager = SnapshotManager::new(data_dir).await?;
-        
-        Ok(Self {
-            snapshot_manager,
-            vmm_manager,
-            sessions: Arc::new(RwLock::new(HashMap::new())),
-            network_client: None,
-        })
-    }
-
-    /// Set the network transport for peer communication
-    pub fn set_transport<T: MigrationTransport + Send + Sync + 'static>(
-        &mut self,
-        transport: Arc<T>,
-    ) {
-        self.network_client = Some(transport); 
-    }
-
-    /// Initiate live migration to target node
-    ///
-    /// This creates a snapshot of the VM and transfers it to the target node.
-    /// For minimal downtime, the snapshot is created with the VM paused.
-    pub async fn migrate_out(
-        &self,
-        app_id: Uuid,
-        target_node: &str,
-        snapshot_name: Option<&str>,
-    ) -> anyhow::Result<MigrationHandle> {
-        info!("Starting migration of app {} to node {}", app_id, target_node);
-        
-        let session_id = format!("{}-{}", app_id, Uuid::new_v4());
-        let snapshot_name = snapshot_name.unwrap_or("migration");
-        
-        // Create snapshot (pauses VM, creates memory + disk state)
-        let snapshot_info = self.snapshot_manager
-            .create_snapshot(&self.vmm_manager, app_id, snapshot_name)
-            .await?;
-        
-        debug!("Snapshot {} created for migration", snapshot_info.id);
-        
-        // Transfer snapshot to target node
-        let transfer_result = if let Some(ref transport) = self.network_client {
-            transport.transfer_snapshot(&snapshot_info, target_node).await
-        } else {
-            // Store locally for pickup (development mode)
-            self.store_for_pickup(&snapshot_info).await
-        };
-        
-        let handle = MigrationHandle {
-            session_id: session_id.clone(),
-            app_id,
-            target_node: target_node.to_string(),
-            snapshot_id: snapshot_info.id,
-            started_at: chrono::Utc::now(),
-            phase: MigrationPhase::Transferring,
-        };
-        
-        // Store session
-        let mut sessions = self.sessions.write().await;
-        sessions.insert(session_id, MigrationSession {
-            handle: handle.clone(),
-            transfer_status: transfer_result.ok(),
-        });
-        
-        Ok(handle)
-    }
-
-    /// Receive incoming migration from source node
-    pub async fn migrate_in(
-        &self,
-        source_node: &str,
-        snapshot_id: &str,
-    ) -> anyhow::Result<Uuid> {
-        info!("Receiving migration of snapshot {} from node {}", snapshot_id, source_node);
-        
-        // Receive snapshot from source
-        let snapshot_info = if let Some(ref transport) = self.network_client {
-            transport.receive_snapshot(snapshot_id, source_node).await?
-        } else {
-            // Development mode: receive from local storage
-            self.receive_from_pickup(snapshot_id).await?
-        };
-        
-        // Restore VM from snapshot
-        let new_app_id = Uuid::new_v4();
-        self.snapshot_manager
-            .restore_snapshot(&self.vmm_manager, &snapshot_info.id, new_app_id)
-            .await?;
-        
-        info!("Migration completed. Restored as app {}", new_app_id);
-        Ok(new_app_id)
-    }
-
-    /// Check migration progress
-    pub async fn progress(&self, handle: &MigrationHandle) -> anyhow::Result<MigrationStatus> {
-        let sessions = self.sessions.read().await;
-        
-        if let Some(session) = sessions.get(&handle.session_id) {
-            let phase = handle.phase;
-            let progress = match phase {
-                MigrationPhase::Preparing => 5.0,
-                MigrationPhase::Snapshotting => 25.0,
-                MigrationPhase::Transferring => {
-                    // Estimate based on snapshot size
-                    if let Some(bytes) = session.transfer_status {
-                        let estimated_total = bytes * 2; // Rough estimate
-                        (bytes as f64 / estimated_total as f64 * 50.0).min(50.0)
-                    } else {
-                        25.0
-                    }
-                }
-                MigrationPhase::Restoring => 75.0,
-                MigrationPhase::Verifying => 90.0,
-                MigrationPhase::Completed => 100.0,
-                MigrationPhase::Failed => 0.0,
-                MigrationPhase::Rollback => 0.0,
-            };
-            
-            Ok(MigrationStatus {
-                phase,
-                progress_percent: progress,
-                bytes_transferred: session.transfer_status.unwrap_or(0),
-                estimated_remaining_bytes: session.transfer_status.unwrap_or(0),
-                downtime_ms: if phase == MigrationPhase::Completed { 0 } else { 100 },
-            })
-        } else {
-            Ok(MigrationStatus {
-                phase: handle.phase,
-                progress_percent: 0.0,
-                bytes_transferred: 0,
-                estimated_remaining_bytes: 0,
-                downtime_ms: 0,
-            })
-        }
-    }
-
-    /// Cancel ongoing migration
-    pub async fn cancel(&self, handle: MigrationHandle) -> anyhow::Result<()> {
-        info!("Cancelling migration {}", handle.session_id);
-        
-        // Remove session
-        let mut sessions = self.sessions.write().await;
-        sessions.remove(&handle.session_id);
-        
-        // Cleanup snapshot if we created one
-        if !handle.snapshot_id.is_empty() {
-            let _ = self.snapshot_manager.delete_snapshot(&handle.snapshot_id).await;
-        }
-        
-        Ok(())
-    }
-
-    /// Store snapshot locally for pickup (development/testing mode)
-    async fn store_for_pickup(&self, snapshot: &SnapshotInfo) -> anyhow::Result<u64> {
-        let path = std::path::Path::new(&snapshot.memory_path);
-        let metadata = std::fs::metadata(path)?;
-        Ok(metadata.len())
-    }
-
-    /// Receive snapshot from local storage (development/testing mode)
-    async fn receive_from_pickup(&self, snapshot_id: &str) -> anyhow::Result<SnapshotInfo> {
-        self.snapshot_manager.get_snapshot(snapshot_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Snapshot {} not found", snapshot_id))
-    }
-}
-
-/// Trait for network transport during migration
-#[async_trait::async_trait]
-pub trait MigrationTransport {
-    /// Transfer snapshot to target node
-    async fn transfer_snapshot(
-        &self,
-        snapshot: &SnapshotInfo,
-        target_node: &str,
-    ) -> anyhow::Result<u64>;
-    
-    /// Receive snapshot from source node
-    async fn receive_snapshot(
-        &self,
-        snapshot_id: &str,
-        source_node: &str,
-    ) -> anyhow::Result<SnapshotInfo>;
-}
-
-/// Migration session state
-#[derive(Debug)]
-struct MigrationSession {
-    handle: MigrationHandle,
-    transfer_status: Option<u64>,
-}
-
-/// Migration session handle for tracking and monitoring
-#[derive(Debug, Clone)]
-pub struct MigrationHandle {
-    /// Unique session identifier
-    pub session_id: String,
-    /// Application being migrated
-    pub app_id: Uuid,
-    /// Target node for migration
-    pub target_node: String,
-    /// Snapshot ID used for migration
-    pub snapshot_id: String,
-    /// When migration started
-    pub started_at: chrono::DateTime<chrono::Utc>,
-    /// Current phase
-    pub phase: MigrationPhase,
-}
-
-/// Detailed migration status
-#[derive(Debug, Clone)]
-pub struct MigrationStatus {
-    /// Current phase of migration
-    pub phase: MigrationPhase,
-    /// Progress percentage (0-100)
-    pub progress_percent: f64,
-    /// Bytes transferred so far
-    pub bytes_transferred: u64,
-    /// Estimated remaining bytes
-    pub estimated_remaining_bytes: u64,
-    /// Expected downtime in milliseconds
-    pub downtime_ms: u64,
-}
-
-/// Migration phases
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MigrationPhase {
-    /// Initial preparation phase
-    Preparing,
-    /// Creating VM snapshot
-    Snapshotting,
-    /// Transferring snapshot to target
-    Transferring,
-    /// Restoring VM on target
-    Restoring,
-    /// Verifying restored VM
-    Verifying,
-    /// Migration completed successfully
-    Completed,
-    /// Migration failed
-    Failed,
-    /// Rolling back changes
-    Rollback,
-}
-
-/// Migration configuration options
-#[derive(Debug, Clone)]
-pub struct MigrationConfig {
-    /// Whether to use compression during transfer
-    pub compress: bool,
-    /// Whether to verify checksums
-    pub verify_checksums: bool,
-    /// Maximum transfer bandwidth in bytes/sec (0 = unlimited)
-    pub max_bandwidth: u64,
-    /// Whether to preserve MAC addresses
-    pub preserve_mac: bool,
-}
-
-impl Default for MigrationConfig {
-    fn default() -> Self {
-        Self {
-            compress: true,
-            verify_checksums: true,
-            max_bandwidth: 0,
-            preserve_mac: false,
-        }
-    }
-}
-
-/// HTTP-based implementation of migration transport
-pub struct HttpMigrationTransport {
-    client: reqwest::Client,
-    port: u16,
-}
-
-impl HttpMigrationTransport {
-    pub fn new(port: u16) -> Self {
-        Self {
-            client: reqwest::Client::new(),
-            port,
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl MigrationTransport for HttpMigrationTransport {
-    async fn transfer_snapshot(
-        &self,
-        snapshot: &SnapshotInfo,
-        target_node: &str,
-    ) -> anyhow::Result<u64> {
-        let file_path = std::path::PathBuf::from(&snapshot.memory_path);
-        let file_size = tokio::fs::metadata(&file_path).await?.len();
-        
-        let file = tokio::fs::File::open(&file_path).await?;
-        let stream = tokio_util::io::ReaderStream::new(file);
-        
-        let url = format!("http://{}:{}/internal/migration/upload/{}", target_node, self.port, snapshot.id);
-        
-        let res = self.client.post(&url)
-            .body(reqwest::Body::wrap_stream(stream))
-            .send()
-            .await?;
-            
-        if !res.status().is_success() {
-            anyhow::bail!("Upload failed: {}", res.status());
-        }
-        
-        Ok(file_size)
-    }
-    
-    async fn receive_snapshot(
-        &self,
-        _snapshot_id: &str,
-        _source_node: &str,
-    ) -> anyhow::Result<SnapshotInfo> {
-        // In a real scenario, this initiates a pull or confirms a push.
-        // For this implementation, we assume the snapshot was pushed to us 
-        // via an HTTP handler (not shown) and we are just validating/registering it.
-        
-        // Placeholder: Return dummy info assuming handler saved it
-        // Real impl requires coupling with the HTTP server layer
-        Err(anyhow::anyhow!("Pull-based migration not yet implemented"))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::tempdir;
-    
-    #[tokio::test]
-    async fn test_migration_manager_new() {
-        let temp_dir = tempdir().unwrap();
-        // Note: This would need a real VmmManager in a full test
-        // For now, just verify basic construction
-        assert!(temp_dir.path().exists());
-    }
-    
-    #[tokio::test]
-    async fn test_migration_phases() {
-        assert_eq!(MigrationPhase::Preparing, MigrationPhase::Preparing);
-        assert_eq!(MigrationPhase::Completed, MigrationPhase::Completed);
-    }
-    
-    #[tokio::test]
-    async fn test_migration_handle() {
-        let handle = MigrationHandle {
-            session_id: "test-session".to_string(),
-            app_id: Uuid::new_v4(),
-            target_node: "node-1".to_string(),
-            snapshot_id: "snap-1".to_string(),
-            started_at: chrono::Utc::now(),
-            phase: MigrationPhase::Preparing,
-        };
-        
-        assert_eq!(handle.phase, MigrationPhase::Preparing);
-        assert!(!handle.session_id.is_empty());
-    }
 }
 ````
 
@@ -3822,6 +2809,800 @@ By deploying ShellWeGo, you become a cloud provider. This is a serious business 
 **Security**: security@shellwego.com (PGP key available)
 ````
 
+## File: crates/shellwego-agent/src/vmm/mod.rs
+````rust
+//! Virtual Machine Manager
+//! 
+//! Firecracker microVM lifecycle: start, stop, pause, resume.
+//! Communicates with Firecracker via Unix socket HTTP API.
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::process::Command;
+use tokio::sync::RwLock;
+use tracing::{info, error, warn};
+use zeroize::{Zeroize, ZeroizeOnDrop};
+
+mod driver;
+mod config;
+
+pub use driver::FirecrackerDriver;
+pub use config::{MicrovmConfig, MicrovmState, DriveConfig, NetworkInterface, MicrovmMetrics};
+
+use crate::metrics::MetricsCollector;
+
+/// Manages all microVMs on this node
+#[derive(Clone)]
+pub struct VmmManager {
+    inner: Arc<RwLock<VmmInner>>,
+    driver: FirecrackerDriver,
+    data_dir: PathBuf,
+    metrics: Arc<MetricsCollector>,
+}
+
+struct VmmInner {
+    vms: HashMap<uuid::Uuid, RunningVm>,
+    // TODO: Add metrics collector
+}
+
+#[derive(Zeroize, ZeroizeOnDrop)]
+struct RunningVm {
+    #[zeroize(skip)]
+    config: MicrovmConfig,
+    #[zeroize(skip)]
+    process: Option<tokio::process::Child>,
+    #[zeroize(skip)]
+    socket_path: PathBuf,
+    #[zeroize(skip)]
+    state: MicrovmState,
+    #[zeroize(skip)]
+    started_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl VmmManager {
+    pub async fn new(config: &crate::AgentConfig, metrics: Arc<MetricsCollector>) -> anyhow::Result<Self> {
+        let driver = FirecrackerDriver::new(&config.firecracker_binary).await?;
+        
+        // Ensure runtime directories exist
+        tokio::fs::create_dir_all(&config.data_dir).await?;
+        tokio::fs::create_dir_all(config.data_dir.join("vms")).await?;
+        tokio::fs::create_dir_all(config.data_dir.join("run")).await?;
+        
+        Ok(Self {
+            inner: Arc::new(RwLock::new(VmmInner {
+                vms: HashMap::new(),
+            })),
+            driver,
+            data_dir: config.data_dir.clone(),
+            metrics,
+        })
+    }
+
+    /// Start a new microVM
+    pub async fn start(&self, config: MicrovmConfig) -> anyhow::Result<()> {
+        let mut inner = self.inner.write().await;
+        
+        if inner.vms.contains_key(&config.app_id) {
+            anyhow::bail!("VM for app {} already exists", config.app_id);
+        }
+        
+        let vm_dir = self.data_dir.join("vms").join(config.app_id.to_string());
+        tokio::fs::create_dir_all(&vm_dir).await?;
+        
+        let socket_path = vm_dir.join("firecracker.sock");
+        let log_path = vm_dir.join("firecracker.log");
+        
+        // Spawn Firecracker process
+        let mut child = Command::new(&self.driver.binary_path())
+            .arg("--api-sock")
+            .arg(&socket_path)
+            .arg("--id")
+            .arg(config.app_id.to_string())
+            .arg("--log-path")
+            .arg(&log_path)
+            .arg("--level")
+            .arg("Debug")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()?;
+            
+        // Wait for socket to be created
+        let start = std::time::Instant::now();
+        while !socket_path.exists() {
+            if start.elapsed().as_secs() > 5 {
+                let _ = child.kill().await;
+                anyhow::bail!("Firecracker failed to start: socket timeout");
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        }
+        
+        // Configure VM via API
+        let driver = self.driver.for_socket(&socket_path);
+        driver.configure_vm(&config).await?;
+        
+        // Start microVM
+        driver.start_vm().await?;
+        
+        info!(
+            "Started microVM {} for app {} ({}MB, {} CPU)",
+            config.vm_id, config.app_id, config.memory_mb, config.cpu_shares
+        );
+        
+        self.metrics.record_spawn(start.elapsed().as_millis() as u64, true);
+        inner.vms.insert(config.app_id, RunningVm {
+            config,
+            process: Some(child),
+            socket_path,
+            state: MicrovmState::Running,
+            started_at: chrono::Utc::now(),
+        });
+        
+        Ok(())
+    }
+
+    /// Stop and remove a microVM
+    pub async fn stop(&self, app_id: uuid::Uuid) -> anyhow::Result<()> {
+        let mut inner = self.inner.write().await;
+        
+        let Some(mut vm) = inner.vms.remove(&app_id) else {
+            anyhow::bail!("VM for app {} not found", app_id);
+        };
+        
+        // Graceful shutdown via API
+        let driver = self.driver.for_socket(&vm.socket_path);
+        if let Err(e) = driver.stop_vm().await {
+            warn!("Graceful shutdown failed: {}, forcing", e);
+        }
+        
+        // Wait for process exit or timeout
+        let timeout = tokio::time::Duration::from_secs(10);
+        let child_opt = vm.process.take();
+        if let Some(mut child) = child_opt {
+            // We use child.wait() instead of wait_with_output() to keep ownership on timeout
+            if let Err(_) = tokio::time::timeout(timeout, child.wait()).await {
+                warn!("Firecracker shutdown timeout, forcing SIGKILL");
+                // Graceful shutdown failed, kill the process directly
+                if let Err(e) = child.start_kill() {
+                    error!("Failed to kill firecracker process: {}", e);
+                }
+                // Reap the zombie
+                let _ = child.wait().await;
+            }
+        }
+        
+        // Cleanup socket and logs
+        let _ = tokio::fs::remove_dir_all(vm.socket_path.parent().unwrap()).await;
+        
+        info!("Stopped microVM for app {}", app_id);
+        Ok(())
+    }
+
+    /// List all running microVMs
+    pub async fn list_running(&self) -> anyhow::Result<Vec<MicrovmSummary>> {
+        let inner = self.inner.read().await;
+        
+        Ok(inner.vms.values().map(|vm| MicrovmSummary {
+            app_id: vm.config.app_id,
+            vm_id: vm.config.vm_id,
+            state: vm.state,
+            started_at: vm.started_at,
+        }).collect())
+    }
+
+    /// Get detailed state of a specific microVM
+    pub async fn get_state(&self, app_id: uuid::Uuid) -> anyhow::Result<Option<MicrovmState>> {
+        let inner = self.inner.read().await;
+        Ok(inner.vms.get(&app_id).map(|vm| vm.state))
+    }
+
+    /// Pause microVM (for live migration prep)
+    pub async fn pause(&self, _app_id: uuid::Uuid) -> anyhow::Result<()> {
+        let inner = self.inner.read().await;
+        if let Some(vm) = inner.vms.get(&_app_id) {
+            let driver = self.driver.for_socket(&vm.socket_path);
+            driver.pause_vm().await?;
+            info!("Paused microVM for app {}", _app_id);
+            Ok(())
+        } else {
+            anyhow::bail!("VM not found");
+        }
+    }
+
+    /// Resume microVM
+    pub async fn resume(&self, _app_id: uuid::Uuid) -> anyhow::Result<()> {
+        let inner = self.inner.read().await;
+        if let Some(vm) = inner.vms.get(&_app_id) {
+            let driver = self.driver.for_socket(&vm.socket_path);
+            driver.resume_vm().await?;
+            info!("Resumed microVM for app {}", _app_id);
+            Ok(())
+        } else {
+            anyhow::bail!("VM not found");
+        }
+    }
+
+    /// Execute snapshot on the VMM level
+    pub async fn snapshot_vm_state(&self, app_id: uuid::Uuid, mem_path: PathBuf, snap_path: PathBuf) -> anyhow::Result<()> {
+        let inner = self.inner.read().await;
+        if let Some(vm) = inner.vms.get(&app_id) {
+            let driver = self.driver.for_socket(&vm.socket_path);
+            driver.create_snapshot(
+                mem_path.to_str().unwrap(),
+                snap_path.to_str().unwrap()
+            ).await?;
+            return Ok(());
+        } else {
+            anyhow::bail!("VM not found for snapshotting");
+        }
+    }
+
+    /// Create snapshot for live migration
+    pub async fn create_snapshot(
+        &self,
+        _app_id: uuid::Uuid,
+        _snapshot_path: PathBuf,
+    ) -> anyhow::Result<()> {
+        // TODO: Pause VM
+        // TODO: Create memory snapshot
+        // TODO: Create disk snapshot via ZFS
+        // TODO: Resume VM
+        
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct MicrovmSummary {
+    pub app_id: uuid::Uuid,
+    pub vm_id: uuid::Uuid,
+    pub state: MicrovmState,
+    pub started_at: chrono::DateTime<chrono::Utc>,
+}
+````
+
+## File: crates/shellwego-agent/src/migration.rs
+````rust
+//! Live migration of microVMs between nodes
+//!
+//! This module implements live migration using a snapshot-based approach.
+//! For true live migration (zero downtime), we would need Firecracker's
+//! snapshot-transfer feature, but this implementation provides a solid
+//! foundation that can be extended.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use tracing::{info, debug};
+use uuid::Uuid;
+
+use crate::snapshot::{SnapshotManager, SnapshotInfo};
+use crate::vmm::VmmManager;
+
+/// Migration coordinator that manages VM migration between nodes
+#[derive(Clone)]
+pub struct MigrationManager {
+    /// Snapshot manager for creating/restoring snapshots
+    snapshot_manager: SnapshotManager,
+    /// VMM for controlling VMs
+    vmm_manager: VmmManager,
+    /// Active migration sessions
+    sessions: Arc<RwLock<HashMap<String, MigrationSession>>>,
+    /// Network client for peer communication
+    network_client: Option<Arc<dyn MigrationTransport + Send + Sync>>,
+}
+
+impl MigrationManager {
+    /// Create a new migration manager
+    pub async fn new(
+        data_dir: &std::path::Path,
+        vmm_manager: VmmManager,
+    ) -> anyhow::Result<Self> {
+        let snapshot_manager = SnapshotManager::new(data_dir).await?;
+        
+        Ok(Self {
+            snapshot_manager,
+            vmm_manager,
+            sessions: Arc::new(RwLock::new(HashMap::new())),
+            network_client: None,
+        })
+    }
+
+    /// Set the network transport for peer communication
+    pub fn set_transport<T: MigrationTransport + Send + Sync + 'static>(
+        &mut self,
+        transport: Arc<T>,
+    ) {
+        self.network_client = Some(transport); 
+    }
+
+    /// Initiate live migration to target node
+    ///
+    /// This creates a snapshot of the VM and transfers it to the target node.
+    /// For minimal downtime, the snapshot is created with the VM paused.
+    pub async fn migrate_out(
+        &self,
+        app_id: Uuid,
+        target_node: &str,
+        snapshot_name: Option<&str>,
+    ) -> anyhow::Result<MigrationHandle> {
+        info!("Starting migration of app {} to node {}", app_id, target_node);
+        
+        let session_id = format!("{}-{}", app_id, Uuid::new_v4());
+        let snapshot_name = snapshot_name.unwrap_or("migration");
+        
+        // Create snapshot (pauses VM, creates memory + disk state)
+        let snapshot_info = self.snapshot_manager
+            .create_snapshot(&self.vmm_manager, app_id, snapshot_name)
+            .await?;
+        
+        debug!("Snapshot {} created for migration", snapshot_info.id);
+        
+        // Transfer snapshot to target node
+        let transfer_result = if let Some(ref transport) = self.network_client {
+            transport.transfer_snapshot(&snapshot_info, target_node).await
+        } else {
+            // Store locally for pickup (development mode)
+            self.store_for_pickup(&snapshot_info).await
+        };
+        
+        let handle = MigrationHandle {
+            session_id: session_id.clone(),
+            app_id,
+            target_node: target_node.to_string(),
+            snapshot_id: snapshot_info.id,
+            started_at: chrono::Utc::now(),
+            phase: MigrationPhase::Transferring,
+        };
+        
+        // Store session
+        let mut sessions = self.sessions.write().await;
+        sessions.insert(session_id, MigrationSession {
+            _handle: handle.clone(),
+            transfer_status: transfer_result.ok(),
+        });
+        
+        Ok(handle)
+    }
+
+    /// Receive incoming migration from source node
+    pub async fn migrate_in(
+        &self,
+        source_node: &str,
+        snapshot_id: &str,
+    ) -> anyhow::Result<Uuid> {
+        info!("Receiving migration of snapshot {} from node {}", snapshot_id, source_node);
+        
+        // Receive snapshot from source
+        let snapshot_info = if let Some(ref transport) = self.network_client {
+            transport.receive_snapshot(snapshot_id, source_node).await?
+        } else {
+            // Development mode: receive from local storage
+            self.receive_from_pickup(snapshot_id).await?
+        };
+        
+        // Restore VM from snapshot
+        let new_app_id = Uuid::new_v4();
+        self.snapshot_manager
+            .restore_snapshot(&self.vmm_manager, &snapshot_info.id, new_app_id)
+            .await?;
+        
+        info!("Migration completed. Restored as app {}", new_app_id);
+        Ok(new_app_id)
+    }
+
+    /// Check migration progress
+    pub async fn progress(&self, handle: &MigrationHandle) -> anyhow::Result<MigrationStatus> {
+        let sessions = self.sessions.read().await;
+        
+        if let Some(session) = sessions.get(&handle.session_id) {
+            let phase = handle.phase;
+            let progress = match phase {
+                MigrationPhase::Preparing => 5.0,
+                MigrationPhase::Snapshotting => 25.0,
+                MigrationPhase::Transferring => {
+                    // Estimate based on snapshot size
+                    if let Some(bytes) = session.transfer_status {
+                        let estimated_total = bytes * 2; // Rough estimate
+                        (bytes as f64 / estimated_total as f64 * 50.0).min(50.0)
+                    } else {
+                        25.0
+                    }
+                }
+                MigrationPhase::Restoring => 75.0,
+                MigrationPhase::Verifying => 90.0,
+                MigrationPhase::Completed => 100.0,
+                MigrationPhase::Failed => 0.0,
+                MigrationPhase::Rollback => 0.0,
+            };
+            
+            Ok(MigrationStatus {
+                phase,
+                progress_percent: progress,
+                bytes_transferred: session.transfer_status.unwrap_or(0),
+                estimated_remaining_bytes: session.transfer_status.unwrap_or(0),
+                downtime_ms: if phase == MigrationPhase::Completed { 0 } else { 100 },
+            })
+        } else {
+            Ok(MigrationStatus {
+                phase: handle.phase,
+                progress_percent: 0.0,
+                bytes_transferred: 0,
+                estimated_remaining_bytes: 0,
+                downtime_ms: 0,
+            })
+        }
+    }
+
+    /// Cancel ongoing migration
+    pub async fn cancel(&self, handle: MigrationHandle) -> anyhow::Result<()> {
+        info!("Cancelling migration {}", handle.session_id);
+        
+        // Remove session
+        let mut sessions = self.sessions.write().await;
+        sessions.remove(&handle.session_id);
+        
+        // Cleanup snapshot if we created one
+        if !handle.snapshot_id.is_empty() {
+            let _ = self.snapshot_manager.delete_snapshot(&handle.snapshot_id).await;
+        }
+        
+        Ok(())
+    }
+
+    /// Store snapshot locally for pickup (development/testing mode)
+    async fn store_for_pickup(&self, snapshot: &SnapshotInfo) -> anyhow::Result<u64> {
+        let path = std::path::Path::new(&snapshot.memory_path);
+        let metadata = std::fs::metadata(path)?;
+        Ok(metadata.len())
+    }
+
+    /// Receive snapshot from local storage (development/testing mode)
+    async fn receive_from_pickup(&self, snapshot_id: &str) -> anyhow::Result<SnapshotInfo> {
+        self.snapshot_manager.get_snapshot(snapshot_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Snapshot {} not found", snapshot_id))
+    }
+}
+
+/// Trait for network transport during migration
+#[async_trait::async_trait]
+pub trait MigrationTransport {
+    /// Transfer snapshot to target node
+    async fn transfer_snapshot(
+        &self,
+        snapshot: &SnapshotInfo,
+        target_node: &str,
+    ) -> anyhow::Result<u64>;
+    
+    /// Receive snapshot from source node
+    async fn receive_snapshot(
+        &self,
+        snapshot_id: &str,
+        source_node: &str,
+    ) -> anyhow::Result<SnapshotInfo>;
+}
+
+/// Migration session state
+#[derive(Debug)]
+struct MigrationSession {
+    _handle: MigrationHandle,
+    transfer_status: Option<u64>,
+}
+
+/// Migration session handle for tracking and monitoring
+#[derive(Debug, Clone)]
+pub struct MigrationHandle {
+    /// Unique session identifier
+    pub session_id: String,
+    /// Application being migrated
+    pub app_id: Uuid,
+    /// Target node for migration
+    pub target_node: String,
+    /// Snapshot ID used for migration
+    pub snapshot_id: String,
+    /// When migration started
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    /// Current phase
+    pub phase: MigrationPhase,
+}
+
+/// Detailed migration status
+#[derive(Debug, Clone)]
+pub struct MigrationStatus {
+    /// Current phase of migration
+    pub phase: MigrationPhase,
+    /// Progress percentage (0-100)
+    pub progress_percent: f64,
+    /// Bytes transferred so far
+    pub bytes_transferred: u64,
+    /// Estimated remaining bytes
+    pub estimated_remaining_bytes: u64,
+    /// Expected downtime in milliseconds
+    pub downtime_ms: u64,
+}
+
+/// Migration phases
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MigrationPhase {
+    /// Initial preparation phase
+    Preparing,
+    /// Creating VM snapshot
+    Snapshotting,
+    /// Transferring snapshot to target
+    Transferring,
+    /// Restoring VM on target
+    Restoring,
+    /// Verifying restored VM
+    Verifying,
+    /// Migration completed successfully
+    Completed,
+    /// Migration failed
+    Failed,
+    /// Rolling back changes
+    Rollback,
+}
+
+/// Migration configuration options
+#[derive(Debug, Clone)]
+pub struct MigrationConfig {
+    /// Whether to use compression during transfer
+    pub compress: bool,
+    /// Whether to verify checksums
+    pub verify_checksums: bool,
+    /// Maximum transfer bandwidth in bytes/sec (0 = unlimited)
+    pub max_bandwidth: u64,
+    /// Whether to preserve MAC addresses
+    pub preserve_mac: bool,
+}
+
+impl Default for MigrationConfig {
+    fn default() -> Self {
+        Self {
+            compress: true,
+            verify_checksums: true,
+            max_bandwidth: 0,
+            preserve_mac: false,
+        }
+    }
+}
+
+/// HTTP-based implementation of migration transport
+pub struct HttpMigrationTransport {
+    client: reqwest::Client,
+    port: u16,
+}
+
+impl HttpMigrationTransport {
+    pub fn new(port: u16) -> Self {
+        Self {
+            client: reqwest::Client::new(),
+            port,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl MigrationTransport for HttpMigrationTransport {
+    async fn transfer_snapshot(
+        &self,
+        snapshot: &SnapshotInfo,
+        target_node: &str,
+    ) -> anyhow::Result<u64> {
+        let file_path = std::path::PathBuf::from(&snapshot.memory_path);
+        let file_size = tokio::fs::metadata(&file_path).await?.len();
+        
+        let file = tokio::fs::File::open(&file_path).await?;
+        let stream = tokio_util::io::ReaderStream::new(file);
+        
+        let url = format!("http://{}:{}/internal/migration/upload/{}", target_node, self.port, snapshot.id);
+        
+        let res = self.client.post(&url)
+            .body(reqwest::Body::wrap_stream(stream))
+            .send()
+            .await?;
+            
+        if !res.status().is_success() {
+            anyhow::bail!("Upload failed: {}", res.status());
+        }
+        
+        Ok(file_size)
+    }
+    
+    async fn receive_snapshot(
+        &self,
+        _snapshot_id: &str,
+        _source_node: &str,
+    ) -> anyhow::Result<SnapshotInfo> {
+        // In a real scenario, this initiates a pull or confirms a push.
+        // For this implementation, we assume the snapshot was pushed to us 
+        // via an HTTP handler (not shown) and we are just validating/registering it.
+        
+        // Placeholder: Return dummy info assuming handler saved it
+        // Real impl requires coupling with the HTTP server layer
+        Err(anyhow::anyhow!("Pull-based migration not yet implemented"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+    
+    #[tokio::test]
+    async fn test_migration_manager_new() {
+        let temp_dir = tempdir().unwrap();
+        // Note: This would need a real VmmManager in a full test
+        // For now, just verify basic construction
+        assert!(temp_dir.path().exists());
+    }
+    
+    #[tokio::test]
+    async fn test_migration_phases() {
+        assert_eq!(MigrationPhase::Preparing, MigrationPhase::Preparing);
+        assert_eq!(MigrationPhase::Completed, MigrationPhase::Completed);
+    }
+    
+    #[tokio::test]
+    async fn test_migration_handle() {
+        let handle = MigrationHandle {
+            session_id: "test-session".to_string(),
+            app_id: Uuid::new_v4(),
+            target_node: "node-1".to_string(),
+            snapshot_id: "snap-1".to_string(),
+            started_at: chrono::Utc::now(),
+            phase: MigrationPhase::Preparing,
+        };
+        
+        assert_eq!(handle.phase, MigrationPhase::Preparing);
+        assert!(!handle.session_id.is_empty());
+    }
+}
+````
+
+## File: crates/shellwego-agent/src/snapshot.rs
+````rust
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use tracing::info;
+use uuid::Uuid;
+use serde::{Serialize, Deserialize};
+
+use crate::vmm::{VmmManager, MicrovmConfig};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnapshotInfo {
+    pub id: String,
+    pub app_id: Uuid,
+    pub name: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub size_bytes: u64,
+    pub memory_path: String,
+    pub disk_snapshot: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SnapshotMetadata {
+    pub id: String,
+    pub app_id: Uuid,
+    pub name: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub memory_path: String,
+    pub snapshot_path: String,
+    pub size_bytes: u64,
+    pub vm_config: Option<MicrovmConfig>,
+    pub disk_snapshot: Option<String>,
+}
+
+#[derive(Clone)]
+pub struct SnapshotManager {
+    snapshot_dir: PathBuf,
+    metadata: Arc<RwLock<HashMap<String, SnapshotMetadata>>>,
+}
+
+impl SnapshotManager {
+    pub async fn new(data_dir: &Path) -> anyhow::Result<Self> {
+        let snapshot_dir = data_dir.join("snapshots");
+        tokio::fs::create_dir_all(snapshot_dir.join("memory")).await?;
+        tokio::fs::create_dir_all(snapshot_dir.join("metadata")).await?;
+
+        Ok(Self {
+            snapshot_dir,
+            metadata: Arc::new(RwLock::new(HashMap::new())),
+        })
+    }
+
+    pub async fn create_snapshot(
+        &self,
+        vmm_manager: &VmmManager,
+        app_id: Uuid,
+        snapshot_name: &str,
+    ) -> anyhow::Result<SnapshotInfo> {
+        let snapshot_id = format!("{}-{}", snapshot_name, Uuid::new_v4());
+        info!("Creating snapshot {} for app {}", snapshot_id, app_id);
+
+        let base_path = self.snapshot_dir.join("memory").join(&snapshot_id);
+        let mem_path = base_path.with_extension("mem");
+        let snap_path = base_path.with_extension("snap");
+
+        // 1. Pause VM to ensure consistency
+        vmm_manager.pause(app_id).await?;
+
+        // 2. Take memory snapshot
+        vmm_manager.snapshot_vm_state(app_id, mem_path.clone(), snap_path.clone()).await?;
+
+        // 3. TODO: Take ZFS disk snapshot here (requires ZFS integration from storage crate)
+        
+        // 4. Resume VM
+        vmm_manager.resume(app_id).await?;
+
+        let info = SnapshotInfo {
+            id: snapshot_id,
+            app_id,
+            name: snapshot_name.to_string(),
+            created_at: chrono::Utc::now(),
+            size_bytes: 0,
+            memory_path: mem_path.to_string_lossy().to_string(),
+            disk_snapshot: None,
+        };
+
+        Ok(info)
+    }
+
+    pub async fn restore_snapshot(
+        &self,
+        _vmm_manager: &VmmManager,
+        snapshot_id: &str,
+        new_app_id: Uuid,
+    ) -> anyhow::Result<()> {
+        info!("Restoring snapshot {} to new app {}", snapshot_id, new_app_id);
+        // TODO: Implement snapshot loading logic via Firecracker driver
+        unimplemented!()
+    }
+
+    pub async fn list_snapshots(&self, app_id: Option<Uuid>) -> anyhow::Result<Vec<SnapshotInfo>> {
+        let meta = self.metadata.read().await;
+        Ok(meta.values()
+            .filter(|m| app_id.map_or(true, |id| m.app_id == id))
+            .map(|m| SnapshotInfo {
+                id: m.id.clone(),
+                app_id: m.app_id,
+                name: m.name.clone(),
+                created_at: m.created_at,
+                size_bytes: m.size_bytes,
+                memory_path: m.memory_path.clone(),
+                disk_snapshot: m.disk_snapshot.clone(),
+            })
+            .collect())
+    }
+
+    pub async fn delete_snapshot(&self, snapshot_id: &str) -> anyhow::Result<()> {
+        let mut meta = self.metadata.write().await;
+        if let Some(m) = meta.remove(snapshot_id) {
+            let _ = tokio::fs::remove_file(m.memory_path).await;
+            let _ = tokio::fs::remove_file(m.snapshot_path).await;
+            // TODO: Cleanup ZFS snapshot if exists
+        }
+        Ok(())
+    }
+
+    pub async fn get_snapshot(&self, snapshot_id: &str) -> anyhow::Result<Option<SnapshotInfo>> {
+        let meta = self.metadata.read().await;
+        Ok(meta.get(snapshot_id).map(|m| SnapshotInfo {
+            id: m.id.clone(),
+            app_id: m.app_id,
+            name: m.name.clone(),
+            created_at: m.created_at,
+            size_bytes: m.size_bytes,
+            memory_path: m.memory_path.clone(),
+            disk_snapshot: m.disk_snapshot.clone(),
+        }))
+    }
+}
+````
+
 ## File: crates/shellwego-agent/src/vmm/driver.rs
 ````rust
 //! Firecracker VMM Driver
@@ -4243,6 +4024,7 @@ impl FirecrackerDriver {
 
 // === Helper functions for converting between types ===
 
+/*
 impl FirecrackerDriver {
     /// Convert firecracker-rs VmState to MicrovmState
     fn to_microvm_state(_state: VmState) -> super::MicrovmState {
@@ -4256,6 +4038,7 @@ impl FirecrackerDriver {
         }
     }
 }
+*/
 ````
 
 ## File: crates/shellwego-agent/src/daemon.rs
@@ -4269,6 +4052,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::{AgentConfig, Capabilities};
 use crate::vmm::VmmManager;
+use crate::metrics::MetricsCollector;
 
 #[derive(Clone)]
 pub struct Daemon {
@@ -4276,8 +4060,9 @@ pub struct Daemon {
     quic: Arc<Mutex<QuinnClient>>,
     node_id: Arc<tokio::sync::RwLock<Option<uuid::Uuid>>>,
     capabilities: Capabilities,
-    vmm: VmmManager,
+    _vmm: VmmManager,
     state_cache: Arc<tokio::sync::RwLock<DesiredState>>,
+    metrics: Arc<MetricsCollector>,
 }
 
 impl Daemon {
@@ -4285,6 +4070,7 @@ impl Daemon {
         config: AgentConfig,
         capabilities: Capabilities,
         vmm: VmmManager,
+        metrics: Arc<MetricsCollector>,
     ) -> anyhow::Result<Self> {
         let quic_conf = QuicConfig::default();
         let quic = Arc::new(Mutex::new(QuinnClient::new(quic_conf)));
@@ -4294,8 +4080,9 @@ impl Daemon {
             quic,
             node_id: Arc::new(tokio::sync::RwLock::new(None)),
             capabilities,
-            vmm,
+            _vmm: vmm,
             state_cache: Arc::new(tokio::sync::RwLock::new(DesiredState::default())),
+            metrics,
         };
 
         daemon.register().await?;
@@ -4309,7 +4096,10 @@ impl Daemon {
 
         let msg = Message::Register {
             hostname: gethostname::gethostname().to_string_lossy().to_string(),
-            capabilities: vec!["kvm".to_string()],
+            capabilities: vec![
+                format!("kvm={}", self.capabilities.kvm),
+                format!("cores={}", self.capabilities.cpu_cores),
+            ],
         };
 
         self.quic.lock().await.send(msg).await?;
@@ -4325,11 +4115,12 @@ impl Daemon {
             ticker.tick().await;
 
             let node_id = *self.node_id.read().await;
+            let stats = self.metrics.get_snapshot();
 
             let msg = Message::Heartbeat {
                 node_id: node_id.unwrap_or_default(),
-                cpu_usage: 0.0,
-                memory_usage: 0.0,
+                cpu_usage: stats.cpu_usage_percent as f64,
+                memory_usage: (stats.memory_used as f64 / stats.memory_total as f64) * 100.0,
             };
 
             if let Err(e) = self.quic.lock().await.send(msg).await {
@@ -4378,8 +4169,8 @@ impl Daemon {
 
     pub fn state_client(&self) -> StateClient {
         StateClient {
-            quic: self.quic.clone(),
-            node_id: self.node_id.clone(),
+            _quic: self.quic.clone(),
+            _node_id: self.node_id.clone(),
             state_cache: self.state_cache.clone(),
         }
     }
@@ -4387,8 +4178,8 @@ impl Daemon {
 
 #[derive(Clone)]
 pub struct StateClient {
-    quic: Arc<Mutex<QuinnClient>>,
-    node_id: Arc<tokio::sync::RwLock<Option<uuid::Uuid>>>,
+    _quic: Arc<Mutex<QuinnClient>>,
+    _node_id: Arc<tokio::sync::RwLock<Option<uuid::Uuid>>>,
     state_cache: Arc<tokio::sync::RwLock<DesiredState>>,
 }
 
@@ -4435,215 +4226,45 @@ pub struct DesiredVolume {
 }
 ````
 
-## File: crates/shellwego-agent/src/snapshot.rs
-````rust
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use tokio::sync::RwLock;
-use tracing::info;
-use uuid::Uuid;
-use serde::{Serialize, Deserialize};
-
-use crate::vmm::{VmmManager, MicrovmConfig};
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SnapshotInfo {
-    pub id: String,
-    pub app_id: Uuid,
-    pub name: String,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub size_bytes: u64,
-    pub memory_path: String,
-    pub disk_snapshot: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct SnapshotMetadata {
-    pub id: String,
-    pub app_id: Uuid,
-    pub name: String,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub memory_path: String,
-    pub snapshot_path: String,
-    pub size_bytes: u64,
-    pub vm_config: Option<MicrovmConfig>,
-    pub disk_snapshot: Option<String>,
-}
-
-#[derive(Clone)]
-pub struct SnapshotManager {
-    snapshot_dir: PathBuf,
-    metadata: Arc<RwLock<HashMap<String, SnapshotMetadata>>>,
-}
-
-impl SnapshotManager {
-    pub async fn new(data_dir: &Path) -> anyhow::Result<Self> {
-        let snapshot_dir = data_dir.join("snapshots");
-        tokio::fs::create_dir_all(snapshot_dir.join("memory")).await?;
-        tokio::fs::create_dir_all(snapshot_dir.join("metadata")).await?;
-
-        Ok(Self {
-            snapshot_dir,
-            metadata: Arc::new(RwLock::new(HashMap::new())),
-        })
-    }
-
-    pub async fn create_snapshot(
-        &self,
-        vmm_manager: &VmmManager,
-        app_id: Uuid,
-        snapshot_name: &str,
-    ) -> anyhow::Result<SnapshotInfo> {
-        let snapshot_id = format!("{}-{}", snapshot_name, Uuid::new_v4());
-        info!("Creating snapshot {} for app {}", snapshot_id, app_id);
-
-        let base_path = self.snapshot_dir.join("memory").join(&snapshot_id);
-        let mem_path = base_path.with_extension("mem");
-        let snap_path = base_path.with_extension("snap");
-
-        // 1. Pause VM to ensure consistency
-        vmm_manager.pause(app_id).await?;
-
-        // 2. Take memory snapshot
-        vmm_manager.snapshot_vm_state(app_id, mem_path.clone(), snap_path.clone()).await?;
-
-        // 3. TODO: Take ZFS disk snapshot here (requires ZFS integration from storage crate)
-        
-        // 4. Resume VM
-        vmm_manager.resume(app_id).await?;
-
-        let info = SnapshotInfo {
-            id: snapshot_id,
-            app_id,
-            name: snapshot_name.to_string(),
-            created_at: chrono::Utc::now(),
-            size_bytes: 0,
-            memory_path: mem_path.to_string_lossy().to_string(),
-            disk_snapshot: None,
-        };
-
-        Ok(info)
-    }
-
-    pub async fn restore_snapshot(
-        &self,
-        _vmm_manager: &VmmManager,
-        snapshot_id: &str,
-        new_app_id: Uuid,
-    ) -> anyhow::Result<()> {
-        info!("Restoring snapshot {} to new app {}", snapshot_id, new_app_id);
-        // TODO: Implement snapshot loading logic via Firecracker driver
-        unimplemented!()
-    }
-
-    pub async fn list_snapshots(&self, app_id: Option<Uuid>) -> anyhow::Result<Vec<SnapshotInfo>> {
-        let meta = self.metadata.read().await;
-        Ok(meta.values()
-            .filter(|m| app_id.map_or(true, |id| m.app_id == id))
-            .map(|m| SnapshotInfo {
-                id: m.id.clone(),
-                app_id: m.app_id,
-                name: m.name.clone(),
-                created_at: m.created_at,
-                size_bytes: m.size_bytes,
-                memory_path: m.memory_path.clone(),
-                disk_snapshot: m.disk_snapshot.clone(),
-            })
-            .collect())
-    }
-
-    pub async fn delete_snapshot(&self, snapshot_id: &str) -> anyhow::Result<()> {
-        let mut meta = self.metadata.write().await;
-        if let Some(m) = meta.remove(snapshot_id) {
-            let _ = tokio::fs::remove_file(m.memory_path).await;
-            let _ = tokio::fs::remove_file(m.snapshot_path).await;
-            // TODO: Cleanup ZFS snapshot if exists
-        }
-        Ok(())
-    }
-
-    pub async fn get_snapshot(&self, snapshot_id: &str) -> anyhow::Result<Option<SnapshotInfo>> {
-        let meta = self.metadata.read().await;
-        Ok(meta.get(snapshot_id).map(|m| SnapshotInfo {
-            id: m.id.clone(),
-            app_id: m.app_id,
-            name: m.name.clone(),
-            created_at: m.created_at,
-            size_bytes: m.size_bytes,
-            memory_path: m.memory_path.clone(),
-            disk_snapshot: m.disk_snapshot.clone(),
-        }))
-    }
-}
-````
-
 ## File: crates/shellwego-agent/src/main.rs
 ````rust
-//! ShellWeGo Agent
-//! 
-//! Runs on every worker node. Responsible for:
-//! - Maintaining heartbeat with control plane
-//! - Spawning/managing Firecracker microVMs
-//! - Enforcing desired state (reconciliation loop)
-//! - Reporting resource usage and health
-
 use std::sync::Arc;
 use tokio::signal;
-use tracing::{info, error};
-use secrecy::SecretString;
+use tracing::{error, info};
 
-mod daemon;
-mod reconciler;
-mod vmm;
-mod wasm;        // WASM runtime support
-mod snapshot;    // VM snapshot management
-mod migration;   // Live migration support
-mod metrics;
-
-use daemon::Daemon;
-use vmm::VmmManager;
+use shellwego_agent::{
+    daemon::Daemon, detect_capabilities, metrics::MetricsCollector, migration::MigrationManager,
+    reconciler::Reconciler, snapshot::SnapshotManager, vmm::VmmManager, wasm, AgentConfig,
+};
 use shellwego_network::CniNetwork;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // TODO: Parse CLI args (config path, log level, node-id if recovering)
-    // TODO: Initialize structured logging (JSON for production)
     tracing_subscriber::fmt::init();
-    
     info!("ShellWeGo Agent starting...");
-    
-    // Load configuration
+
     let config = AgentConfig::load()?;
-    info!("Node ID: {:?}", config.node_id);
-    info!("Control plane: {}", config.control_plane_url);
-    
-    // Detect capabilities (KVM, CPU features, etc)
     let capabilities = detect_capabilities()?;
-    info!("Capabilities: KVM={}, CPUs={}", capabilities.kvm, capabilities.cpu_cores);
-    
-    // Initialize VMM manager (Firecracker)
-    let vmm = VmmManager::new(&config).await?;
-    
-    // Initialize WASM Runtime
+
+    let metrics = Arc::new(MetricsCollector::new(config.node_id.unwrap_or_default()));
+    let vmm = VmmManager::new(&config, metrics.clone()).await?;
+
     let _wasm_runtime = wasm::WasmRuntime::new(&wasm::WasmConfig { max_memory_mb: 512 }).await?;
-
-    // Initialize Metrics
-    let metrics = Arc::new(metrics::MetricsCollector::new(config.node_id.unwrap_or_default()));
-
-    // Initialize Networking (CNI)
     let network = Arc::new(CniNetwork::new("sw0", "10.0.0.0/16").await?);
 
-    // Initialize daemon (control plane communication)
-    let daemon = Daemon::new(config.clone(), capabilities, vmm.clone()).await?;
-    
-    // Start reconciler (desired state enforcement)
-    let reconciler = reconciler::Reconciler::new(vmm.clone(), network, daemon.state_client());
-    
-    // Additional initialization
-    additional_initialization().await?;
+    let daemon = Daemon::new(
+        config.clone(),
+        capabilities,
+        vmm.clone(),
+        metrics.clone(),
+    )
+    .await?;
 
-    // Spawn concurrent tasks
+    let reconciler = Reconciler::new(vmm.clone(), network, daemon.state_client());
+
+    let _snapshot_manager = SnapshotManager::new(&config.data_dir).await?;
+    let _migration_manager = MigrationManager::new(&config.data_dir, vmm.clone()).await?;
+
     let heartbeat_handle = tokio::spawn({
         let daemon = daemon.clone();
         async move {
@@ -4652,7 +4273,7 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     });
-    
+
     let reconciler_handle = tokio::spawn({
         let reconciler = reconciler.clone();
         async move {
@@ -4661,7 +4282,7 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     });
-    
+
     let command_handle = tokio::spawn({
         let daemon = daemon.clone();
         async move {
@@ -4679,118 +4300,21 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     });
-    
+
     let mut term_signal = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
 
-    // Wait for shutdown signal
     tokio::select! {
-        _ = signal::ctrl_c() => {
-            info!("Received SIGINT, shutting down gracefully...");
-        }
-        _ = term_signal.recv() => {
-            info!("Received SIGTERM, shutting down gracefully...");
-        }
+        _ = signal::ctrl_c() => { info!("Received SIGINT..."); }
+        _ = term_signal.recv() => { info!("Received SIGTERM..."); }
     }
-    
-    // Graceful shutdown
-    // TODO: Drain running VMs or hand off to another node
-    // TODO: Flush metrics and logs
-    
+
     heartbeat_handle.abort();
     reconciler_handle.abort();
     command_handle.abort();
     metrics_handle.abort();
-    
+
     info!("Agent shutdown complete");
     Ok(())
-}
-
-/// Additional initialization for WASM, snapshots, and migration
-async fn additional_initialization() -> anyhow::Result<()> {
-    // Placeholder for future advanced setup (e.g., pre-warming WASM cache)
-    Ok(())
-}
-
-/// Agent configuration
-#[derive(Debug, Clone)]
-pub struct AgentConfig {
-    pub node_id: Option<uuid::Uuid>, // None = new registration
-    pub control_plane_url: String,
-    pub join_token: Option<SecretString>,
-    pub region: String,
-    pub zone: String,
-    pub labels: std::collections::HashMap<String, String>,
-    
-    // Paths
-    pub firecracker_binary: std::path::PathBuf,
-    pub kernel_image_path: std::path::PathBuf,
-    pub data_dir: std::path::PathBuf,
-    
-    // Resource limits
-    pub max_microvms: u32,
-    pub reserved_memory_mb: u64,
-    pub reserved_cpu_percent: f64,
-}
-
-impl AgentConfig {
-    pub fn load() -> anyhow::Result<Self> {
-        // TODO: Load from /etc/shellwego/agent.toml
-        // TODO: Override with env vars
-        // TODO: Validate paths exist
-        
-        Ok(Self {
-            node_id: None,
-            control_plane_url: std::env::var("SHELLWEGO_CP_URL")
-                .unwrap_or_else(|_| "127.0.0.1:4433".to_string()),
-            join_token: std::env::var("SHELLWEGO_JOIN_TOKEN").ok().map(SecretString::from),
-            region: std::env::var("SHELLWEGO_REGION").unwrap_or_else(|_| "unknown".to_string()),
-            zone: std::env::var("SHELLWEGO_ZONE").unwrap_or_else(|_| "unknown".to_string()),
-            labels: std::collections::HashMap::new(),
-            
-            firecracker_binary: "/usr/local/bin/firecracker".into(),
-            kernel_image_path: "/var/lib/shellwego/vmlinux".into(),
-            data_dir: "/var/lib/shellwego".into(),
-            
-            max_microvms: 500,
-            reserved_memory_mb: 512,
-            reserved_cpu_percent: 10.0,
-        })
-    }
-}
-
-/// Hardware capabilities detection
-#[derive(Debug, Clone)]
-pub struct Capabilities {
-    pub kvm: bool,
-    pub nested_virtualization: bool,
-    pub cpu_cores: u32,
-    pub memory_total_mb: u64,
-    pub cpu_features: Vec<String>,
-}
-
-fn detect_capabilities() -> anyhow::Result<Capabilities> {
-    use std::fs;
-    
-    // Check KVM access
-    let kvm = fs::metadata("/dev/kvm").is_ok();
-    
-    // Get CPU info via sysinfo
-    let mut sys = sysinfo::System::new_all();
-    sys.refresh_all();
-    
-    let cpu_cores = sys.cpus().len() as u32;
-    let memory_total_mb = sys.total_memory();
-    
-    // TODO: Check /proc/cpuinfo for vmx/svm flags
-    // TODO: Detect nested virt support
-    
-    Ok(Capabilities {
-        kvm,
-        nested_virtualization: false, // TODO
-        cpu_cores,
-        memory_total_mb,
-        cpu_features: vec![], // TODO
-    })
 }
 ````
 
@@ -4837,9 +4361,14 @@ impl Reconciler {
                 }
                 Err(e) => {
                     error!("Reconciliation failed: {}", e);
-                    // Continue looping, don't crash
                 }
             }
+
+            // Run supplementary control loops
+            let _ = self.health_check_loop().await;
+            let _ = self.check_image_updates().await;
+            let _ = self.reconcile_volumes().await;
+            let _ = self.reconcile_network_policies().await;
         }
     }
 

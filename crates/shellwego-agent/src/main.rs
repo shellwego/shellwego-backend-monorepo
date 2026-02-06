@@ -4,7 +4,7 @@ use tracing::{error, info};
 
 use shellwego_agent::{
     daemon::Daemon, detect_capabilities, metrics::MetricsCollector, migration::MigrationManager,
-    reconciler::Reconciler, snapshot::SnapshotManager, vmm::VmmManager, wasm, AgentConfig,
+    reconciler::Reconciler, snapshot::SnapshotManager, vmm::VmmManager, wasm, AgentConfig, metrics,
 };
 use shellwego_network::CniNetwork;
 
@@ -33,7 +33,9 @@ async fn main() -> anyhow::Result<()> {
     let reconciler = Reconciler::new(vmm.clone(), network, daemon.state_client());
 
     let _snapshot_manager = SnapshotManager::new(&config.data_dir).await?;
-    let _migration_manager = MigrationManager::new(&config.data_dir, vmm.clone()).await?;
+    let mut migration_manager = MigrationManager::new(&config.data_dir, vmm.clone()).await?;
+    let migration_transport = std::sync::Arc::new(shellwego_agent::migration::QuicMigrationTransport::new(9001).await?);
+    migration_manager.set_transport(migration_transport);
 
     let heartbeat_handle = tokio::spawn({
         let daemon = daemon.clone();
@@ -65,7 +67,12 @@ async fn main() -> anyhow::Result<()> {
     let metrics_handle = tokio::spawn({
         let metrics = metrics.clone();
         async move {
-            if let Err(e) = metrics.run_collection_loop().await {
+            let collection = metrics.run_collection_loop();
+            let server = metrics::start_metrics_server(metrics.clone(), 9100);
+            
+            // Run both collection loop and server
+            let res = tokio::try_join!(collection, server);
+            if let Err(e) = res {
                 error!("Metrics collection failed: {}", e);
             }
         }

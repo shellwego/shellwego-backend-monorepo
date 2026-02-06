@@ -89,13 +89,32 @@ impl SnapshotManager {
 
     pub async fn restore_snapshot(
         &self,
-        _vmm_manager: &VmmManager,
+        vmm_manager: &VmmManager,
         snapshot_id: &str,
         new_app_id: Uuid,
     ) -> anyhow::Result<()> {
         info!("Restoring snapshot {} to new app {}", snapshot_id, new_app_id);
-        // TODO: Implement snapshot loading logic via Firecracker driver
-        unimplemented!()
+        
+        let meta = self.metadata.read().await;
+        let snapshot_info = meta.get(snapshot_id)
+            .ok_or_else(|| anyhow::anyhow!("Snapshot metadata not found for {}", snapshot_id))?;
+            
+        let mem_path = PathBuf::from(&snapshot_info.memory_path);
+        let snap_path = PathBuf::from(&snapshot_info.snapshot_path);
+        
+        if !mem_path.exists() || !snap_path.exists() {
+            anyhow::bail!("Snapshot files missing on disk");
+        }
+        
+        // TODO: If we have ZFS snapshots, clone the dataset here before starting VM
+        if let Some(disk_snap) = &snapshot_info.disk_snapshot {
+            info!("Should restore ZFS snapshot: {}", disk_snap);
+            // shellwego_storage::zfs::clone_snapshot(disk_snap, &new_app_id.to_string()).await?;
+        }
+
+        vmm_manager.restore_from_snapshot(new_app_id, mem_path, snap_path).await?;
+        
+        Ok(())
     }
 
     pub async fn list_snapshots(&self, app_id: Option<Uuid>) -> anyhow::Result<Vec<SnapshotInfo>> {

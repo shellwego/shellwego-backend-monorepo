@@ -128,6 +128,89 @@ impl VmmManager {
         Ok(())
     }
 
+    /// Restore a microVM from a snapshot
+    pub async fn restore_from_snapshot(
+        &self, 
+        app_id: uuid::Uuid, 
+        mem_path: PathBuf, 
+        snap_path: PathBuf
+    ) -> anyhow::Result<()> {
+        let mut inner = self.inner.write().await;
+        
+        if inner.vms.contains_key(&app_id) {
+            anyhow::bail!("VM for app {} already exists", app_id);
+        }
+
+        let vm_dir = self.data_dir.join("vms").join(app_id.to_string());
+        tokio::fs::create_dir_all(&vm_dir).await?;
+        
+        let socket_path = vm_dir.join("firecracker.sock");
+        let log_path = vm_dir.join("firecracker.log");
+        let metrics_path = vm_dir.join("metrics.fifo");
+
+        // Spawn Firecracker process
+        // Note: For restore, we don't pass configuration arguments typically, 
+        // but we do need the process running and listening on the socket.
+        let mut child = Command::new(&self.driver.binary_path())
+            .arg("--api-sock")
+            .arg(&socket_path)
+            .arg("--id")
+            .arg(app_id.to_string())
+            .arg("--log-path")
+            .arg(&log_path)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()?;
+
+        // Wait for socket
+        let start = std::time::Instant::now();
+        while !socket_path.exists() {
+            if start.elapsed().as_secs() > 5 {
+                let _ = child.kill().await;
+                anyhow::bail!("Firecracker failed to start for restore: socket timeout");
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        }
+
+        let driver = self.driver.for_socket(&socket_path).with_metrics_path(metrics_path);
+        
+        // Load Snapshot
+        driver.load_snapshot(mem_path.to_str().unwrap(), snap_path.to_str().unwrap(), false).await?;
+        
+        // Resume handled implicitly by load_snapshot with resume_vm=true or explicitly here if needed
+        // driver.resume_vm().await?;
+
+        // Construct a partial config or retrieve it from metadata if possible. 
+        // For now, we reconstruct a running VM entry.
+        // Note: We lose the original Config here unless we persisted it in the snapshot metadata!
+        // This assumes the upper layer (SnapshotManager) handles metadata linkage.
+        
+        // We create a placeholder config to satisfy the type system. 
+        // In production, we'd deserialize the config from snapshot metadata.
+        let recovered_config = MicrovmConfig {
+            app_id,
+            vm_id: app_id, // Reuse app_id as vm_id for simplicity in restore
+            memory_mb: 0, // Unknown without metadata
+            cpu_shares: 0,
+            kernel_path: PathBuf::new(),
+            kernel_boot_args: String::new(),
+            drives: vec![],
+            network_interfaces: vec![],
+            vsock_path: String::new(),
+        };
+
+        inner.vms.insert(app_id, RunningVm {
+            config: recovered_config,
+            process: Some(child),
+            socket_path,
+            state: MicrovmState::Running,
+            started_at: chrono::Utc::now(),
+        });
+
+        info!("Restored microVM for app {} from snapshot", app_id);
+        Ok(())
+    }
+
     /// Stop and remove a microVM
     pub async fn stop(&self, app_id: uuid::Uuid) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;

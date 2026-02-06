@@ -302,46 +302,81 @@ impl Default for MigrationConfig {
     }
 }
 
-/// HTTP-based implementation of migration transport
-pub struct HttpMigrationTransport {
-    client: reqwest::Client,
+/// QUIC-based implementation of migration transport
+pub struct QuicMigrationTransport {
+    endpoint: quinn::Endpoint,
     port: u16,
 }
 
-impl HttpMigrationTransport {
-    pub fn new(port: u16) -> Self {
-        Self {
-            client: reqwest::Client::new(),
+impl QuicMigrationTransport {
+    pub async fn new(port: u16) -> anyhow::Result<Self> {
+        // Allow self-signed certs for internal migration traffic
+        let client_config = configure_client();
+        let mut endpoint = quinn::Endpoint::client(std::net::SocketAddr::from(([0, 0, 0, 0], 0)))?;
+        endpoint.set_default_client_config(client_config);
+        
+        Ok(Self {
+            endpoint,
             port,
-        }
+        })
+    }
+}
+
+fn configure_client() -> quinn::ClientConfig {
+    let crypto = rustls::ClientConfig::builder()
+        .with_safe_defaults()
+        .with_custom_certificate_verifier(std::sync::Arc::new(SkipServerVerification))
+        .with_no_client_auth();
+    quinn::ClientConfig::new(std::sync::Arc::new(crypto))
+}
+
+struct SkipServerVerification;
+impl rustls::client::ServerCertVerifier for SkipServerVerification {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &rustls::Certificate,
+        _intermediates: &[rustls::Certificate],
+        _server_name: &rustls::ServerName,
+        _scts: &mut dyn Iterator<Item = &[u8]>,
+        _ocsp_response: &[u8],
+        _now: std::time::SystemTime,
+    ) -> Result<rustls::client::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::ServerCertVerified::assertion())
     }
 }
 
 #[async_trait::async_trait]
-impl MigrationTransport for HttpMigrationTransport {
+impl MigrationTransport for QuicMigrationTransport {
     async fn transfer_snapshot(
         &self,
         snapshot: &SnapshotInfo,
         target_node: &str,
     ) -> anyhow::Result<u64> {
-        let file_path = std::path::PathBuf::from(&snapshot.memory_path);
-        let file_size = tokio::fs::metadata(&file_path).await?.len();
+        info!("Opening QUIC migration stream to {}:{}", target_node, self.port);
         
-        let file = tokio::fs::File::open(&file_path).await?;
-        let stream = tokio_util::io::ReaderStream::new(file);
+        // Resolve target
+        let remote_addr: std::net::SocketAddr = format!("{}:{}", target_node, self.port)
+            .to_socket_addrs()?
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("Could not resolve target"))?;
+
+        let connection = self.endpoint.connect(remote_addr, "shellwego-migration")?.await?;
         
-        let url = format!("http://{}:{}/internal/migration/upload/{}", target_node, self.port, snapshot.id);
+        // Open uni-directional stream for file transfer
+        let mut send_stream = connection.open_uni().await?;
         
-        let res = self.client.post(&url)
-            .body(reqwest::Body::wrap_stream(stream))
-            .send()
-            .await?;
-            
-        if !res.status().is_success() {
-            anyhow::bail!("Upload failed: {}", res.status());
-        }
+        // 1. Send Header (Snapshot ID length + ID)
+        let id_bytes = snapshot.id.as_bytes();
+        send_stream.write_u32(id_bytes.len() as u32).await?;
+        send_stream.write_all(id_bytes).await?;
         
-        Ok(file_size)
+        // 2. Stream File
+        let mut file = tokio::fs::File::open(&snapshot.memory_path).await?;
+        let bytes_transferred = tokio::io::copy(&mut file, &mut send_stream).await?;
+        
+        send_stream.finish().await?;
+        
+        Ok(bytes_transferred)
     }
     
     async fn receive_snapshot(
@@ -349,15 +384,15 @@ impl MigrationTransport for HttpMigrationTransport {
         _snapshot_id: &str,
         _source_node: &str,
     ) -> anyhow::Result<SnapshotInfo> {
-        // In a real scenario, this initiates a pull or confirms a push.
-        // For this implementation, we assume the snapshot was pushed to us 
-        // via an HTTP handler (not shown) and we are just validating/registering it.
-        
-        // Placeholder: Return dummy info assuming handler saved it
-        // Real impl requires coupling with the HTTP server layer
-        Err(anyhow::anyhow!("Pull-based migration not yet implemented"))
+        // QUIC is typically push-based for this use case.
+        // The listener would be in the Daemon/Main handling incoming streams.
+        // This method implies pulling, which we don't do in this architecture.
+        Err(anyhow::anyhow!("Pull-based migration not supported over QUIC push transport"))
     }
 }
+
+use tokio::io::AsyncWriteExt;
+use std::net::ToSocketAddrs;
 
 #[cfg(test)]
 mod tests {

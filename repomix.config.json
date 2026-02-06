@@ -17,7 +17,7 @@
     "showLineNumbers": false,
     "truncateBase64": false,
     "copyToClipboard": true,
-    "includeFullDirectoryStructure": false,
+    "includeFullDirectoryStructure": true,
     "tokenCountTree": false,
     "git": {
       "sortByChanges": true,
@@ -28,9 +28,9 @@
     }
   },
   "include": [
-    "crates/shellwego-agent",
-    // "crates/shellwego-firecracker",
-    // "readme.md"
+  "crates/shellwego-agent",
+   "crates/shellwego-firecracker",
+   "readme.md"
     // "crates/shellwego-storage"
   ],
   "ignore": {
@@ -38,7 +38,7 @@
     "useDotIgnore": true,
     "useDefaultPatterns": true,
     "customPatterns": [
-      //   "crates/shellwego-agent/tests",
+         "crates/shellwego-agent/tests",
       ".idx",
       "docs",
       "scripts",

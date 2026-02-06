@@ -1,3 +1,10 @@
+
+
+spot in agent and firecracker crate for any misalignments, fake implementations, stubs, placeholders.. everything that deviate from root readme.md... we need real production ready
+
+
+===
+
 lets make crates/shellwego-agent production ready by
 
 1. making all test pass, no mock, real verify implementation

@@ -4,10 +4,10 @@
 
 This plan addresses the critical DRY (Don't Repeat Yourself) violations in the ShellWeGo backend monorepo where `shellwego-schema` exists but is NOT being used as the single source of truth for type definitions. Multiple crates define their own types locally, creating maintenance burden, type mismatch risks, and documentation fragmentation.
 
-**Status**: Phase 1 & 2 Complete - Agent Types Migrated
+**Status**: Phase 1, 2 & 4 Complete - Network Types Consolidated
 **Author**: Architecture Review
 **Date**: 2025-01-20
-**Last Updated**: 2025-01-21
+**Last Updated**: 2025-01-22
 **Priority**: Critical
 **Supersedes**: `schema-consolidation.plan.md` (which discussed renaming `shellwego-core` - now complete)
 
@@ -18,7 +18,7 @@ This plan addresses the critical DRY (Don't Repeat Yourself) violations in the S
 | Phase 1 | ✅ **COMPLETE** | Firecracker Models moved to `schema/src/firecracker/` |
 | Phase 2 | ✅ **COMPLETE** | Agent Types consolidated to schema |
 | Phase 3 | ⏳ Pending | Control Plane Handlers |
-| Phase 4 | ⏳ Pending | Network Consolidation |
+| Phase 4 | ✅ **COMPLETE** | Network Consolidation |
 | Phase 5 | ⏳ Pending | Registry/Storage |
 | Phase 6 | ⏳ Pending | Billing Entities |
 
@@ -282,14 +282,36 @@ use shellwego_schema::api::responses::{ErrorResponse, HealthResponse};
 3. Update handler signatures to use schema types
 4. Ensure serialization compatibility
 
-### Phase 4: Network Crate Consolidation (Week 3)
+### Phase 4: Network Crate Consolidation ✅ COMPLETE
 
 **Objective:** Consolidate all network-related types in schema.
 
-**Tasks:**
-1. Move `NetworkConfig`, `NetworkSetup` from network crate to schema (if not already)
-2. Ensure `AgentConnection` in control-plane uses schema type
-3. Consolidate `discovery.rs` types (`ServiceInstance`, `DiscoveryError`)
+**Status:** Completed on 2025-01-22
+
+**Completed Tasks:**
+- [x] `NetworkConfig`, `NetworkSetup` already in schema (pre-existing)
+- [x] `AgentConnection` already in schema and control-plane using it via re-export
+- [x] Created `shellwego-schema/src/network/discovery.rs` with `ServiceInstance` and `DiscoveryError` types
+- [x] Updated `shellwego-schema/src/network/mod.rs` to export discovery types
+- [x] Updated `shellwego-schema/src/lib.rs` to re-export discovery types at crate root
+- [x] Updated `shellwego-network/src/discovery.rs` to re-export types from schema (kept business logic classes)
+- [x] Updated `shellwego-agent/src/discovery.rs` to use schema types directly
+
+**Implemented File Structure:**
+```
+shellwego-schema/src/network/
+├── mod.rs              # Module exports
+├── config.rs           # NetworkConfig, NetworkSetup (pre-existing)
+├── error.rs            # NetworkError (pre-existing)
+├── quinn.rs            # QuicConfig, AgentConnection, Message, ResourceLimits, ChannelPriority (pre-existing)
+└── discovery.rs        # ✅ NEW: ServiceInstance, DiscoveryError
+```
+
+**Key Changes Made:**
+- `ServiceInstance` and `DiscoveryError` types moved from `shellwego-network/src/discovery.rs` to `shellwego-schema/src/network/discovery.rs`
+- Business logic classes (`DiscoveryResolver`, `DiscoveryRegistry`) remain in `shellwego-network/src/discovery.rs`
+- `shellwego-network` re-exports types from schema for convenience
+- `shellwego-agent` now imports types directly from schema
 
 ### Phase 5: Registry/Storage Consolidation (Week 3-4)
 
@@ -613,6 +635,7 @@ Migration is complete when:
 | `vmm/metrics.rs` | MicrovmMetrics |
 | `vmm/virtualization.rs` | VirtualizationMode |
 | `network/config.rs` | NetworkConfig, NetworkSetup |
+| `network/discovery.rs` | ✅ NEW: ServiceInstance, DiscoveryError |
 | `network/quinn.rs` | QuicConfig, Message, AgentConnection, ResourceLimits, ChannelPriority |
 | `network/error.rs` | NetworkError |
 | `api/apps.rs` | ListAppsQuery, ListNodesQuery, ScaleRequest, DeployRequest, DeployStrategy |

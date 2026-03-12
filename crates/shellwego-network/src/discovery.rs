@@ -1,27 +1,13 @@
-//! Shared Service Discovery Logic
-use std::collections::HashMap;
-use std::net::SocketAddr;
+//! Service Discovery Logic
+//!
+//! Provides DNS-based service discovery and instance registry functionality.
+//! Types are re-exported from `shellwego-schema`.
+
 use std::sync::Arc;
 use hickory_resolver::TokioAsyncResolver;
-use serde::{Deserialize, Serialize};
-use thiserror::Error;
 
-#[derive(Debug, Error)]
-pub enum DiscoveryError {
-    #[error("DNS resolver error: {0}")]
-    ResolverError(String),
-    #[error("Service instance not found: {0}")]
-    NotFound(String),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ServiceInstance {
-    pub id: String,
-    pub service_name: String,
-    pub address: SocketAddr,
-    pub metadata: HashMap<String, String>,
-    pub healthy: bool,
-}
+// Re-export types from schema
+pub use shellwego_schema::network::{DiscoveryError, ServiceInstance};
 
 /// The Resolver handles the "client" side (Agent finding CP, or Agent finding Peers)
 pub struct DiscoveryResolver {
@@ -35,7 +21,7 @@ impl DiscoveryResolver {
         Self { resolver, domain_suffix }
     }
 
-    pub async fn resolve_srv(&self, service: &str) -> Result<Vec<SocketAddr>, DiscoveryError> {
+    pub async fn resolve_srv(&self, service: &str) -> Result<Vec<std::net::SocketAddr>, DiscoveryError> {
         let query = format!("{}.{}", service, self.domain_suffix);
         let lookup = self.resolver.srv_lookup(query).await
             .map_err(|e| DiscoveryError::ResolverError(e.to_string()))?;
@@ -48,7 +34,7 @@ impl DiscoveryResolver {
 
             if let Ok(ips) = self.resolver.lookup_ip(target).await {
                 for ip in ips.iter() {
-                    addrs.push(SocketAddr::new(ip, port));
+                    addrs.push(std::net::SocketAddr::new(ip, port));
                 }
             }
         }
@@ -59,7 +45,7 @@ impl DiscoveryResolver {
 
 /// The Registry handles the "server" side (Control Plane tracking state)
 pub struct DiscoveryRegistry {
-    pub instances: Arc<tokio::sync::RwLock<HashMap<String, ServiceInstance>>>,
+    pub instances: Arc<tokio::sync::RwLock<std::collections::HashMap<String, ServiceInstance>>>,
 }
 
 impl Default for DiscoveryRegistry {
@@ -70,7 +56,7 @@ impl Default for DiscoveryRegistry {
 
 impl DiscoveryRegistry {
     pub fn new() -> Self {
-        Self { instances: Arc::new(tokio::sync::RwLock::new(HashMap::new())) }
+        Self { instances: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())) }
     }
 
     pub async fn register(&self, instance: ServiceInstance) {

@@ -1,7 +1,13 @@
 //! Agent-side Service Discovery
 //! Wraps shared discovery logic from shellwego-network
 
-pub use shellwego_network::discovery::{DiscoveryResolver, ServiceInstance, DiscoveryError};
+// Import types from schema (single source of truth)
+use shellwego_schema::network::{DiscoveryError, ServiceInstance};
+
+// Import resolver from network (business logic)
+use shellwego_network::discovery::DiscoveryResolver;
+
+pub use shellwego_schema::network::{DiscoveryError, ServiceInstance};
 
 pub struct ServiceDiscovery {
     inner: DiscoveryResolver,

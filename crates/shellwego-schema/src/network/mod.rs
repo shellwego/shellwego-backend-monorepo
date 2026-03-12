@@ -4,11 +4,13 @@
 //! setup, and QUIC-based communication between control plane and agents.
 
 pub mod config;
+pub mod discovery;
 pub mod error;
 pub mod quinn;
 
 // Re-export commonly used types at module level
 pub use config::{NetworkConfig, NetworkSetup};
+pub use discovery::{DiscoveryError, ServiceInstance};
 pub use error::NetworkError;
 pub use quinn::{AgentConnection, ChannelPriority, Message, QuicConfig, ResourceLimits};
 

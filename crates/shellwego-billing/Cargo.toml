@@ -1,0 +1,61 @@
+[package]
+name = "shellwego-billing"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Billing, metering, and payment processing"
+
+[dependencies]
+# Async runtime
+tokio = { workspace = true, features = ["time", "sync", "macros", "rt-multi-thread"] }
+
+# Database
+sqlx = { workspace = true, features = ["postgres", "runtime-tokio-rustls"] }
+
+# Payment providers
+async-stripe = { version = "0.34", features = ["runtime-tokio-hyper"], optional = true }
+
+# PDF generation
+headless_chrome = { version = "1.0", optional = true }
+
+# Template engine
+tera = "1.19"
+
+# Currency and decimals
+rust_decimal = "1.33"
+rust_decimal_macros = "1.33"
+iso_currency = "0.4"
+
+# URL encoding for PDF generation
+urlencoding = "2.1"
+
+# Serialization
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+# Time handling
+chrono = { workspace = true, features = ["serde"] }
+
+# UUID for identifiers
+uuid = { workspace = true, features = ["v4", "serde"] }
+
+# Concurrency
+dashmap = { workspace = true }
+
+# Errors
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Tracing
+tracing = { workspace = true }
+
+[features]
+default = []
+pdf = ["dep:headless_chrome"]
+stripe = ["dep:async-stripe"]
+
+[dev-dependencies]
+tokio-test = "0.4"

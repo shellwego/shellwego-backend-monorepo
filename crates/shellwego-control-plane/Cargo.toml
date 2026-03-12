@@ -1,0 +1,54 @@
+[package]
+name = "shellwego-control-plane"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Control plane: REST API, scheduler, and cluster state management"
+
+[[bin]]
+name = "shellwego-control-plane"
+path = "src/main.rs"
+
+[dependencies]
+# Async runtime
+tokio = { workspace = true }
+
+# Web framework
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { version = "0.5", features = ["cors", "trace", "compression-full", "request-id"] }
+hyper = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Tracing
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Utilities
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+dashmap = { workspace = true }
+
+# HTTP client for health checks
+reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
+
+# Async trait
+async-trait = { workspace = true }
+
+# Random for password generation
+rand = "0.8"
+
+# Base64 for KMS
+base64 = "0.21"
+
+[dev-dependencies]
+tower = { workspace = true, features = ["util"] }
+http-body-util = "0.1"

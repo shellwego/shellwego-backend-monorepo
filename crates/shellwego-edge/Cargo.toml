@@ -1,0 +1,56 @@
+[package]
+name = "shellwego-edge"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Edge proxy, load balancer, and TLS termination"
+
+[dependencies]
+# HTTP server
+hyper = { workspace = true, features = ["full"] }
+hyper-util = "0.1"
+http-body-util = "0.1"
+tower = { workspace = true }
+tower-service = "0.3"
+
+# HTTP/2 and WebSocket
+h2 = "0.4"
+tokio-tungstenite = "0.21"
+
+# TLS
+rustls = "0.22"
+rustls-pemfile = "2.0"
+tokio-rustls = "0.25"
+
+# ACME client
+acme-lib = "0.9"
+rcgen = "0.12"
+
+# Async runtime
+tokio = { workspace = true, features = ["net", "rt"] }
+
+# Routing
+regex = "1.10"
+wildmatch = "2.0"
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = "0.8"
+
+# Caching
+moka = { version = "0.12", features = ["future"] }
+
+# Errors
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Tracing
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio-test = "0.4"
+reqwest = { workspace = true }

@@ -1,0 +1,85 @@
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+# Reduce disk and memory usage during builds
+[profile.dev]
+codegen-units = 1
+debug = "line-tables-only"
+incremental = false
+
+[profile.dev.package."*"]
+codegen-units = 1
+opt-level = 0
+
+[profile.release]
+codegen-units = 1
+debug = false
+lto = false
+
+[workspace.package]
+version = "0.1.0-alpha.1"
+edition = "2021"
+authors = ["ShellWeGo Contributors"]
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/shellwego/shellwego"
+rust-version = "1.75"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.35", features = ["full"] }
+tokio-util = "0.7"
+async-trait = "0.1"
+
+# Web framework & HTTP
+axum = { version = "0.7", features = ["macros"] }
+tower = "0.4"
+hyper = { version = "1.0", features = ["full"] }
+reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_with = "3.4"
+
+# Data types
+uuid = { version = "1.6", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# Database
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "sqlite", "uuid", "chrono"] }
+
+# CLI
+clap = { version = "4.4", features = ["derive", "env"] }
+
+# Documentation/OpenAPI
+utoipa = { version = "4.1", features = ["axum_extras", "uuid", "chrono"] }
+
+# Utilities
+thiserror = "1.0"
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+config = "0.14"
+strum = { version = "0.25", features = ["derive"] }
+validator = { version = "0.16", features = ["derive"] }
+
+# WASM runtime
+wasmtime = { version = "12.0" }
+
+# eBPF
+aya = { version = "0.13" }
+aya-log = "0.2"
+
+# Metrics & observability
+prometheus = "0.13"
+opentelemetry = "0.21"
+
+# Security
+rustls = "0.22"
+rustls-pemfile = "2.1"
+webpki = "0.22"
+rcgen = "0.11"
+
+# Concurrency
+dashmap = "6.1"

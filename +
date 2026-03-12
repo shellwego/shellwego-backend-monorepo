@@ -1,0 +1,1 @@
++Tests will gracefully skip if requirements (like KVM or ZFS) are missing.

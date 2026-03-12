@@ -1,0 +1,68 @@
+version: "3.8"
+
+services:
+  # Control plane
+  control-plane:
+    build:
+      context: .
+      dockerfile: docker/control-plane.Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - DATABASE_URL=postgres://shellwego:shellwego@postgres:5432/shellwego
+      - NATS_URL=nats://nats:4222
+      - RUST_LOG=info
+    depends_on:
+      - postgres
+      - nats
+
+  # Agent (for local testing, requires privileged)
+  agent:
+    build:
+      context: .
+      dockerfile: docker/agent.Dockerfile
+    privileged: true
+    environment:
+      - CONTROL_PLANE_URL=http://control-plane:8080
+      - NODE_REGION=local
+      - RUST_LOG=info
+    volumes:
+      - /dev/kvm:/dev/kvm
+      - agent-data:/var/lib/shellwego
+    depends_on:
+      - control-plane
+
+  # Supporting services
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: shellwego
+      POSTGRES_PASSWORD: shellwego
+      POSTGRES_DB: shellwego
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  nats:
+    image: nats:2.10-alpine
+    ports:
+      - "4222:4222"
+    command: "--js"  # Enable JetStream
+
+  # Observability
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+
+volumes:
+  postgres-data:
+  agent-data:

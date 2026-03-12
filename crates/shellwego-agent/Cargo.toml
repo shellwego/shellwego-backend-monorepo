@@ -1,0 +1,74 @@
+[package]
+name = "shellwego-agent"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Worker node agent: manages Firecracker microVMs and reports to control plane"
+
+[[bin]]
+name = "shellwego-agent"
+path = "src/main.rs"
+
+[dependencies]
+shellwego-schema = { path = "../shellwego-schema" }
+shellwego-storage = { path = "../shellwego-storage" }
+shellwego-network = { path = "../shellwego-network", features = ["quinn"] }
+
+# Async runtime
+tokio = { workspace = true, features = ["full", "process"] }
+tokio-util = { workspace = true }
+
+# HTTP client (talks to control plane)
+hyper = { workspace = true, features = ["full"] }
+hyper-util = "0.1"
+reqwest = { workspace = true, features = ["stream"] }
+http-body-util = "0.1"
+bytes = "1.5"
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+secrecy = { version = "0.10", features = ["serde"] }
+postcard = "1.0"
+
+# System info
+sysinfo = "0.30"
+nix = { version = "0.27", features = ["process", "signal", "user"] }
+num_cpus = "1.16"
+
+# Firecracker / VMM
+# Using local firecracker SDK placeholder
+shellwego-firecracker = { path = "../shellwego-firecracker" }
+
+# QUIC
+quinn = "0.10"
+rustls = { version = "0.21", features = ["dangerous_configuration"] }
+
+# Utilities
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+config = { workspace = true }
+dashmap = "6.1"
+async-trait = "0.1"
+tempfile = "3.8"
+zeroize = { version = "1.7", features = ["derive"] }
+gethostname = "0.4"
+futures = "0.3"
+libc = "0.2"
+
+# WASM Runtime
+wasmtime = "14.0"
+wasmtime-wasi = "14.0"
+wasi-common = "14.0"
+cap-std = "2.0"
+
+[features]
+default = []
+metal = []

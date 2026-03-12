@@ -1,0 +1,10 @@
+[build]
+# Limit parallel jobs to reduce disk/memory usage
+jobs = 2
+
+[term]
+verbose = true
+
+[net]
+# Use git shallow clones to reduce disk
+git-fetch-with-cli = true

@@ -1,0 +1,21 @@
+/target
+**/*.rs.bk
+Cargo.lock
+*.swp
+*.swo
+*~
+.DS_Store
+.idea/
+.vscode/
+*.iml
+.env
+.env.local
+*.log
+/tmp
+/data
+/var
+*.db
+*.db-journal
+node_modules
+# relay state
+/.relay/

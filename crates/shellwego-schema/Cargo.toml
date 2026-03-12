@@ -1,0 +1,37 @@
+[package]
+name = "shellwego-schema"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Schema crate: pure data structures, types, and wire format definitions for ShellWeGo"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+secrecy = { version = "0.10", features = ["serde"] }
+zeroize = { version = "1.7", features = ["derive"] }
+serde_with = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+strum = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+utoipa = { workspace = true, features = ["uuid", "chrono"], optional = true }
+schemars = { version = "0.8", features = ["uuid1", "chrono"], optional = true }
+validator = { workspace = true }
+sea-orm = { version = "1.0", features = ["macros", "with-json"], optional = true }
+sea-query = { version = "0.31", optional = true }
+ipnetwork = "0.20"
+base64 = "0.22"
+nix = { version = "0.27", features = ["net"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+
+[features]
+default = ["openapi", "orm"]
+openapi = ["dep:utoipa", "dep:schemars"]
+orm = ["dep:sea-orm", "dep:sea-query"]

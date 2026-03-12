@@ -1,0 +1,51 @@
+[package]
+name = "shellwego-observability"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Observability: metrics, logs, and distributed tracing"
+
+[dependencies]
+# Core async
+tokio = { workspace = true, features = ["full"] }
+tokio-util = { workspace = true }
+async-trait = { workspace = true }
+
+# Prometheus metrics
+prometheus = { workspace = true, features = ["process"] }
+
+# OpenTelemetry
+opentelemetry = { version = "0.21", features = ["trace", "metrics"] }
+opentelemetry_sdk = { version = "0.21", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.14", features = ["tonic", "metrics"] }
+opentelemetry-semantic-conventions = "0.13"
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# HTTP for exporters
+reqwest = { workspace = true }
+hyper = { version = "0.14", features = ["full"] }
+
+# Tracing integration
+tracing = { workspace = true }
+tracing-opentelemetry = "0.22"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Errors
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Utilities
+chrono = { workspace = true }
+lazy_static = "1.4"
+parking_lot = "0.12"
+futures = "0.3"
+
+[dev-dependencies]
+tokio-test = "0.4"
+tempfile = "3.8"

@@ -3,9 +3,8 @@ use tokio::sync::Mutex;
 use tokio::time::{interval, Duration};
 use tracing::{info, warn, error};
 use shellwego_network::{QuinnClient, Message, QuicConfig};
-use zeroize::{Zeroize, ZeroizeOnDrop};
 
-use crate::{AgentConfig, Capabilities};
+use crate::{AgentConfig, Capabilities, DesiredState, DesiredApp, VolumeMount, DesiredVolume};
 use crate::vmm::VmmManager;
 use crate::metrics::MetricsCollector;
 
@@ -147,37 +146,5 @@ impl StateClient {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct DesiredState {
-    pub apps: Vec<DesiredApp>,
-    pub volumes: Vec<DesiredVolume>,
-}
-
-#[derive(Debug, Clone, Zeroize, ZeroizeOnDrop)]
-pub struct DesiredApp {
-    #[zeroize(skip)]
-    pub app_id: uuid::Uuid,
-    pub image: String,
-    #[zeroize(skip)]
-    pub command: Option<Vec<String>>,
-    pub memory_mb: u64,
-    pub cpu_shares: u64,
-    #[zeroize(skip)]
-    pub env: std::collections::HashMap<String, String>,
-    #[zeroize(skip)]
-    pub volumes: Vec<VolumeMount>,
-}
-
-#[derive(Debug, Clone)]
-pub struct VolumeMount {
-    pub volume_id: uuid::Uuid,
-    pub mount_path: String,
-    pub device: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct DesiredVolume {
-    pub volume_id: uuid::Uuid,
-    pub dataset: String,
-    pub snapshot: Option<String>,
-}
+// DesiredState, DesiredApp, VolumeMount, DesiredVolume are now imported from shellwego_schema
+// (re-exported via crate::* above)

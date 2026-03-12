@@ -36,4 +36,4 @@ pub use error::{CoreError, CoreResult};
 pub use vmm::{VirtualizationMode, MicrovmConfig, MicrovmState, MicrovmSummary, DriveConfig, NetworkInterface, RateLimiterConfig, MicrovmMetrics, WasmConfig};
 pub use network::{NetworkConfig, NetworkSetup, NetworkError, Message, QuicConfig, AgentConnection, ResourceLimits, ChannelPriority, generate_mac, parse_mac};
 pub use api::{ListAppsQuery, ListNodesQuery, ScaleRequest, PaginatedResponse, ErrorResponse};
-pub use agent::{AgentConfig, AgentConfigJson, Capabilities, NodeCapacity};
+pub use agent::{AgentConfig, AgentConfigJson, Capabilities, NodeCapacity, DesiredState, DesiredApp, DesiredVolume, VolumeMount};

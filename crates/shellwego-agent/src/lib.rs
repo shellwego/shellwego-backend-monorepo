@@ -22,6 +22,8 @@ pub use shellwego_schema::{
     DriveConfig, NetworkInterface, RateLimiterConfig, MicrovmMetrics,
     // Agent types
     AgentConfig, AgentConfigJson, Capabilities, NodeCapacity,
+    // Desired state types
+    DesiredState, DesiredApp, DesiredVolume, VolumeMount,
     // Network types
     NetworkConfig, NetworkSetup, NetworkError, Message, QuicConfig,
 };

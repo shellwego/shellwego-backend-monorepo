@@ -12,6 +12,9 @@ use wasi_common::pipe::WritePipe;
 pub mod runtime;
 use runtime::WasmtimeRuntime;
 
+// Re-export types from schema
+pub use shellwego_schema::{WasmRuntimeConfig, WasmRuntimeStats, WasmExitStatus};
+
 #[derive(Error, Debug)]
 pub enum WasmError {
     #[error("Module compilation failed: {0}")]
@@ -43,7 +46,7 @@ pub struct WasmRuntime {
 
 impl WasmRuntime {
     /// Initialize WASM runtime
-    pub async fn new(config: &WasmConfig) -> Result<Self, WasmError> {
+    pub async fn new(config: &WasmRuntimeConfig) -> Result<Self, WasmError> {
         let runtime = WasmtimeRuntime::new(config)?;
         Ok(Self {
             runtime,
@@ -123,7 +126,7 @@ pub struct WasmInstance {
 impl WasmInstance {
     /// Wait for completion
     /// This runs the `_start` function of the WASI module
-    pub async fn wait(self, _timeout: std::time::Duration) -> Result<ExitStatus, WasmError> {
+    pub async fn wait(self, _timeout: std::time::Duration) -> Result<WasmExitStatus, WasmError> {
         let mut store = self.store.lock().await;
         
         // Get the entry point (usually _start for WASI command modules)
@@ -133,11 +136,11 @@ impl WasmInstance {
         // TODO: Run in a separate thread/task with timeout to avoid blocking executor
         // For now, we run directly (blocking)
         match func.call(&mut *store, ()) {
-            Ok(_) => Ok(ExitStatus { success: true, code: 0 }),
+            Ok(_) => Ok(WasmExitStatus { success: true, code: 0 }),
             Err(e) => {
                 // Check if it's a clean exit (WASI exit)
                 if let Some(i32_exit) = e.downcast_ref::<wasmtime_wasi::I32Exit>() {
-                    Ok(ExitStatus { success: i32_exit.0 == 0, code: i32_exit.0 })
+                    Ok(WasmExitStatus { success: i32_exit.0 == 0, code: i32_exit.0 })
                 } else {
                     Err(WasmError::ExecutionError(e.to_string()))
                 }
@@ -154,21 +157,7 @@ impl WasmInstance {
     }
 }
 
-/// Instance exit status
-#[derive(Debug, Clone)]
-pub struct ExitStatus {
-    pub success: bool,
-    pub code: i32,
-}
-
-/// WASM configuration
-#[derive(Debug, Clone)]
-pub struct WasmConfig {
-    pub max_memory_mb: u32,
-}
-
-/// Runtime statistics
-#[derive(Debug, Clone, Default)]
-pub struct WasmStats {
-    pub active_instances: u32,
-}
+// ExitStatus, WasmConfig, and WasmStats types are now imported from shellwego_schema:
+// - WasmExitStatus (re-exported above)
+// - WasmRuntimeConfig (re-exported above)
+// - WasmRuntimeStats (re-exported above)

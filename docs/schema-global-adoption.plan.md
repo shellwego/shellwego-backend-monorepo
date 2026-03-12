@@ -4,7 +4,7 @@
 
 This plan addresses the critical DRY (Don't Repeat Yourself) violations in the ShellWeGo backend monorepo where `shellwego-schema` exists but is NOT being used as the single source of truth for type definitions. Multiple crates define their own types locally, creating maintenance burden, type mismatch risks, and documentation fragmentation.
 
-**Status**: Phase 1 Complete - Firecracker Models Migrated
+**Status**: Phase 1 & 2 Complete - Agent Types Migrated
 **Author**: Architecture Review
 **Date**: 2025-01-20
 **Last Updated**: 2025-01-21
@@ -16,7 +16,7 @@ This plan addresses the critical DRY (Don't Repeat Yourself) violations in the S
 | Phase | Status | Description |
 |-------|--------|-------------|
 | Phase 1 | ✅ **COMPLETE** | Firecracker Models moved to `schema/src/firecracker/` |
-| Phase 2 | 🔄 In Progress | Agent Types consolidation started |
+| Phase 2 | ✅ **COMPLETE** | Agent Types consolidated to schema |
 | Phase 3 | ⏳ Pending | Control Plane Handlers |
 | Phase 4 | ⏳ Pending | Network Consolidation |
 | Phase 5 | ⏳ Pending | Registry/Storage |
@@ -96,8 +96,11 @@ crates/shellwego-schema/src/
 | `RateLimiter` / `TokenBucket` | `schema/src/firecracker/network.rs` | ~~`firecracker/src/models.rs`~~ | **HIGH** | ✅ Resolved |
 | `SnapshotType` | `schema/src/firecracker/snapshot.rs` | ~~`firecracker/src/models.rs`~~ | **HIGH** | ✅ Resolved |
 | `AgentConnection` | `schema/src/network/quinn.rs` | ~~`control-plane/src/state.rs`~~ | **CRITICAL** | ✅ Resolved |
-| `WasmConfig` | `schema/src/vmm/config.rs` | `agent/src/wasm/mod.rs` | **CRITICAL** | 🔄 In Progress |
-| `SnapshotType` (Agent) | `schema/src/agent/snapshot.rs` | `agent/src/snapshot.rs` | **HIGH** | 🔄 In Progress |
+| `WasmConfig` | `schema/src/agent/wasm.rs` (as `WasmRuntimeConfig`) | ~~`agent/src/wasm/mod.rs`~~ | **CRITICAL** | ✅ Resolved |
+| `SnapshotType` (Agent) | `schema/src/agent/snapshot.rs` (as `AgentSnapshotType`) | ~~`agent/src/snapshot.rs`~~ | **HIGH** | ✅ Resolved |
+| `SnapshotInfo` | `schema/src/agent/snapshot.rs` (as `AgentSnapshotInfo`) | ~~`agent/src/snapshot.rs`~~ | **HIGH** | ✅ Resolved |
+| `DesiredState` | `schema/src/agent/desired_state.rs` | ~~`agent/src/daemon.rs`~~ | **HIGH** | ✅ Resolved |
+| `DesiredApp` | `schema/src/agent/desired_state.rs` | ~~`agent/src/daemon.rs`~~ | **HIGH** | ✅ Resolved |
 | `ErrorResponse` | `schema/src/api/responses.rs` | `control-plane/src/api/mod.rs` | **HIGH** | ⏳ Pending |
 
 ### 2.2 Entity Redefinitions in Control Plane
@@ -217,54 +220,36 @@ shellwego-schema/src/firecracker/
 - `shellwego-firecracker/Cargo.toml` now depends on `shellwego-schema`
 - All Firecracker models now have proper OpenAPI schema derives
 
-### Phase 2: Consolidate Agent Types 🔄 IN PROGRESS
-
-**File Structure:**
-```
-shellwego-schema/src/firecracker/
-├── mod.rs              # Module exports
-├── instance.rs         # InstanceInfo, InstanceState, FirecrackerVersion
-├── boot.rs             # BootSource
-├── machine.rs          # MachineConfiguration, CpuTemplate, HugePages, CpuConfig
-├── drives.rs           # Drive, PartialDrive, CacheType, IoEngine
-├── network.rs          # NetworkInterface, RateLimiter, TokenBucket
-├── balloon.rs          # Balloon, BalloonStats, BalloonUpdate
-├── devices.rs          # Vsock, EntropyDevice, SerialDevice, Pmem
-├── logging.rs          # Logger, Metrics, LogLevel
-├── metrics.rs          # FirecrackerMetrics, VmmMetrics, NetMetrics, BlockMetrics
-├── actions.rs          # InstanceActionInfo, ActionType
-├── snapshot.rs         # SnapshotCreateParams, SnapshotLoadParams, SnapshotType
-├── memory.rs           # MemoryBackend, MemoryHotplugConfig
-└── mmds.rs             # MmdsConfig, MmdsVersion
-```
-
-**Migration Command:**
-```bash
-# After updating schema
-cargo check -p shellwego-firecracker
-cargo check -p shellwego-agent
-```
-
-### Phase 2: Consolidate Agent Types (Week 2)
+### Phase 2: Consolidate Agent Types ✅ COMPLETE
 
 **Objective:** Remove all local type definitions in agent crate.
 
-**Files to Update:**
-- `shellwego-agent/src/lib.rs` - Remove `VirtualizationMode` (use schema)
-- `shellwego-agent/src/wasm/mod.rs` - Remove `WasmConfig` (use schema)
-- `shellwego-agent/src/snapshot.rs` - Remove `SnapshotType` (use schema)
+**Status:** Completed on 2025-01-21
 
-**Pattern:**
-```rust
-// BEFORE (agent/src/wasm/mod.rs)
-pub struct WasmConfig {
-    pub max_memory_mb: u32,
-}
+**Completed Tasks:**
+- [x] Create `shellwego-schema/src/agent/desired_state.rs` module
+- [x] Move `DesiredState`, `DesiredApp`, `DesiredVolume`, `VolumeMount` types to schema
+- [x] Update `agent/src/wasm/mod.rs` to use `WasmRuntimeConfig`, `WasmRuntimeStats`, `WasmExitStatus` from schema
+- [x] Update `agent/src/snapshot.rs` to use `AgentSnapshotType`, `AgentSnapshotInfo` from schema
+- [x] Update `agent/src/daemon.rs` to import desired state types from schema
+- [x] Update `agent/src/lib.rs` to re-export new types from schema
 
-// AFTER
-// Remove local definition, import from schema
-use shellwego_schema::vmm::WasmConfig;
+**Implemented File Structure:**
 ```
+shellwego-schema/src/agent/
+├── mod.rs              # Module exports
+├── config.rs           # AgentConfig, AgentConfigJson
+├── capabilities.rs     # Capabilities, NodeCapacity
+├── wasm.rs             # WasmRuntimeConfig, WasmRuntimeStats, WasmExitStatus
+├── snapshot.rs         # AgentSnapshotType, AgentSnapshotInfo
+└── desired_state.rs    # DesiredState, DesiredApp, DesiredVolume, VolumeMount
+```
+
+**Key Changes Made:**
+- `agent/src/wasm/mod.rs` now re-exports `WasmRuntimeConfig`, `WasmRuntimeStats`, `WasmExitStatus` from schema
+- `agent/src/snapshot.rs` now re-exports `AgentSnapshotType`, `AgentSnapshotInfo` from schema
+- Local type definitions for `WasmConfig`, `WasmStats`, `ExitStatus`, `SnapshotType`, `SnapshotInfo`, `DesiredState`, `DesiredApp`, `DesiredVolume`, `VolumeMount` have been removed
+- Agent crate now properly imports all shared types from schema
 
 ### Phase 3: Control Plane Handler Cleanup (Week 2-3)
 
@@ -662,13 +647,15 @@ All Firecracker types have been moved to `schema/src/firecracker/`:
 | `firecracker/full_config.rs` | FullVmConfiguration |
 | `firecracker/error.rs` | Error |
 
-### C. Types to Migrate (Phase 2 - Agent) 🔄 IN PROGRESS
+### C. Types Migrated (Phase 2 - Agent) ✅ COMPLETE
 
-| Current Location | Types | Target |
-|------------------|-------|--------|
-| `agent/src/wasm/mod.rs` | WasmConfig, WasmError, WasmStats, ExitStatus | `schema/src/wasm/` |
-| `agent/src/snapshot.rs` | SnapshotType, SnapshotInfo, SnapshotManager | Consolidate with FC types |
-| `agent/src/daemon.rs` | DesiredState, DesiredApp, VolumeMount, DesiredVolume | `schema/src/agent/` |
+All Agent types have been moved to `schema/src/agent/`:
+
+| Module | Types |
+|--------|-------|
+| `agent/wasm.rs` | WasmRuntimeConfig, WasmRuntimeStats, WasmExitStatus |
+| `agent/snapshot.rs` | AgentSnapshotType, AgentSnapshotInfo |
+| `agent/desired_state.rs` | DesiredState, DesiredApp, DesiredVolume, VolumeMount |
 
 ### D. Types to Migrate (Phase 3 - Control Plane)
 

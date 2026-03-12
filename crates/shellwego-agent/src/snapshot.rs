@@ -15,39 +15,8 @@ use chrono::{DateTime, Utc};
 
 use crate::vmm::{VmmManager, MicrovmConfig};
 
-/// Information about a snapshot
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SnapshotInfo {
-    /// Unique snapshot identifier
-    pub id: String,
-    /// Application ID this snapshot belongs to
-    pub app_id: Uuid,
-    /// Human-readable snapshot name
-    pub name: String,
-    /// When the snapshot was created
-    pub created_at: DateTime<Utc>,
-    /// Total size in bytes (memory + disk)
-    pub size_bytes: u64,
-    /// Path to memory snapshot file
-    pub memory_path: String,
-    /// Path to disk snapshot file
-    pub disk_snapshot: Option<String>,
-    /// Snapshot type
-    pub snapshot_type: SnapshotType,
-    /// Whether the snapshot includes memory state
-    pub includes_memory: bool,
-}
-
-/// Type of snapshot
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum SnapshotType {
-    /// Full snapshot with memory and disk
-    Full,
-    /// Disk-only snapshot
-    DiskOnly,
-    /// Memory-only snapshot (for migration)
-    MemoryOnly,
-}
+// Re-export types from schema
+pub use shellwego_schema::{AgentSnapshotType, AgentSnapshotInfo};
 
 /// Internal metadata for snapshot tracking
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,7 +30,7 @@ struct SnapshotMetadata {
     pub size_bytes: u64,
     pub vm_config: Option<MicrovmConfig>,
     pub disk_snapshot: Option<String>,
-    pub snapshot_type: SnapshotType,
+    pub snapshot_type: AgentSnapshotType,
     pub includes_memory: bool,
     pub zfs_dataset: Option<String>,
 }
@@ -314,13 +283,13 @@ impl SnapshotManager {
     /// * `snapshot_name` - Human-readable name for the snapshot
     ///
     /// # Returns
-    /// SnapshotInfo on success
+    /// AgentSnapshotInfo on success
     pub async fn create_snapshot(
         &self,
         vmm_manager: &VmmManager,
         app_id: Uuid,
         snapshot_name: &str,
-    ) -> anyhow::Result<SnapshotInfo> {
+    ) -> anyhow::Result<AgentSnapshotInfo> {
         let snapshot_id = format!("{}-{}", snapshot_name, Uuid::new_v4());
         info!("Creating snapshot {} for app {}", snapshot_id, app_id);
 
@@ -419,7 +388,7 @@ impl SnapshotManager {
             size_bytes,
             vm_config: None,
             disk_snapshot: disk_snapshot.clone(),
-            snapshot_type: SnapshotType::Full,
+            snapshot_type: AgentSnapshotType::Full,
             includes_memory: true,
             zfs_dataset: disk_snapshot.clone(),
         };
@@ -439,7 +408,7 @@ impl SnapshotManager {
             snapshot_id, app_id, size_bytes
         );
 
-        Ok(SnapshotInfo {
+        Ok(AgentSnapshotInfo {
             id: snapshot_id,
             app_id,
             name: snapshot_name.to_string(),
@@ -447,7 +416,7 @@ impl SnapshotManager {
             size_bytes,
             memory_path: mem_path.to_string_lossy().to_string(),
             disk_snapshot,
-            snapshot_type: SnapshotType::Full,
+            snapshot_type: AgentSnapshotType::Full,
             includes_memory: true,
         })
     }
@@ -459,7 +428,7 @@ impl SnapshotManager {
         &self,
         app_id: Uuid,
         snapshot_name: &str,
-    ) -> anyhow::Result<SnapshotInfo> {
+    ) -> anyhow::Result<AgentSnapshotInfo> {
         let snapshot_id = format!("{}-{}", snapshot_name, Uuid::new_v4());
         info!("Creating disk-only snapshot {} for app {}", snapshot_id, app_id);
 
@@ -491,7 +460,7 @@ impl SnapshotManager {
             size_bytes,
             vm_config: None,
             disk_snapshot: Some(disk_snapshot.clone()),
-            snapshot_type: SnapshotType::DiskOnly,
+            snapshot_type: AgentSnapshotType::DiskOnly,
             includes_memory: false,
             zfs_dataset: Some(disk_snapshot.clone()),
         };
@@ -503,7 +472,7 @@ impl SnapshotManager {
 
         self.save_metadata().await?;
 
-        Ok(SnapshotInfo {
+        Ok(AgentSnapshotInfo {
             id: snapshot_id,
             app_id,
             name: snapshot_name.to_string(),
@@ -511,7 +480,7 @@ impl SnapshotManager {
             size_bytes,
             memory_path: String::new(),
             disk_snapshot: Some(disk_snapshot),
-            snapshot_type: SnapshotType::DiskOnly,
+            snapshot_type: AgentSnapshotType::DiskOnly,
             includes_memory: false,
         })
     }
@@ -576,11 +545,11 @@ impl SnapshotManager {
     }
 
     /// List all snapshots, optionally filtered by app ID
-    pub async fn list_snapshots(&self, app_id: Option<Uuid>) -> anyhow::Result<Vec<SnapshotInfo>> {
+    pub async fn list_snapshots(&self, app_id: Option<Uuid>) -> anyhow::Result<Vec<AgentSnapshotInfo>> {
         let meta = self.metadata.read().await;
         Ok(meta.values()
             .filter(|m| app_id.map_or(true, |id| m.app_id == id))
-            .map(|m| SnapshotInfo {
+            .map(|m| AgentSnapshotInfo {
                 id: m.id.clone(),
                 app_id: m.app_id,
                 name: m.name.clone(),
@@ -638,9 +607,9 @@ impl SnapshotManager {
     }
 
     /// Get snapshot info by ID
-    pub async fn get_snapshot(&self, snapshot_id: &str) -> anyhow::Result<Option<SnapshotInfo>> {
+    pub async fn get_snapshot(&self, snapshot_id: &str) -> anyhow::Result<Option<AgentSnapshotInfo>> {
         let meta = self.metadata.read().await;
-        Ok(meta.get(snapshot_id).map(|m| SnapshotInfo {
+        Ok(meta.get(snapshot_id).map(|m| AgentSnapshotInfo {
             id: m.id.clone(),
             app_id: m.app_id,
             name: m.name.clone(),
@@ -735,7 +704,7 @@ mod tests {
 
     #[test]
     fn test_snapshot_info_serialization() {
-        let info = SnapshotInfo {
+        let info = AgentSnapshotInfo {
             id: "test-123".to_string(),
             app_id: Uuid::nil(),
             name: "test-snapshot".to_string(),
@@ -743,12 +712,12 @@ mod tests {
             size_bytes: 1024,
             memory_path: "/tmp/mem.snap".to_string(),
             disk_snapshot: Some("pool/app@snap".to_string()),
-            snapshot_type: SnapshotType::Full,
+            snapshot_type: AgentSnapshotType::Full,
             includes_memory: true,
         };
 
         let json = serde_json::to_string(&info).unwrap();
-        let decoded: SnapshotInfo = serde_json::from_str(&json).unwrap();
+        let decoded: AgentSnapshotInfo = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.id, info.id);
     }
 }

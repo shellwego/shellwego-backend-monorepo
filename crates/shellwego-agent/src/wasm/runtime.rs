@@ -1,6 +1,6 @@
 //! Wasmtime-based runtime implementation
 
-use crate::wasm::{WasmError, WasmConfig, CompiledModule};
+use crate::wasm::{WasmError, WasmRuntimeConfig, CompiledModule};
 use wasmtime::{Engine, Config, Module};
 
 /// Wasmtime runtime wrapper
@@ -11,7 +11,7 @@ pub struct WasmtimeRuntime {
 
 impl WasmtimeRuntime {
     /// Create engine with custom config
-    pub fn new(_config: &WasmConfig) -> Result<Self, WasmError> {
+    pub fn new(_config: &WasmRuntimeConfig) -> Result<Self, WasmError> {
         let mut wasm_config = Config::new();
         
         // Security & Performance defaults

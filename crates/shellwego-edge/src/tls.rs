@@ -101,11 +101,11 @@ impl FileStore {
             base_path: base_path.into(),
         }
     }
-    
+
     fn cert_path(&self, domain: &str) -> PathBuf {
         self.base_path.join(domain).with_extension("json")
     }
-    
+
     fn key_path(&self, domain: &str) -> PathBuf {
         self.base_path.join(domain).with_extension("key")
     }
@@ -118,47 +118,55 @@ impl CertificateStore for FileStore {
         if !path.exists() {
             return Ok(None);
         }
-        
-        let data = tokio::fs::read(&path).await
+
+        let data = tokio::fs::read(&path)
+            .await
             .map_err(|e| CertError::StorageError(format!("Failed to read certificate: {}", e)))?;
-        
+
         let cert: Certificate = serde_json::from_slice(&data)
             .map_err(|e| CertError::StorageError(format!("Failed to parse certificate: {}", e)))?;
-        
+
         Ok(Some(cert))
     }
 
     async fn put(&self, domain: &str, cert: &Certificate) -> Result<(), CertError> {
         if !self.base_path.exists() {
-            tokio::fs::create_dir_all(&self.base_path).await
-                .map_err(|e| CertError::StorageError(format!("Failed to create directory: {}", e)))?;
+            tokio::fs::create_dir_all(&self.base_path)
+                .await
+                .map_err(|e| {
+                    CertError::StorageError(format!("Failed to create directory: {}", e))
+                })?;
         }
-        
+
         let path = self.cert_path(domain);
-        let data = serde_json::to_vec_pretty(cert)
-            .map_err(|e| CertError::StorageError(format!("Failed to serialize certificate: {}", e)))?;
-        
+        let data = serde_json::to_vec_pretty(cert).map_err(|e| {
+            CertError::StorageError(format!("Failed to serialize certificate: {}", e))
+        })?;
+
         // Set restrictive permissions for key file
-        tokio::fs::write(&path, &data).await
+        tokio::fs::write(&path, &data)
+            .await
             .map_err(|e| CertError::StorageError(format!("Failed to write certificate: {}", e)))?;
-        
+
         Ok(())
     }
 
     async fn delete(&self, domain: &str) -> Result<(), CertError> {
         let cert_path = self.cert_path(domain);
         let key_path = self.key_path(domain);
-        
+
         if cert_path.exists() {
-            tokio::fs::remove_file(&cert_path).await
-                .map_err(|e| CertError::StorageError(format!("Failed to delete certificate: {}", e)))?;
+            tokio::fs::remove_file(&cert_path).await.map_err(|e| {
+                CertError::StorageError(format!("Failed to delete certificate: {}", e))
+            })?;
         }
-        
+
         if key_path.exists() {
-            tokio::fs::remove_file(&key_path).await
+            tokio::fs::remove_file(&key_path)
+                .await
                 .map_err(|e| CertError::StorageError(format!("Failed to delete key: {}", e)))?;
         }
-        
+
         Ok(())
     }
 
@@ -166,19 +174,22 @@ impl CertificateStore for FileStore {
         if !self.base_path.exists() {
             return Ok(Vec::new());
         }
-        
-        let mut entries = tokio::fs::read_dir(&self.base_path).await
+
+        let mut entries = tokio::fs::read_dir(&self.base_path)
+            .await
             .map_err(|e| CertError::StorageError(format!("Failed to list directory: {}", e)))?;
-        
+
         let mut domains = Vec::new();
-        while let Some(entry) = entries.next_entry().await
-            .map_err(|e| CertError::StorageError(format!("Failed to read entry: {}", e)))? 
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|e| CertError::StorageError(format!("Failed to read entry: {}", e)))?
         {
             if let Some(name) = entry.path().file_stem() {
                 domains.push(name.to_string_lossy().to_string());
             }
         }
-        
+
         Ok(domains)
     }
 }
@@ -190,15 +201,15 @@ impl CertificateManager {
             CertStorage::Memory => Box::new(MemoryStore::new()),
             CertStorage::File { path } => Box::new(FileStore::new(path)),
         };
-        
+
         let acme_config = config.acme.as_ref().map(|a| AcmeConfig {
             directory_url: a.directory_url.clone(),
             contact_email: a.contact_email.clone(),
             challenge_type: a.challenge_type.clone(),
         });
-        
+
         info!("Certificate manager initialized");
-        
+
         Ok(Self {
             store,
             cache: RwLock::new(HashMap::new()),
@@ -207,7 +218,7 @@ impl CertificateManager {
             renewal_days: 30,
         })
     }
-    
+
     /// Get certificate for domain (SNI callback)
     pub async fn get_certificate(&self, domain: &str) -> Result<Option<Certificate>, CertError> {
         // Check cache first
@@ -219,7 +230,7 @@ impl CertificateManager {
                 }
             }
         }
-        
+
         // Check storage
         if let Some(cert) = self.store.get(domain).await? {
             if !cert.is_expired() {
@@ -229,34 +240,36 @@ impl CertificateManager {
                 return Ok(Some(cert));
             }
         }
-        
+
         Ok(None)
     }
-    
+
     /// Request new certificate via ACME
     pub async fn request_certificate(&self, domain: &str) -> Result<Certificate, CertError> {
-        let acme_config = self.acme_config.as_ref()
+        let acme_config = self
+            .acme_config
+            .as_ref()
             .ok_or_else(|| CertError::AcmeNotConfigured)?;
-        
+
         info!("Requesting certificate for {} via ACME", domain);
-        
+
         // In production, this would use acme-lib or acme2 crate
         // For development, we generate a self-signed certificate
-        
+
         let cert = self.generate_self_signed(domain)?;
-        
+
         // Store certificate
         self.store.put(domain, &cert).await?;
-        
+
         // Update cache
         let mut cache = self.cache.write().await;
         cache.insert(domain.to_string(), cert.clone());
-        
+
         info!("Certificate obtained for {}", domain);
-        
+
         Ok(cert)
     }
-    
+
     /// Import existing certificate
     pub async fn import_certificate(
         &self,
@@ -265,7 +278,7 @@ impl CertificateManager {
         key_pem: &str,
     ) -> Result<(), CertError> {
         info!("Importing certificate for {}", domain);
-        
+
         let cert = Certificate {
             domain: domain.to_string(),
             cert_pem: cert_pem.to_string(),
@@ -275,31 +288,31 @@ impl CertificateManager {
             not_after: Utc::now() + chrono::Duration::days(365),
             created_at: Utc::now(),
         };
-        
+
         cert.validate()?;
-        
+
         self.store.put(domain, &cert).await?;
-        
+
         let mut cache = self.cache.write().await;
         cache.insert(domain.to_string(), cert);
-        
+
         Ok(())
     }
-    
+
     /// Check and renew expiring certificates
     pub async fn renew_expiring(&self, days_before: u32) -> Result<Vec<String>, CertError> {
         info!("Checking for expiring certificates ({} days)", days_before);
-        
+
         let mut renewed = Vec::new();
         let threshold = Utc::now() + chrono::Duration::days(days_before as i64);
-        
+
         let domains = self.store.list().await?;
-        
+
         for domain in domains {
             if let Some(cert) = self.store.get(&domain).await? {
                 if cert.not_after < threshold {
                     info!("Renewing certificate for {}", domain);
-                    
+
                     match self.request_certificate(&domain).await {
                         Ok(_) => {
                             renewed.push(domain);
@@ -311,57 +324,58 @@ impl CertificateManager {
                 }
             }
         }
-        
+
         info!("Renewed {} certificates", renewed.len());
-        
+
         Ok(renewed)
     }
-    
+
     /// Revoke certificate
     pub async fn revoke(&self, domain: &str, _reason: RevocationReason) -> Result<(), CertError> {
         info!("Revoking certificate for {}", domain);
-        
+
         // Remove from cache
         {
             let mut cache = self.cache.write().await;
             cache.remove(domain);
         }
-        
+
         // Remove from storage
         self.store.delete(domain).await?;
-        
+
         // In production, would send revocation to CA
-        
+
         info!("Certificate revoked for {}", domain);
-        
+
         Ok(())
     }
-    
+
     /// Generate self-signed certificate (for development/testing)
     fn generate_self_signed(&self, domain: &str) -> Result<Certificate, CertError> {
-        use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, PKCS_ECDSA_P256_SHA256};
-        
+        use rcgen::{
+            CertificateParams, DistinguishedName, DnType, KeyPair, PKCS_ECDSA_P256_SHA256,
+        };
+
         let mut params = CertificateParams::default();
         params.distinguished_name = DistinguishedName::new();
         params.distinguished_name.push(DnType::CommonName, domain);
         params.alg = &PKCS_ECDSA_P256_SHA256;
-        params.subject_alt_names = vec![
-            rcgen::SanType::DnsName(domain.to_string()),
-        ];
-        
+        params.subject_alt_names = vec![rcgen::SanType::DnsName(domain.to_string())];
+
         let key_pair = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
             .map_err(|e| CertError::GenerationError(format!("Failed to generate key: {}", e)))?;
-        
+
         let cert = rcgen::Certificate::params(params)
             .map_err(|e| CertError::GenerationError(format!("Failed to create cert: {}", e)))?;
-        
-        let cert_pem = cert.serialize_pem()
+
+        let cert_pem = cert
+            .serialize_pem()
             .map_err(|e| CertError::GenerationError(format!("Failed to serialize cert: {}", e)))?;
-        
+
         let key_pem = key_pair.serialize_pem();
-        
+
         let now = Utc::now();
-        
+
         Ok(Certificate {
             domain: domain.to_string(),
             cert_pem,
@@ -372,22 +386,23 @@ impl CertificateManager {
             created_at: now,
         })
     }
-    
+
     /// Start background renewal worker
     pub async fn start_renewal_worker(&self) {
         let store_domains = self.store.list().await;
-        let renewal_days = self.renewal_days;
-        
+        let _renewal_days = self.renewal_days;
+
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(86400)); // Daily
-            
+
             loop {
                 interval.tick().await;
-                
+
                 if let Ok(domains) = store_domains.as_ref() {
                     for domain in domains {
                         // Check and renew if needed
                         debug!("Checking certificate for {}", domain);
+                        let _ = _renewal_days; // Will be used in actual renewal logic
                     }
                 }
             }
@@ -419,30 +434,32 @@ impl Certificate {
     pub fn is_expired(&self) -> bool {
         self.not_after < Utc::now()
     }
-    
+
     /// Check if certificate needs renewal
     pub fn needs_renewal(&self, days: u32) -> bool {
         let threshold = Utc::now() + chrono::Duration::days(days as i64);
         self.not_after < threshold
     }
-    
+
     /// Validate certificate
     pub fn validate(&self) -> Result<(), CertError> {
         if self.domain.is_empty() {
             return Err(CertError::ValidationError("Domain is empty".into()));
         }
-        
+
         if self.cert_pem.is_empty() {
-            return Err(CertError::ValidationError("Certificate PEM is empty".into()));
+            return Err(CertError::ValidationError(
+                "Certificate PEM is empty".into(),
+            ));
         }
-        
+
         if self.key_pem.is_empty() {
             return Err(CertError::ValidationError("Key PEM is empty".into()));
         }
-        
+
         Ok(())
     }
-    
+
     /// Convert to rustls certificate
     pub fn to_rustls_cert(&self) -> Result<(Vec<RustlsCertificate>, PrivateKey), CertError> {
         // Parse certificate chain
@@ -451,15 +468,15 @@ impl Certificate {
             .into_iter()
             .map(RustlsCertificate)
             .collect();
-        
+
         // Parse private key
         let key = rustls_pemfile::private_key(&mut self.key_pem.as_bytes())
             .map_err(|e| CertError::ParseError(format!("Failed to parse key: {}", e)))?
             .ok_or_else(|| CertError::ParseError("No private key found".into()))?;
-        
+
         Ok((certs, key))
     }
-    
+
     /// Get full chain PEM
     pub fn fullchain_pem(&self) -> String {
         match &self.chain_pem {
@@ -541,21 +558,24 @@ pub enum RevocationReason {
 
 /// Certificate resolver for rustls SNI
 pub struct CertificateResolver {
-    manager: Arc<CertificateManager>,
+    _manager: Arc<CertificateManager>,
 }
 
 impl CertificateResolver {
     /// Create new resolver
     pub fn new(manager: Arc<CertificateManager>) -> Self {
-        Self { manager }
+        Self { _manager: manager }
     }
 }
 
 impl ResolvesServerCert for CertificateResolver {
-    fn resolve(&self, client_hello: rustls::server::ClientHello) -> Option<Arc<rustls::sign::CertifiedKey>> {
+    fn resolve(
+        &self,
+        client_hello: rustls::server::ClientHello,
+    ) -> Option<Arc<rustls::sign::CertifiedKey>> {
         // Get SNI from client hello
         let domain = client_hello.server_name()?;
-        
+
         // In async context, we'd use block_on
         // For now, return None (would need to be refactored for async)
         debug!("Resolving certificate for {}", domain);
@@ -568,28 +588,28 @@ impl ResolvesServerCert for CertificateResolver {
 pub enum CertError {
     #[error("ACME error: {0}")]
     AcmeError(String),
-    
+
     #[error("ACME not configured")]
     AcmeNotConfigured,
-    
+
     #[error("DNS challenge failed: {0}")]
     DnsChallengeFailed(String),
-    
+
     #[error("HTTP challenge failed: {0}")]
     HttpChallengeFailed(String),
-    
+
     #[error("Storage error: {0}")]
     StorageError(String),
-    
+
     #[error("Generation error: {0}")]
     GenerationError(String),
-    
+
     #[error("Validation error: {0}")]
     ValidationError(String),
-    
+
     #[error("Parse error: {0}")]
     ParseError(String),
-    
+
     #[error("Not found: {0}")]
     NotFound(String),
 }
@@ -608,7 +628,7 @@ mod tests {
     #[tokio::test]
     async fn test_memory_store() {
         let store = MemoryStore::new();
-        
+
         let cert = Certificate {
             domain: "example.com".to_string(),
             cert_pem: "CERT".to_string(),
@@ -618,7 +638,7 @@ mod tests {
             not_after: Utc::now() + chrono::Duration::days(90),
             created_at: Utc::now(),
         };
-        
+
         store.put("example.com", &cert).await.unwrap();
         let retrieved = store.get("example.com").await.unwrap();
         assert!(retrieved.is_some());
@@ -635,7 +655,7 @@ mod tests {
             not_after: Utc::now() + chrono::Duration::days(10),
             created_at: Utc::now(),
         };
-        
+
         assert!(!cert.is_expired());
         assert!(cert.needs_renewal(30));
     }

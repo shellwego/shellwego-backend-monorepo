@@ -37,14 +37,14 @@ impl Router {
             rr_counter: AtomicUsize::new(0),
         }
     }
-    
+
     /// Add route to table
     pub fn add_route(&mut self, route: Route) -> Result<(), EdgeError> {
         let route_id = route.id.clone();
-        
+
         // Validate route
         self.validate_route(&route)?;
-        
+
         // Index by host matchers
         for matcher in &route.matchers {
             if let Matcher::Host(host) = matcher {
@@ -53,25 +53,26 @@ impl Router {
                     self.wildcard_hosts.push((host.clone(), route_id.clone()));
                 } else {
                     // Exact host match
-                    self.host_index.entry(host.clone())
+                    self.host_index
+                        .entry(host.clone())
                         .or_default()
                         .push(route_id.clone());
                 }
             }
         }
-        
+
         // Add to priorities
         let priority = route.priority;
         self.priorities.push((priority, route_id.clone()));
         self.priorities.sort_by(|a, b| b.0.cmp(&a.0)); // Descending order
-        
+
         // Store route
         self.routes.insert(route_id, route);
-        
+
         debug!("Added route to router");
         Ok(())
     }
-    
+
     /// Remove route by ID
     pub fn remove_route(&mut self, route_id: &str) -> Result<(), EdgeError> {
         if let Some(route) = self.routes.remove(route_id) {
@@ -84,17 +85,20 @@ impl Router {
                     self.wildcard_hosts.retain(|(h, _)| h != host);
                 }
             }
-            
+
             // Remove from priorities
             self.priorities.retain(|(_, id)| id != route_id);
-            
+
             debug!("Removed route {} from router", route_id);
             Ok(())
         } else {
-            Err(EdgeError::RoutingError(format!("Route not found: {}", route_id)))
+            Err(EdgeError::RoutingError(format!(
+                "Route not found: {}",
+                route_id
+            )))
         }
     }
-    
+
     /// Match request to route
     pub fn match_request(&self, req: &RequestInfo) -> Option<&Route> {
         // Try exact host match first
@@ -107,7 +111,7 @@ impl Router {
                 }
             }
         }
-        
+
         // Try wildcard host match
         for (pattern, route_id) in &self.wildcard_hosts {
             if self.matches_wildcard(pattern, &req.host) {
@@ -118,7 +122,7 @@ impl Router {
                 }
             }
         }
-        
+
         // Try routes without host matcher (catch-all)
         for (_, route_id) in &self.priorities {
             if let Some(route) = self.routes.get(route_id) {
@@ -128,26 +132,30 @@ impl Router {
                 }
             }
         }
-        
+
         None
     }
-    
+
     /// Validate route configuration
     fn validate_route(&self, route: &Route) -> Result<(), EdgeError> {
         if route.id.is_empty() {
             return Err(EdgeError::RoutingError("Route ID cannot be empty".into()));
         }
-        
+
         if route.upstreams.is_empty() {
-            return Err(EdgeError::RoutingError("Route must have at least one upstream".into()));
+            return Err(EdgeError::RoutingError(
+                "Route must have at least one upstream".into(),
+            ));
         }
-        
+
         for upstream in &route.upstreams {
             if upstream.url.is_empty() {
-                return Err(EdgeError::RoutingError("Upstream URL cannot be empty".into()));
+                return Err(EdgeError::RoutingError(
+                    "Upstream URL cannot be empty".into(),
+                ));
             }
         }
-        
+
         // Validate regex matchers
         for matcher in &route.matchers {
             if let Matcher::PathRegex(pattern) = matcher {
@@ -159,10 +167,10 @@ impl Router {
                     .map_err(|e| EdgeError::RoutingError(format!("Invalid host regex: {}", e)))?;
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// Check if request matches route
     fn matches_route(&self, route: &Route, req: &RequestInfo) -> bool {
         for matcher in &route.matchers {
@@ -172,43 +180,30 @@ impl Router {
         }
         true
     }
-    
+
     /// Match a single matcher against request
     fn matches_single(&self, matcher: &Matcher, req: &RequestInfo) -> bool {
         match matcher {
-            Matcher::Host(host) => {
-                self.matches_host(host, &req.host)
-            }
-            Matcher::HostRegex(pattern) => {
-                Regex::new(pattern)
-                    .map(|re| re.is_match(&req.host))
-                    .unwrap_or(false)
-            }
-            Matcher::Path(path) => {
-                req.path == *path
-            }
-            Matcher::PathPrefix(prefix) => {
-                req.path.starts_with(prefix)
-            }
-            Matcher::PathRegex(pattern) => {
-                Regex::new(pattern)
-                    .map(|re| re.is_match(&req.path))
-                    .unwrap_or(false)
-            }
+            Matcher::Host(host) => self.matches_host(host, &req.host),
+            Matcher::HostRegex(pattern) => Regex::new(pattern)
+                .map(|re| re.is_match(&req.host))
+                .unwrap_or(false),
+            Matcher::Path(path) => req.path == *path,
+            Matcher::PathPrefix(prefix) => req.path.starts_with(prefix),
+            Matcher::PathRegex(pattern) => Regex::new(pattern)
+                .map(|re| re.is_match(&req.path))
+                .unwrap_or(false),
             Matcher::Header(name, value) => {
                 req.headers.get(name).map(|v| v == value).unwrap_or(false)
             }
-            Matcher::Query(key, value) => {
-                req.query.get(key).map(|v| v == value).unwrap_or(false)
-            }
-            Matcher::Method(method) => {
-                req.method == *method
-            }
+            Matcher::Query(key, value) => req.query.get(key).map(|v| v == value).unwrap_or(false),
+            Matcher::Method(method) => req.method == *method,
         }
     }
-    
+
     /// Match host pattern
     fn matches_host(&self, pattern: &str, host: &str) -> bool {
+        let _ = self; // Self not needed for this method
         if pattern.starts_with("*.") {
             // Wildcard match
             let suffix = &pattern[1..]; // Remove the *
@@ -217,13 +212,14 @@ impl Router {
             host == pattern
         }
     }
-    
+
     /// Match wildcard pattern
     fn matches_wildcard(&self, pattern: &str, host: &str) -> bool {
+        let _ = self; // Self not needed for this method
         let suffix = &pattern[1..]; // Remove the *
         host.ends_with(suffix) && host.len() > suffix.len()
     }
-    
+
     /// Clear all routes
     pub fn clear(&mut self) {
         self.routes.clear();
@@ -231,22 +227,22 @@ impl Router {
         self.wildcard_hosts.clear();
         self.priorities.clear();
     }
-    
+
     /// Get route by ID
     pub fn get_route(&self, route_id: &str) -> Option<&Route> {
         self.routes.get(route_id)
     }
-    
+
     /// List all route IDs
     pub fn list_routes(&self) -> Vec<&str> {
         self.routes.keys().map(|s| s.as_str()).collect()
     }
-    
+
     /// Get round-robin counter
     pub fn rr_counter(&self) -> &AtomicUsize {
         &self.rr_counter
     }
-    
+
     /// Watch configuration for changes (placeholder)
     pub async fn watch_config(&mut self, source: ConfigSource) -> Result<(), EdgeError> {
         match source {
@@ -334,21 +330,22 @@ impl RequestInfo {
     /// Create from HTTP request
     pub fn from_request<B>(req: &hyper::Request<B>) -> Self {
         let method = req.method().to_string();
-        let host = req.headers()
+        let host = req
+            .headers()
             .get("host")
             .and_then(|h| h.to_str().ok())
             .unwrap_or("")
             .to_string();
-        
+
         let path = req.uri().path().to_string();
-        
+
         let mut headers = HashMap::new();
         for (name, value) in req.headers() {
             if let Ok(v) = value.to_str() {
                 headers.insert(name.to_string(), v.to_string());
             }
         }
-        
+
         let mut query = HashMap::new();
         if let Some(query_str) = req.uri().query() {
             for pair in query_str.split('&') {
@@ -357,16 +354,20 @@ impl RequestInfo {
                 }
             }
         }
-        
-        let client_ip = req.headers()
+
+        let client_ip = req
+            .headers()
             .get("X-Real-IP")
             .and_then(|h| h.to_str().ok())
-            .or_else(|| req.headers().get("X-Forwarded-For")
-                .and_then(|h| h.to_str().ok())
-                .map(|s| s.split(',').next().unwrap_or("").trim()))
+            .or_else(|| {
+                req.headers()
+                    .get("X-Forwarded-For")
+                    .and_then(|h| h.to_str().ok())
+                    .map(|s| s.split(',').next().unwrap_or("").trim())
+            })
             .unwrap_or("unknown")
             .to_string();
-        
+
         Self {
             method,
             host,
@@ -495,7 +496,10 @@ pub enum Middleware {
     /// Redirect
     Redirect { to: String, permanent: bool },
     /// Rewrite path
-    RewritePath { pattern: String, replacement: String },
+    RewritePath {
+        pattern: String,
+        replacement: String,
+    },
 }
 
 /// Rate limit configuration
@@ -583,7 +587,7 @@ mod tests {
     #[test]
     fn test_add_route() {
         let mut router = Router::new();
-        
+
         let route = Route {
             id: "test-route".to_string(),
             priority: 100,
@@ -594,7 +598,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        
+
         let result = router.add_route(route);
         assert!(result.is_ok());
         assert_eq!(router.routes.len(), 1);
@@ -603,7 +607,7 @@ mod tests {
     #[test]
     fn test_match_request() {
         let mut router = Router::new();
-        
+
         let route = Route {
             id: "test-route".to_string(),
             priority: 100,
@@ -617,9 +621,9 @@ mod tests {
             }],
             ..Default::default()
         };
-        
+
         router.add_route(route).unwrap();
-        
+
         let req = RequestInfo {
             method: "GET".to_string(),
             host: "example.com".to_string(),
@@ -628,7 +632,7 @@ mod tests {
             query: HashMap::new(),
             client_ip: "127.0.0.1".to_string(),
         };
-        
+
         let matched = router.match_request(&req);
         assert!(matched.is_some());
         assert_eq!(matched.unwrap().id, "test-route");
@@ -637,7 +641,7 @@ mod tests {
     #[test]
     fn test_wildcard_host() {
         let mut router = Router::new();
-        
+
         let route = Route {
             id: "wildcard-route".to_string(),
             priority: 100,
@@ -648,9 +652,9 @@ mod tests {
             }],
             ..Default::default()
         };
-        
+
         router.add_route(route).unwrap();
-        
+
         let req = RequestInfo {
             method: "GET".to_string(),
             host: "api.example.com".to_string(),
@@ -659,7 +663,7 @@ mod tests {
             query: HashMap::new(),
             client_ip: "127.0.0.1".to_string(),
         };
-        
+
         let matched = router.match_request(&req);
         assert!(matched.is_some());
     }

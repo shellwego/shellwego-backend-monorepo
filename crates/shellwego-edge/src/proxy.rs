@@ -1,24 +1,23 @@
 //! HTTP reverse proxy implementation
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use http_body_util::{BodyExt, Empty, Full};
-use hyper::body::Bytes;
-use hyper::header::{HeaderName, HeaderValue, CONNECTION, HOST, UPGRADE};
-use hyper::{Method, Request, Response, StatusCode, Version};
 use hyper::client::conn::http1::{self, SendRequest};
-use hyper::client::conn::http2;
+use hyper::header::{HeaderName, HeaderValue, CONNECTION, UPGRADE};
+use hyper::{Method, Request, Response, StatusCode, Version};
 use hyper_util::rt::TokioIo;
 use parking_lot::RwLock;
-use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tracing::{debug, error, info, warn};
 
-use crate::{EdgeError, router::{Route, Upstream, LoadBalancerStrategy}};
+use crate::{
+    router::{LoadBalancerStrategy, Route, Upstream},
+    EdgeError,
+};
 
 /// Default connection timeout
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -91,11 +90,15 @@ impl HttpProxy {
     ) -> Result<Response<hyper::body::Body>, EdgeError> {
         let start = Instant::now();
         self.metrics.total_requests.fetch_add(1, Ordering::Relaxed);
-        self.metrics.active_connections.fetch_add(1, Ordering::Relaxed);
+        self.metrics
+            .active_connections
+            .fetch_add(1, Ordering::Relaxed);
 
         let result = self.handle_request_inner(&mut request, route).await;
 
-        self.metrics.active_connections.fetch_sub(1, Ordering::Relaxed);
+        self.metrics
+            .active_connections
+            .fetch_sub(1, Ordering::Relaxed);
 
         match &result {
             Ok(response) => {
@@ -128,13 +131,15 @@ impl HttpProxy {
 
         // Select upstream backend
         let upstream = self.select_upstream(route)?;
-        
+
         // Build upstream URL
         let upstream_url = upstream.url.trim_end_matches('/');
-        let path = request.uri().path_and_query()
+        let path = request
+            .uri()
+            .path_and_query()
             .map(|pq| pq.as_str())
             .unwrap_or(request.uri().path());
-        
+
         let upstream_uri = format!("{}{}", upstream_url, path);
 
         // Prepare request for upstream
@@ -159,18 +164,21 @@ impl HttpProxy {
 
         // Handle WebSocket upgrade
         if is_websocket_upgrade(request) {
-            return self.handle_websocket_upstream(request.clone(), route, &upstream_url).await;
+            return self
+                .handle_websocket_upstream(request.clone(), route, &upstream_url)
+                .await;
         }
 
         // Build final request with body
         let body = std::mem::take(request.body_mut());
-        let upstream_req = upstream_req.body(body)
-            .map_err(|e| EdgeError::RoutingError(format!("Failed to build upstream request: {}", e)))?;
+        let upstream_req = upstream_req.body(body).map_err(|e| {
+            EdgeError::RoutingError(format!("Failed to build upstream request: {}", e))
+        })?;
 
         // Forward request
         let response = timeout(
             self.request_timeout,
-            self.forward_request(upstream_req, upstream_url)
+            self.forward_request(upstream_req, upstream_url),
         )
         .await
         .map_err(|_| EdgeError::Unavailable("Request timeout".into()))??;
@@ -186,12 +194,12 @@ impl HttpProxy {
 
     /// Select upstream using route's load balancing strategy
     fn select_upstream<'a>(&self, route: &'a Route) -> Result<&'a Upstream, EdgeError> {
-        let healthy_upstreams: Vec<_> = route.upstreams.iter()
-            .filter(|u| u.healthy)
-            .collect();
+        let healthy_upstreams: Vec<_> = route.upstreams.iter().filter(|u| u.healthy).collect();
 
         if healthy_upstreams.is_empty() {
-            return Err(EdgeError::Unavailable("No healthy upstreams available".into()));
+            return Err(EdgeError::Unavailable(
+                "No healthy upstreams available".into(),
+            ));
         }
 
         let idx = match &route.load_balancer {
@@ -202,7 +210,8 @@ impl HttpProxy {
             }
             LoadBalancerStrategy::LeastConnections => {
                 // Select upstream with least active connections
-                healthy_upstreams.iter()
+                healthy_upstreams
+                    .iter()
                     .enumerate()
                     .min_by_key(|(_, u)| self.pool.active_connections(&u.url))
                     .map(|(i, _)| i)
@@ -244,7 +253,9 @@ impl HttpProxy {
         }
 
         // Create new connection
-        let response = self.create_connection_and_send(upstream_url, request).await?;
+        let response = self
+            .create_connection_and_send(upstream_url, request)
+            .await?;
         Ok(response)
     }
 
@@ -255,24 +266,27 @@ impl HttpProxy {
         request: Request<hyper::body::Body>,
     ) -> Result<Response<hyper::body::Body>, EdgeError> {
         // Parse upstream URL
-        let url: http::Uri = upstream_url.parse()
+        let url: http::Uri = upstream_url
+            .parse()
             .map_err(|e| EdgeError::RoutingError(format!("Invalid upstream URL: {}", e)))?;
-        
-        let host = url.host().ok_or_else(|| 
-            EdgeError::RoutingError("Upstream URL missing host".into()))?;
+
+        let host = url
+            .host()
+            .ok_or_else(|| EdgeError::RoutingError("Upstream URL missing host".into()))?;
         let port = url.port_u16().unwrap_or(match url.scheme_str() {
             Some("https") => 443,
             _ => 80,
         });
 
         // Connect with timeout
-        let stream = timeout(
-            self.connect_timeout,
-            TcpStream::connect((host, port))
-        )
-        .await
-        .map_err(|_| EdgeError::Unavailable(format!("Connection timeout to {}:{}", host, port)))?
-        .map_err(|e| EdgeError::Unavailable(format!("Failed to connect to {}:{}: {}", host, port, e)))?;
+        let stream = timeout(self.connect_timeout, TcpStream::connect((host, port)))
+            .await
+            .map_err(|_| {
+                EdgeError::Unavailable(format!("Connection timeout to {}:{}", host, port))
+            })?
+            .map_err(|e| {
+                EdgeError::Unavailable(format!("Failed to connect to {}:{}: {}", host, port, e))
+            })?;
 
         let io = TokioIo::new(stream);
 
@@ -289,7 +303,9 @@ impl HttpProxy {
         });
 
         // Send request
-        let response = sender.send_request(request).await
+        let response = sender
+            .send_request(request)
+            .await
             .map_err(|e| EdgeError::RoutingError(format!("Request failed: {}", e)))?;
 
         // Store sender in pool for reuse
@@ -316,7 +332,9 @@ impl HttpProxy {
                         let new_uri = hyper::Uri::builder()
                             .path_and_query(new_path)
                             .build()
-                            .map_err(|e| EdgeError::RoutingError(format!("Failed to rebuild URI: {}", e)))?;
+                            .map_err(|e| {
+                                EdgeError::RoutingError(format!("Failed to rebuild URI: {}", e))
+                            })?;
                         *request.uri_mut() = new_uri;
                     }
                 }
@@ -326,15 +344,16 @@ impl HttpProxy {
                     let new_uri = hyper::Uri::builder()
                         .path_and_query(new_path)
                         .build()
-                        .map_err(|e| EdgeError::RoutingError(format!("Failed to rebuild URI: {}", e)))?;
-                        *request.uri_mut() = new_uri;
+                        .map_err(|e| {
+                            EdgeError::RoutingError(format!("Failed to rebuild URI: {}", e))
+                        })?;
+                    *request.uri_mut() = new_uri;
                 }
                 Middleware::AddHeaders { headers } => {
                     for (key, value) in headers {
-                        if let (Ok(name), Ok(val)) = (
-                            HeaderName::try_from(key),
-                            HeaderValue::try_from(value)
-                        ) {
+                        if let (Ok(name), Ok(val)) =
+                            (HeaderName::try_from(key), HeaderValue::try_from(value))
+                        {
                             request.headers_mut().insert(name, val);
                         }
                     }
@@ -355,11 +374,7 @@ impl HttpProxy {
     }
 
     /// Add middleware response headers
-    fn add_middleware_headers(
-        &self,
-        response: &mut Response<hyper::body::Body>,
-        route: &Route,
-    ) {
+    fn add_middleware_headers(&self, response: &mut Response<hyper::body::Body>, route: &Route) {
         use crate::router::Middleware;
 
         for middleware in &route.middleware {
@@ -376,26 +391,31 @@ impl HttpProxy {
     }
 
     /// Add security headers to response
-    fn add_security_headers(mut response: Response<hyper::body::Body>) -> Response<hyper::body::Body> {
+    fn add_security_headers(
+        mut response: Response<hyper::body::Body>,
+    ) -> Response<hyper::body::Body> {
         let headers = response.headers_mut();
-        
+
         // HSTS
         headers.insert(
             "Strict-Transport-Security",
-            "max-age=31536000; includeSubDomains".parse().unwrap()
+            "max-age=31536000; includeSubDomains".parse().unwrap(),
         );
-        
+
         // Frame options
         headers.insert("X-Frame-Options", "DENY".parse().unwrap());
-        
+
         // Content type sniffing
         headers.insert("X-Content-Type-Options", "nosniff".parse().unwrap());
-        
+
         // XSS Protection
         headers.insert("X-XSS-Protection", "1; mode=block".parse().unwrap());
-        
+
         // Referrer Policy
-        headers.insert("Referrer-Policy", "strict-origin-when-cross-origin".parse().unwrap());
+        headers.insert(
+            "Referrer-Policy",
+            "strict-origin-when-cross-origin".parse().unwrap(),
+        );
 
         response
     }
@@ -407,34 +427,37 @@ impl HttpProxy {
         route: &Route,
     ) -> Result<Response<hyper::body::Body>, EdgeError> {
         let upstream = self.select_upstream(route)?;
-        self.handle_websocket_upstream(request, route, &upstream.url).await
+        self.handle_websocket_upstream(request, route, &upstream.url)
+            .await
     }
 
     /// Handle WebSocket upgrade to upstream
     async fn handle_websocket_upstream(
         &self,
-        request: Request<hyper::body::Body>,
+        _request: Request<hyper::body::Body>,
         route: &Route,
         upstream_url: &str,
     ) -> Result<Response<hyper::body::Body>, EdgeError> {
-        debug!("Handling WebSocket upgrade for route {}", route.id);
+        debug!("Handling WebSocket upgrade for route {}", upstream_url);
 
         // Parse upstream URL
-        let url: http::Uri = upstream_url.parse()
+        let url: http::Uri = upstream_url
+            .parse()
             .map_err(|e| EdgeError::RoutingError(format!("Invalid upstream URL: {}", e)))?;
-        
-        let host = url.host().ok_or_else(|| 
-            EdgeError::RoutingError("Upstream URL missing host".into()))?;
+
+        let host = url
+            .host()
+            .ok_or_else(|| EdgeError::RoutingError("Upstream URL missing host".into()))?;
         let port = url.port_u16().unwrap_or(80);
 
         // Connect to upstream
-        let upstream_stream = TcpStream::connect((host, port))
+        let _upstream_stream = TcpStream::connect((host, port))
             .await
             .map_err(|e| EdgeError::Unavailable(format!("Failed to connect: {}", e)))?;
 
         // For WebSocket, we'd need to use tokio-tungstenite
         // This is a simplified version that returns a 101 response
-        
+
         let response = Response::builder()
             .status(StatusCode::SWITCHING_PROTOCOLS)
             .header(UPGRADE, "websocket")
@@ -453,12 +476,14 @@ impl HttpProxy {
         route: &Route,
     ) -> Result<Response<hyper::body::Body>, EdgeError> {
         debug!("Handling SSE request for route {}", route.id);
-        
+
         let upstream = self.select_upstream(route)?;
-        let path = request.uri().path_and_query()
+        let path = request
+            .uri()
+            .path_and_query()
             .map(|pq| pq.as_str())
             .unwrap_or(request.uri().path());
-        
+
         let upstream_uri = format!("{}{}", upstream.url.trim_end_matches('/'), path);
 
         // Forward request to upstream
@@ -468,7 +493,7 @@ impl HttpProxy {
         let (parts, body) = response.into_parts();
         let mut response = Response::new(body);
         *response.status_mut() = parts.status;
-        
+
         let headers = response.headers_mut();
         headers.insert("Content-Type", "text/event-stream".parse().unwrap());
         headers.insert("Cache-Control", "no-cache".parse().unwrap());
@@ -513,7 +538,7 @@ impl ConnectionPool {
     pub fn try_get_sender(&self, upstream: &str) -> Option<SendRequest<hyper::body::Body>> {
         let mut idle = self.idle.write();
         let connections = idle.get_mut(upstream)?;
-        
+
         while let Some(conn) = connections.pop() {
             if conn.is_healthy() {
                 self.increment_active(upstream);
@@ -521,7 +546,7 @@ impl ConnectionPool {
             }
             // Discard unhealthy connections
         }
-        
+
         None
     }
 
@@ -534,9 +559,9 @@ impl ConnectionPool {
     /// Store sender in pool
     pub fn store_sender(&self, upstream: String, sender: SendRequest<hyper::body::Body>) {
         let mut idle = self.idle.write();
-        
-        let connections = idle.entry(upstream.clone()).or_default();
-        
+
+        let connections = idle.entry(upstream).or_default();
+
         // Don't exceed max idle
         if connections.len() < self.max_idle {
             connections.push(PooledConnection {
@@ -576,9 +601,7 @@ impl ConnectionPool {
     pub fn prune_expired(&self) {
         let mut idle = self.idle.write();
         for (_, connections) in idle.iter_mut() {
-            connections.retain(|conn| {
-                conn.created_at.elapsed() < self.idle_timeout
-            });
+            connections.retain(|conn| conn.created_at.elapsed() < self.idle_timeout);
         }
     }
 }
@@ -632,27 +655,36 @@ impl RequestContext {
 fn is_hop_by_hop_header(name: &HeaderName) -> bool {
     matches!(
         name.as_str(),
-        "connection" | "keep-alive" | "proxy-authenticate" |
-        "proxy-authorization" | "te" | "trailers" |
-        "transfer-encoding" | "upgrade"
+        "connection"
+            | "keep-alive"
+            | "proxy-authenticate"
+            | "proxy-authorization"
+            | "te"
+            | "trailers"
+            | "transfer-encoding"
+            | "upgrade"
     )
 }
 
 /// Check if request is WebSocket upgrade
 fn is_websocket_upgrade(request: &Request<hyper::body::Body>) -> bool {
     let headers = request.headers();
-    
-    let upgrade = headers.get(UPGRADE)
-        .and_then(|v| v.to_str().ok())
-        .map(|v| v.to_lowercase());
-    
-    let connection = headers.get(CONNECTION)
+
+    let upgrade = headers
+        .get(UPGRADE)
         .and_then(|v| v.to_str().ok())
         .map(|v| v.to_lowercase());
 
-    matches!((upgrade, connection), 
-        (Some(upgrade), Some(conn)) 
-        if upgrade.contains("websocket") && conn.contains("upgrade"))
+    let connection = headers
+        .get(CONNECTION)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.to_lowercase());
+
+    matches!(
+        (upgrade, connection),
+        (Some(upgrade), Some(conn))
+            if upgrade.contains("websocket") && conn.contains("upgrade")
+    )
 }
 
 #[cfg(test)]
@@ -672,13 +704,11 @@ mod tests {
             .header("Connection", "Upgrade")
             .body(hyper::body::Body::empty())
             .unwrap();
-        
+
         assert!(is_websocket_upgrade(&req));
-        
-        let normal_req = Request::builder()
-            .body(hyper::body::Body::empty())
-            .unwrap();
-        
+
+        let normal_req = Request::builder().body(hyper::body::Body::empty()).unwrap();
+
         assert!(!is_websocket_upgrade(&normal_req));
     }
 

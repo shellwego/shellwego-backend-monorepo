@@ -5,12 +5,13 @@ resolver = "2"
 # Reduce disk and memory usage during builds
 [profile.dev]
 codegen-units = 256
-debug = 1
+debug = 0
 incremental = true
 
 [profile.dev.package."*"]
 codegen-units = 256
 opt-level = 0
+debug = 0
 
 [profile.release]
 codegen-units = 16

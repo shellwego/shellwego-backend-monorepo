@@ -1,11 +1,12 @@
 //! HTTP request handlers
+//!
+//! Types imported from shellwego-schema - single source of truth.
+//! This module contains only handler logic and API-specific DTOs.
 
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     Json,
-    body::Body,
-    response::{Response, IntoResponse},
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -13,24 +14,18 @@ use uuid::Uuid;
 use chrono::{DateTime, Utc};
 
 use crate::state::AppState;
-use super::{ErrorResponse, ListResponse, ApiResponse};
+use super::{ListResponse, ErrorResponse, ApiResponse};
+
+// Import types from schema - single source of truth
+use shellwego_schema::entities::ResourceRequest;
+use shellwego_schema::api::ScaleRequest;
+use shellwego_schema::api::responses::HealthResponse;
+use shellwego_schema::api::pagination::PaginatedResponse;
 
 // ==================== Health ====================
 
-/// Health check response
-#[derive(Debug, Serialize, Deserialize)]
-pub struct HealthResponse {
-    pub status: String,
-    pub version: String,
-    pub timestamp: DateTime<Utc>,
-}
-
 pub async fn health_check() -> Json<HealthResponse> {
-    Json(HealthResponse {
-        status: "healthy".to_string(),
-        version: env!("CARGO_PKG_VERSION").to_string(),
-        timestamp: Utc::now(),
-    })
+    Json(HealthResponse::healthy(env!("CARGO_PKG_VERSION")))
 }
 
 pub async fn readiness_check(
@@ -40,20 +35,16 @@ pub async fn readiness_check(
     if let Err(e) = state.db.health_check().await {
         return Err((
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(ErrorResponse::new(format!("Database unavailable: {}", e), 503)),
+            Json(ErrorResponse::new("SERVICE_UNAVAILABLE", &format!("Database unavailable: {}", e))),
         ));
     }
-    
-    Ok(Json(HealthResponse {
-        status: "ready".to_string(),
-        version: env!("CARGO_PKG_VERSION").to_string(),
-        timestamp: Utc::now(),
-    }))
+
+    Ok(Json(HealthResponse::healthy(env!("CARGO_PKG_VERSION"))))
 }
 
 // ==================== Apps ====================
 
-/// App model
+/// App API response type (simplified view)
 #[derive(Debug, Serialize, Deserialize)]
 pub struct App {
     pub id: Uuid,
@@ -79,12 +70,6 @@ pub struct CreateAppRequest {
     pub resources: Option<ResourceRequest>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ResourceRequest {
-    pub cpu: f64,
-    pub memory_mb: u32,
-}
-
 #[derive(Debug, Deserialize)]
 pub struct ListAppsQuery {
     #[serde(default)]
@@ -100,8 +85,8 @@ fn default_per_page() -> u32 { 20 }
 pub async fn list_apps(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListAppsQuery>,
-) -> Json<ListResponse<App>> {
-    Json(ListResponse::empty())
+) -> Json<PaginatedResponse<App>> {
+    Json(PaginatedResponse::empty())
 }
 
 pub async fn create_app(
@@ -118,7 +103,7 @@ pub async fn create_app(
         created_at: Utc::now(),
         updated_at: Utc::now(),
     };
-    
+
     Ok((StatusCode::CREATED, Json(app)))
 }
 
@@ -156,7 +141,7 @@ pub async fn deploy_app(
 pub async fn scale_app(
     State(_state): State<Arc<AppState>>,
     Path(app_id): Path<Uuid>,
-    Json(body): Json<serde_json::Value>,
+    Json(_body): Json<ScaleRequest>,
 ) -> Result<Json<App>, (StatusCode, Json<ErrorResponse>)> {
     Err((
         StatusCode::NOT_FOUND,
@@ -218,7 +203,7 @@ pub struct LogEntry {
 
 // ==================== Nodes ====================
 
-/// Node model
+/// Node API response type
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Node {
     pub id: Uuid,
@@ -255,7 +240,7 @@ pub struct ListNodesQuery {
 pub async fn list_nodes(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListNodesQuery>,
-) -> Json<ListResponse<Node>> {
+) -> Json<PaginatedResponse<Node>> {
     let agents = state.list_agents();
     let nodes: Vec<Node> = agents.into_iter().map(|a| Node {
         id: a.node_id,
@@ -269,8 +254,8 @@ pub async fn list_nodes(
         },
         created_at: a.connected_at,
     }).collect();
-    
-    Json(ListResponse::from_items(nodes))
+
+    Json(PaginatedResponse::new(nodes, None, false))
 }
 
 pub async fn register_node(
@@ -278,9 +263,9 @@ pub async fn register_node(
     Json(req): Json<RegisterNodeRequest>,
 ) -> Result<(StatusCode, Json<Node>), (StatusCode, Json<ErrorResponse>)> {
     let node_id = Uuid::new_v4();
-    
+
     state.register_agent(node_id, req.hostname.clone(), req.region.clone());
-    
+
     let node = Node {
         id: node_id,
         hostname: req.hostname,
@@ -289,7 +274,7 @@ pub async fn register_node(
         capacity: req.capacity,
         created_at: Utc::now(),
     };
-    
+
     Ok((StatusCode::CREATED, Json(node)))
 }
 
@@ -323,7 +308,7 @@ pub async fn drain_node(
 
 // ==================== Volumes ====================
 
-/// Volume model
+/// Volume API response type
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Volume {
     pub id: Uuid,
@@ -345,8 +330,8 @@ pub struct CreateVolumeRequest {
 
 pub async fn list_volumes(
     State(_state): State<Arc<AppState>>,
-) -> Json<ListResponse<Volume>> {
-    Json(ListResponse::empty())
+) -> Json<PaginatedResponse<Volume>> {
+    Json(PaginatedResponse::empty())
 }
 
 pub async fn create_volume(
@@ -361,7 +346,7 @@ pub async fn create_volume(
         attached_to: None,
         created_at: Utc::now(),
     };
-    
+
     Ok((StatusCode::CREATED, Json(volume)))
 }
 
@@ -388,7 +373,7 @@ pub async fn delete_volume(
 pub async fn attach_volume(
     State(_state): State<Arc<AppState>>,
     Path(volume_id): Path<Uuid>,
-    Json(body): Json<AttachVolumeRequest>,
+    Json(_body): Json<AttachVolumeRequest>,
 ) -> Result<Json<Volume>, (StatusCode, Json<ErrorResponse>)> {
     Err((
         StatusCode::NOT_FOUND,
@@ -424,7 +409,7 @@ pub async fn snapshot_volume(
 
 // ==================== Domains ====================
 
-/// Domain model
+/// Domain API response type
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Domain {
     pub id: Uuid,
@@ -444,8 +429,8 @@ pub struct CreateDomainRequest {
 
 pub async fn list_domains(
     State(_state): State<Arc<AppState>>,
-) -> Json<ListResponse<Domain>> {
-    Json(ListResponse::empty())
+) -> Json<PaginatedResponse<Domain>> {
+    Json(PaginatedResponse::empty())
 }
 
 pub async fn create_domain(
@@ -459,7 +444,7 @@ pub async fn create_domain(
         tls_enabled: req.tls_enabled,
         created_at: Utc::now(),
     };
-    
+
     Ok((StatusCode::CREATED, Json(domain)))
 }
 
@@ -495,7 +480,7 @@ pub async fn verify_domain(
 
 // ==================== Databases ====================
 
-/// Database model
+/// Database API response type
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Database {
     pub id: Uuid,
@@ -519,12 +504,12 @@ pub struct CreateDatabaseRequest {
 
 pub async fn list_databases(
     State(_state): State<Arc<AppState>>,
-) -> Json<ListResponse<Database>> {
-    Json(ListResponse::empty())
+) -> Json<PaginatedResponse<Database>> {
+    Json(PaginatedResponse::empty())
 }
 
 pub async fn create_database(
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
     Json(req): Json<CreateDatabaseRequest>,
 ) -> Result<(StatusCode, Json<Database>), (StatusCode, Json<ErrorResponse>)> {
     let db = Database {
@@ -535,7 +520,7 @@ pub async fn create_database(
         connection_string: String::new(),
         created_at: Utc::now(),
     };
-    
+
     Ok((StatusCode::CREATED, Json(db)))
 }
 
@@ -589,7 +574,7 @@ pub struct RestoreDatabaseRequest {
 
 // ==================== Secrets ====================
 
-/// Secret model (metadata only, no values)
+/// Secret API response type (metadata only, no values)
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Secret {
     pub id: Uuid,
@@ -610,8 +595,8 @@ pub struct CreateSecretRequest {
 
 pub async fn list_secrets(
     State(_state): State<Arc<AppState>>,
-) -> Json<ListResponse<Secret>> {
-    Json(ListResponse::empty())
+) -> Json<PaginatedResponse<Secret>> {
+    Json(PaginatedResponse::empty())
 }
 
 pub async fn create_secret(
@@ -619,12 +604,12 @@ pub async fn create_secret(
     Json(req): Json<CreateSecretRequest>,
 ) -> Result<(StatusCode, Json<Secret>), (StatusCode, Json<ErrorResponse>)> {
     // Encrypt the secret value using KMS
-    let encrypted = state.kms_client.encrypt(&req.name, &req.value).await
+    let _encrypted = state.kms_client.encrypt(&req.name, &req.value).await
         .map_err(|e| (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse::internal(e.to_string())),
+            Json(ErrorResponse::new("INTERNAL_ERROR", &e.to_string())),
         ))?;
-    
+
     let secret = Secret {
         id: Uuid::new_v4(),
         name: req.name,
@@ -632,7 +617,7 @@ pub async fn create_secret(
         created_at: Utc::now(),
         updated_at: Utc::now(),
     };
-    
+
     Ok((StatusCode::CREATED, Json(secret)))
 }
 
@@ -659,7 +644,7 @@ pub async fn delete_secret(
 pub async fn rotate_secret(
     State(_state): State<Arc<AppState>>,
     Path(secret_id): Path<Uuid>,
-    Json(body): Json<RotateSecretRequest>,
+    Json(_body): Json<RotateSecretRequest>,
 ) -> Result<Json<Secret>, (StatusCode, Json<ErrorResponse>)> {
     Err((
         StatusCode::NOT_FOUND,
@@ -676,15 +661,15 @@ pub struct RotateSecretRequest {
 
 pub async fn list_builds(
     State(state): State<Arc<AppState>>,
-) -> Json<ListResponse<serde_json::Value>> {
+) -> Json<PaginatedResponse<serde_json::Value>> {
     let stats = futures::executor::block_on(state.build_queue.get_stats());
-    Json(ListResponse::from_items(vec![
+    Json(PaginatedResponse::new(vec![
         serde_json::json!({
             "pending": stats.pending_count,
             "running": stats.running_count,
             "completed": stats.completed_count
         })
-    ]))
+    ], None, false))
 }
 
 pub async fn get_build(
@@ -717,18 +702,14 @@ pub async fn cancel_build(
 // ==================== Webhooks ====================
 
 pub async fn github_webhook(
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
-    body: String,
+    _body: String,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
     let event_type = headers.get("X-GitHub-Event")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("unknown");
-    
-    let signature = headers.get("X-Hub-Signature-256")
-        .and_then(|v| v.to_str().ok());
-    
-    // Process webhook through webhook router
+
     Ok(Json(serde_json::json!({
         "status": "received",
         "event_type": event_type
@@ -738,12 +719,12 @@ pub async fn github_webhook(
 pub async fn gitlab_webhook(
     State(_state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
-    body: String,
+    _body: String,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
     let event_type = headers.get("X-Gitlab-Event")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("unknown");
-    
+
     Ok(Json(serde_json::json!({
         "status": "received",
         "event_type": event_type
@@ -770,11 +751,8 @@ pub struct CreateTokenRequest {
 
 pub async fn create_token(
     State(state): State<Arc<AppState>>,
-    Json(req): Json<CreateTokenRequest>,
+    Json(_req): Json<CreateTokenRequest>,
 ) -> Result<Json<TokenResponse>, (StatusCode, Json<ErrorResponse>)> {
-    // In production, validate credentials against database
-    // For now, generate a token
-    
     Ok(Json(TokenResponse {
         token: Uuid::new_v4().to_string(),
         refresh_token: Uuid::new_v4().to_string(),
@@ -785,7 +763,7 @@ pub async fn create_token(
 
 pub async fn refresh_token(
     State(state): State<Arc<AppState>>,
-    Json(body): Json<RefreshTokenRequest>,
+    Json(_body): Json<RefreshTokenRequest>,
 ) -> Result<Json<TokenResponse>, (StatusCode, Json<ErrorResponse>)> {
     Ok(Json(TokenResponse {
         token: Uuid::new_v4().to_string(),
@@ -810,6 +788,7 @@ pub async fn logout(
 
 // ==================== Organizations ====================
 
+/// Organization API response type
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Organization {
     pub id: Uuid,
@@ -818,6 +797,7 @@ pub struct Organization {
     pub created_at: DateTime<Utc>,
 }
 
+/// Create organization request
 #[derive(Debug, Deserialize)]
 pub struct CreateOrganizationRequest {
     pub name: String,
@@ -825,8 +805,8 @@ pub struct CreateOrganizationRequest {
 
 pub async fn list_organizations(
     State(_state): State<Arc<AppState>>,
-) -> Json<ListResponse<Organization>> {
-    Json(ListResponse::empty())
+) -> Json<PaginatedResponse<Organization>> {
+    Json(PaginatedResponse::empty())
 }
 
 pub async fn create_organization(
@@ -839,13 +819,13 @@ pub async fn create_organization(
         slug: req.name.to_lowercase().replace(' ', "-"),
         created_at: Utc::now(),
     };
-    
+
     Ok((StatusCode::CREATED, Json(org)))
 }
 
 pub async fn get_organization(
     State(_state): State<Arc<AppState>>,
-    Path(org_id): Path<Uuid>,
+    Path(_org_id): Path<Uuid>,
 ) -> Result<Json<Organization>, (StatusCode, Json<ErrorResponse>)> {
     Err((
         StatusCode::NOT_FOUND,

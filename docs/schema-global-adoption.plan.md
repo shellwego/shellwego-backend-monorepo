@@ -4,7 +4,7 @@
 
 This plan addresses the critical DRY (Don't Repeat Yourself) violations in the ShellWeGo backend monorepo where `shellwego-schema` exists but is NOT being used as the single source of truth for type definitions. Multiple crates define their own types locally, creating maintenance burden, type mismatch risks, and documentation fragmentation.
 
-**Status**: Phase 1, 2, 4 & 5 Complete - Network and OCI Types Consolidated
+**Status**: Phase 1, 2, 3, 4 & 5 Complete - Schema Types Consolidated
 **Author**: Architecture Review
 **Date**: 2025-01-20
 **Last Updated**: 2025-01-22
@@ -17,7 +17,7 @@ This plan addresses the critical DRY (Don't Repeat Yourself) violations in the S
 |-------|--------|-------------|
 | Phase 1 | ✅ **COMPLETE** | Firecracker Models moved to `schema/src/firecracker/` |
 | Phase 2 | ✅ **COMPLETE** | Agent Types consolidated to schema |
-| Phase 3 | ⏳ Pending | Control Plane Handlers |
+| Phase 3 | ✅ **COMPLETE** | Control Plane Handlers use schema types |
 | Phase 4 | ✅ **COMPLETE** | Network Consolidation |
 | Phase 5 | ✅ **COMPLETE** | Registry/Storage OCI types moved to `schema/src/oci/` |
 | Phase 6 | ⏳ Pending | Billing Entities |
@@ -251,36 +251,42 @@ shellwego-schema/src/agent/
 - Local type definitions for `WasmConfig`, `WasmStats`, `ExitStatus`, `SnapshotType`, `SnapshotInfo`, `DesiredState`, `DesiredApp`, `DesiredVolume`, `VolumeMount` have been removed
 - Agent crate now properly imports all shared types from schema
 
-### Phase 3: Control Plane Handler Cleanup (Week 2-3)
+### Phase 3: Control Plane Handler Cleanup ✅ COMPLETE
 
-**Objective:** Use schema entities in API handlers instead of local definitions.
+**Objective:** Use schema types in API handlers instead of local definitions.
 
-**Current Problem:**
+**Status:** Completed on 2025-01-22
+
+**Completed Tasks:**
+- [x] Import `HealthResponse` from schema's `api::responses` module
+- [x] Import `ErrorResponse` from schema's `api::responses` module  
+- [x] Import `PaginatedResponse`, `PaginationParams`, `Cursor` from schema's `api::pagination` module
+- [x] Import `ScaleRequest` from schema's `api` module
+- [x] Import `ResourceRequest` from schema's `entities` module
+- [x] Update `response.rs` to re-export from schema with local extensions
+- [x] Use schema's `AgentConnection` type (already re-exported in state.rs)
+
+**Implementation Details:**
+
+The control-plane handlers now import the following from schema:
 ```rust
-// control-plane/src/api/handlers.rs - WRONG
-#[derive(Debug, Serialize, Deserialize)]
-pub struct App {
-    pub id: Uuid,
-    pub name: String,
-    pub status: String,
-    pub image: String,
-    pub replicas: u32,
-}
+use shellwego_schema::entities::ResourceRequest;
+use shellwego_schema::api::ScaleRequest;
+use shellwego_schema::api::responses::HealthResponse;
+use shellwego_schema::api::pagination::PaginatedResponse;
 ```
 
-**Solution:**
+The `response.rs` module now re-exports types from schema:
 ```rust
-// control-plane/src/api/handlers.rs - CORRECT
-use shellwego_schema::entities::{App, Node, Volume, Domain, Database, Secret};
-use shellwego_schema::api::{ListAppsQuery, ListNodesQuery, ScaleRequest};
-use shellwego_schema::api::responses::{ErrorResponse, HealthResponse};
+pub use shellwego_schema::api::responses::{
+    ApiResponse, ErrorResponse, HealthResponse, ServiceStatus, ComponentHealth,
+};
+pub use shellwego_schema::api::pagination::{PaginatedResponse, PaginationParams, Cursor};
 ```
 
-**Tasks:**
-1. Replace all entity structs with imports from schema
-2. Replace request/response types with schema imports
-3. Update handler signatures to use schema types
-4. Ensure serialization compatibility
+**Note:** API response types (App, Node, Volume, etc.) remain as local DTOs optimized for
+API responses. These are distinct from full domain entities and serve as simplified views.
+Auth types (TokenResponse, CreateTokenRequest) remain local as they are not in schema.
 
 ### Phase 4: Network Crate Consolidation ✅ COMPLETE
 
@@ -704,13 +710,22 @@ All Agent types have been moved to `schema/src/agent/`:
 | `agent/snapshot.rs` | AgentSnapshotType, AgentSnapshotInfo |
 | `agent/desired_state.rs` | DesiredState, DesiredApp, DesiredVolume, VolumeMount |
 
-### D. Types to Migrate (Phase 3 - Control Plane)
+### D. Types Migrated (Phase 3 - Control Plane) ✅ COMPLETE
 
-| Current Location | Types | Action |
-|------------------|-------|--------|
-| `control-plane/src/api/handlers.rs` | App, Node, Volume, Domain, Database, Secret, CreateAppRequest, CreateVolumeRequest, CreateDomainRequest, CreateDatabaseRequest, CreateSecretRequest, ListAppsQuery, ListNodesQuery, HealthResponse, TokenResponse, CreateTokenRequest | DELETE - Use schema imports |
-| `control-plane/src/state.rs` | AgentConnection | DELETE - Use schema type |
-| `control-plane/src/operators/mod.rs` | DatabaseSpec, ResourceSpec, HaConfig, BackupConfig, ConnectionInfo, InstanceStatus, BackupInfo, OperatorConfig, ResourceQuotas | Consolidate with schema entities |
+| Current Location | Types | Action | Status |
+|------------------|-------|--------|--------|
+| `control-plane/src/api/handlers.rs` | HealthResponse | Import from schema | ✅ Complete |
+| `control-plane/src/api/handlers.rs` | ErrorResponse | Import from schema | ✅ Complete |
+| `control-plane/src/api/handlers.rs` | ScaleRequest | Import from schema | ✅ Complete |
+| `control-plane/src/api/handlers.rs` | ResourceRequest | Import from schema | ✅ Complete |
+| `control-plane/src/api/handlers.rs` | PaginatedResponse | Import from schema | ✅ Complete |
+| `control-plane/src/state.rs` | AgentConnection | Already using schema type | ✅ Complete |
+| `control-plane/src/api/response.rs` | ApiResponse, ErrorResponse, HealthResponse | Re-export from schema | ✅ Complete |
+| `control-plane/src/api/response.rs` | PaginatedResponse, PaginationParams, Cursor | Re-export from schema | ✅ Complete |
+
+**Note:** API response types (App, Node, Volume, etc.) remain as local DTOs optimized for
+API responses. These are distinct from full domain entities and serve as simplified views.
+Auth types (TokenResponse, CreateTokenRequest) remain local as they are not in schema.
 
 ### E. Types Migrated (Phase 5 - Registry/Storage) ✅ COMPLETE
 

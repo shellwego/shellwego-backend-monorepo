@@ -25,7 +25,7 @@ mod middleware;
 mod response;
 
 pub use handlers::*;
-pub use response::{ApiResponse, ErrorResponse, ListResponse};
+pub use response::{ApiResponse, ErrorResponse, ListResponse, PaginatedResponse, HealthResponse};
 
 /// Create the complete API router with all routes and middleware
 pub fn create_router(state: Arc<AppState>) -> Router {

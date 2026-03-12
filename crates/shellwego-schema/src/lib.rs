@@ -21,6 +21,7 @@
 //! | `agent` | Agent configuration types |
 //! | `firecracker` | Firecracker microVM API types |
 //! | `oci` | OCI image and registry types |
+//! | `billing` | Billing and metering types |
 
 pub mod entities;
 pub mod error;
@@ -31,6 +32,7 @@ pub mod api;
 pub mod agent;
 pub mod firecracker;
 pub mod oci;
+pub mod billing;
 
 // Re-export commonly used types at crate root
 pub use entities::*;
@@ -40,3 +42,4 @@ pub use network::{NetworkConfig, NetworkSetup, NetworkError, Message, QuicConfig
 pub use api::{ListAppsQuery, ListNodesQuery, ScaleRequest, PaginatedResponse, ErrorResponse};
 pub use agent::{AgentConfig, AgentConfigJson, Capabilities, NodeCapacity, DesiredState, DesiredApp, DesiredVolume, VolumeMount};
 pub use oci::{Manifest, ManifestIndex, Descriptor, ConfigDescriptor, LayerDescriptor, ManifestDescriptor, Platform, ImageConfig, ContainerConfig, RootFs, HistoryEntry, RegistryAuth, AuthToken, OciConfig};
+pub use billing::{Customer, Address, SubscriptionTier, CustomerStatus, PaymentMethod, Invoice, InvoiceStatus, LineItem, BillingPeriod, PaymentResult, UsageEvent, UsageSummary, BillingConfig, DunningConfig};

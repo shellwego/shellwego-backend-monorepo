@@ -16,7 +16,12 @@ use tera::{Tera, Context, Value};
 use tracing::{info, warn, instrument};
 use uuid::Uuid;
 
-use crate::{BillingError, Invoice, BillingPeriod, LineItem, UsageSummary};
+// Import billing types from schema
+use shellwego_schema::billing::{Invoice, BillingPeriod, LineItem, UsageSummary, InvoiceStatus};
+// Import Address for branding (reuse schema type)
+pub use shellwego_schema::billing::Address;
+
+use crate::{BillingError};
 
 /// Invoice generator with template rendering
 /// 
@@ -55,17 +60,6 @@ pub struct BrandingConfig {
     pub footer: Option<String>,
     /// Terms and conditions
     pub terms: Option<String>,
-}
-
-/// Company address
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Address {
-    pub line1: String,
-    pub line2: Option<String>,
-    pub city: String,
-    pub state: Option<String>,
-    pub postal_code: String,
-    pub country: String,
 }
 
 /// Bank details for wire transfers

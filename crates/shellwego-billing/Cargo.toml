@@ -9,6 +9,9 @@ rust-version.workspace = true
 description = "Billing, metering, and payment processing"
 
 [dependencies]
+# Schema types (billing entities)
+shellwego-schema = { path = "../shellwego-schema" }
+
 # Async runtime
 tokio = { workspace = true, features = ["time", "sync", "macros", "rt-multi-thread"] }
 

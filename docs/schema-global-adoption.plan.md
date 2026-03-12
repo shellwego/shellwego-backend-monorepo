@@ -4,10 +4,10 @@
 
 This plan addresses the critical DRY (Don't Repeat Yourself) violations in the ShellWeGo backend monorepo where `shellwego-schema` exists but is NOT being used as the single source of truth for type definitions. Multiple crates define their own types locally, creating maintenance burden, type mismatch risks, and documentation fragmentation.
 
-**Status**: Phase 1, 2, 3, 4 & 5 Complete - Schema Types Consolidated
+**Status**: Phase 1, 2, 3, 4, 5 & 6 Complete - Schema Types Consolidated
 **Author**: Architecture Review
 **Date**: 2025-01-20
-**Last Updated**: 2025-01-22
+**Last Updated**: 2025-01-23
 **Priority**: Critical
 **Supersedes**: `schema-consolidation.plan.md` (which discussed renaming `shellwego-core` - now complete)
 
@@ -20,7 +20,7 @@ This plan addresses the critical DRY (Don't Repeat Yourself) violations in the S
 | Phase 3 | ✅ **COMPLETE** | Control Plane Handlers use schema types |
 | Phase 4 | ✅ **COMPLETE** | Network Consolidation |
 | Phase 5 | ✅ **COMPLETE** | Registry/Storage OCI types moved to `schema/src/oci/` |
-| Phase 6 | ⏳ Pending | Billing Entities |
+| Phase 6 | ✅ **COMPLETE** | Billing Entities moved to `schema/src/billing/` |
 
 ---
 
@@ -352,14 +352,38 @@ shellwego-schema/src/oci/
 - `shellwego-storage/src/oci.rs` uses schema's `OciConfig`, `Platform`, `Manifest`, etc.
 - Both crates' `Cargo.toml` now depend on `shellwego-schema`
 
-### Phase 6: Billing Entity Migration (Week 4)
+### Phase 6: Billing Entity Migration ✅ COMPLETE
 
 **Objective:** Move billing domain entities to schema.
 
-**Tasks:**
-1. Create `shellwego-schema/src/billing/` module
-2. Move: `Customer`, `BillingPeriod`, `Invoice`, `PaymentResult`
-3. Keep billing-specific logic in billing crate
+**Status:** Completed on 2025-01-23
+
+**Completed Tasks:**
+- [x] Create `shellwego-schema/src/billing/` module structure
+- [x] Move: `Customer`, `Address`, `SubscriptionTier`, `CustomerStatus`, `PaymentMethod`
+- [x] Move: `Invoice`, `InvoiceStatus`, `LineItem`, `BillingPeriod`, `PaymentResult`
+- [x] Move: `UsageEvent`, `UsageSummary`
+- [x] Move: `BillingConfig`, `DunningConfig`
+- [x] Update `shellwego-billing` to re-export types from schema
+- [x] Update `shellwego-billing/Cargo.toml` to depend on `shellwego-schema`
+- [x] Keep billing-specific logic types (`BillingError`, `BillingSystem`, `MetricsStore`, etc.) in billing crate
+
+**Implemented File Structure:**
+```
+shellwego-schema/src/billing/
+├── mod.rs              # Module exports
+├── customer.rs         # Customer, Address, SubscriptionTier, CustomerStatus, PaymentMethod
+├── invoice.rs          # Invoice, InvoiceStatus, LineItem, BillingPeriod, PaymentResult
+├── usage.rs            # UsageEvent, UsageSummary
+└── config.rs           # BillingConfig, DunningConfig
+```
+
+**Key Changes Made:**
+- `shellwego-billing/src/lib.rs` now re-exports billing types from `shellwego-schema`
+- Local type definitions for `Customer`, `Address`, `Invoice`, `LineItem`, `BillingPeriod`, `PaymentResult`, `PaymentMethod`, `UsageEvent`, `UsageSummary`, `BillingConfig`, `DunningConfig` have been removed from billing crate
+- Billing-specific logic types (`BillingError`, `BillingSystem`, `WebhookResult`, `MetricsStore`, `RealtimeCounter`, `InvoiceGenerator`, etc.) remain in billing crate
+- `shellwego-billing/Cargo.toml` now depends on `shellwego-schema`
+- All billing domain types now have proper OpenAPI schema derives
 
 ---
 
@@ -736,6 +760,22 @@ Auth types (TokenResponse, CreateTokenRequest) remain local as they are not in s
 | `storage/src/oci.rs` | ~~OciConfig, Platform, Manifest, ConfigDescriptor, LayerDescriptor~~ | `schema/src/oci/` |
 | `storage/src/oci.rs` | OciClient, OciError | Kept in storage (implementation logic) |
 
----
+### F. Types Migrated (Phase 6 - Billing) ✅ COMPLETE
 
-*End of Plan Document*
+All billing domain entity types have been moved to `schema/src/billing/`:
+
+| Module | Types |
+|--------|-------|
+| `billing/customer.rs` | Customer, Address, SubscriptionTier, CustomerStatus, PaymentMethod |
+| `billing/invoice.rs` | Invoice, InvoiceStatus, LineItem, BillingPeriod, PaymentResult |
+| `billing/usage.rs` | UsageEvent, UsageSummary |
+| `billing/config.rs` | BillingConfig, DunningConfig |
+
+**Types kept in billing crate (implementation logic):**
+- `BillingError` - error type for billing operations
+- `BillingSystem` - main billing coordinator struct
+- `WebhookResult` - webhook processing result
+- `MetricsStore`, `RealtimeCounter`, `DataPoint`, `Granularity` - metering implementation
+- `InvoiceGenerator`, `BrandingConfig`, `BankDetails`, `InvoiceTemplate` - invoice rendering
+
+---

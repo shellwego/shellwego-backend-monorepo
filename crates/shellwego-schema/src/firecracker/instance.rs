@@ -17,19 +17,14 @@ pub struct InstanceInfo {
 }
 
 /// Instance state enumeration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema, schemars::JsonSchema))]
 pub enum InstanceState {
+    #[default]
     NotStarted,
     Running,
     Paused,
-}
-
-impl Default for InstanceState {
-    fn default() -> Self {
-        Self::NotStarted
-    }
 }
 
 /// Firecracker version information.

@@ -74,22 +74,17 @@ impl Default for DeployRequest {
 }
 
 /// Deploy strategy
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema, schemars::JsonSchema))]
 pub enum DeployStrategy {
     /// Rolling update (gradual replacement)
+    #[default]
     Rolling,
     /// Recreate (stop all, then start new)
     Recreate,
     /// Blue-green deployment
     BlueGreen,
-}
-
-impl Default for DeployStrategy {
-    fn default() -> Self {
-        Self::Rolling
-    }
 }
 
 /// Query params for list nodes endpoint

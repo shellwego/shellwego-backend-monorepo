@@ -181,12 +181,13 @@ impl AgentConnection {
 }
 
 /// Channel priority for multiplexed streams
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema, schemars::JsonSchema))]
 pub enum ChannelPriority {
     /// Critical system messages
     Critical = 0,
     /// Command messages
+    #[default]
     Command = 1,
     /// Metrics data
     Metrics = 2,
@@ -194,12 +195,6 @@ pub enum ChannelPriority {
     Logs = 3,
     /// Best effort (lowest priority)
     BestEffort = 4,
-}
-
-impl Default for ChannelPriority {
-    fn default() -> Self {
-        Self::Command
-    }
 }
 
 #[cfg(test)]

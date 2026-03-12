@@ -38,7 +38,7 @@ impl Default for MachineConfiguration {
 }
 
 /// CPU template enumeration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema, schemars::JsonSchema))]
 pub enum CpuTemplate {
     C3,
@@ -48,28 +48,18 @@ pub enum CpuTemplate {
     T2A,
     V1N1,
     #[serde(rename = "None")]
+    #[default]
     NoneTemplate,
 }
 
-impl Default for CpuTemplate {
-    fn default() -> Self {
-        Self::NoneTemplate
-    }
-}
-
 /// Huge pages configuration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema, schemars::JsonSchema))]
 pub enum HugePages {
+    #[default]
     None,
     #[serde(rename = "2M")]
     TwoMeg,
-}
-
-impl Default for HugePages {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 /// CPU configuration with modifiers for flags.

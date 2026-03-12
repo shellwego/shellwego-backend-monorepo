@@ -16,17 +16,12 @@ pub struct SnapshotCreateParams {
 }
 
 /// Snapshot type enumeration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema, schemars::JsonSchema))]
 pub enum SnapshotType {
+    #[default]
     Full,
     Diff,
-}
-
-impl Default for SnapshotType {
-    fn default() -> Self {
-        Self::Full
-    }
 }
 
 /// Snapshot load parameters.

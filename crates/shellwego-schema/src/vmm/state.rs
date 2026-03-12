@@ -7,10 +7,11 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Runtime state of a microVM
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema, schemars::JsonSchema))]
 pub enum MicrovmState {
     /// VM is not initialized
+    #[default]
     Uninitialized,
     /// VM is configured but not started
     Configured,
@@ -20,12 +21,6 @@ pub enum MicrovmState {
     Paused,
     /// VM is halted/stopped
     Halted,
-}
-
-impl Default for MicrovmState {
-    fn default() -> Self {
-        Self::Uninitialized
-    }
 }
 
 impl std::fmt::Display for MicrovmState {

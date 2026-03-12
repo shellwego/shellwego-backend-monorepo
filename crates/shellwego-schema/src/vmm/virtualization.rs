@@ -6,22 +6,16 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// Virtualization mode for running workloads
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema, schemars::JsonSchema))]
 pub enum VirtualizationMode {
     /// KVM hardware virtualization (fastest, requires /dev/kvm)
     Kvm,
     /// PVM software virtualization (universal, no KVM required)
+    #[default]
     Pvm,
     /// WASM runtime (lightest, for functions only)
     Wasm,
-}
-
-impl Default for VirtualizationMode {
-    fn default() -> Self {
-        // Default to PVM as the universal fallback
-        VirtualizationMode::Pvm
-    }
 }
 
 impl fmt::Display for VirtualizationMode {

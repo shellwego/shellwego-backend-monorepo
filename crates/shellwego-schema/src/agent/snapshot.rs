@@ -10,21 +10,16 @@ use chrono::{DateTime, Utc};
 ///
 /// This is distinct from Firecracker's SnapshotType which only supports Full/Diff.
 /// Agent-managed snapshots can include disk-only and memory-only variants.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema, schemars::JsonSchema))]
 pub enum AgentSnapshotType {
     /// Full snapshot with memory and disk
+    #[default]
     Full,
     /// Disk-only snapshot (faster, requires full boot on restore)
     DiskOnly,
     /// Memory-only snapshot (for live migration)
     MemoryOnly,
-}
-
-impl Default for AgentSnapshotType {
-    fn default() -> Self {
-        Self::Full
-    }
 }
 
 /// Information about an agent-managed snapshot

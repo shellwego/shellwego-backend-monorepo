@@ -20,17 +20,12 @@ pub struct MmdsConfig {
 }
 
 /// MMDS version enumeration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema, schemars::JsonSchema))]
 pub enum MmdsVersion {
+    #[default]
     V1,
     V2,
-}
-
-impl Default for MmdsVersion {
-    fn default() -> Self {
-        Self::V1
-    }
 }
 
 /// MMDS contents (JSON object).

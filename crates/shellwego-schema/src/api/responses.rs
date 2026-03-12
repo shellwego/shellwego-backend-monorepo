@@ -148,22 +148,17 @@ impl HealthResponse {
 }
 
 /// Service health status
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema, schemars::JsonSchema))]
 pub enum ServiceStatus {
     /// Service is healthy
+    #[default]
     Healthy,
     /// Service is unhealthy
     Unhealthy,
     /// Service is degraded but functional
     Degraded,
-}
-
-impl Default for ServiceStatus {
-    fn default() -> Self {
-        Self::Healthy
-    }
 }
 
 /// Component health status

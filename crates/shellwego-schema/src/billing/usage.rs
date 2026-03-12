@@ -59,6 +59,7 @@ pub struct UsageSummary {
     /// Line items for each resource type
     pub line_items: Vec<LineItem>,
     /// Subtotal before credits
+    #[cfg_attr(feature = "openapi", schemars(skip))]
     pub subtotal: Decimal,
     /// Currency (ISO 4217 code)
     pub currency: String,

@@ -24,22 +24,17 @@ pub struct Logger {
 }
 
 /// Log level enumeration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema, schemars::JsonSchema))]
 pub enum LogLevel {
     Error,
     Warning,
+    #[default]
     Info,
     Debug,
     Trace,
     Off,
-}
-
-impl Default for LogLevel {
-    fn default() -> Self {
-        Self::Info
-    }
 }
 
 /// Metrics configuration.

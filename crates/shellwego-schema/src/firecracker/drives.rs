@@ -39,31 +39,21 @@ pub struct Drive {
 }
 
 /// Cache type enumeration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema, schemars::JsonSchema))]
 pub enum CacheType {
+    #[default]
     Unsafe,
     Writeback,
 }
 
-impl Default for CacheType {
-    fn default() -> Self {
-        Self::Unsafe
-    }
-}
-
 /// IO engine type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema, schemars::JsonSchema))]
 pub enum IoEngine {
+    #[default]
     Sync,
     Async,
-}
-
-impl Default for IoEngine {
-    fn default() -> Self {
-        Self::Sync
-    }
 }
 
 /// Partial drive for PATCH operations.

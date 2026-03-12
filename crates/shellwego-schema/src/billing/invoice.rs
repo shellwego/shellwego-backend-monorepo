@@ -3,7 +3,7 @@
 //! This module contains invoice entity types that are shared across
 //! the billing system, control plane, and external integrations.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
@@ -62,10 +62,13 @@ pub struct Invoice {
     /// Line items
     pub line_items: Vec<LineItem>,
     /// Subtotal before credits
+    #[cfg_attr(feature = "openapi", schemars(skip))]
     pub subtotal: Decimal,
     /// Credits applied
+    #[cfg_attr(feature = "openapi", schemars(skip))]
     pub credit_applied: Decimal,
     /// Total amount due
+    #[cfg_attr(feature = "openapi", schemars(skip))]
     pub total: Decimal,
     /// Currency (ISO 4217 code)
     pub currency: String,
@@ -110,6 +113,7 @@ pub struct LineItem {
     /// Price per unit
     pub unit_price: f64,
     /// Total amount for this line item
+    #[cfg_attr(feature = "openapi", schemars(skip))]
     pub amount: Decimal,
 }
 

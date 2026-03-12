@@ -1,7 +1,6 @@
 //! Balloon device types
 
 use serde::{Serialize, Deserialize};
-use super::network::RateLimiter;
 
 /// Balloon device descriptor.
 #[derive(Debug, Clone, Serialize, Deserialize)]

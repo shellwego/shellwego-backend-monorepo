@@ -72,62 +72,62 @@ impl ImageConfig {
 
     /// Set environment variables
     pub fn with_env(mut self, env: Vec<String>) -> Self {
-        self.config.env = env;
+        self.config.Env = env;
         self
     }
 
     /// Add an environment variable
     pub fn add_env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.config.env.push(format!("{}={}", key.into(), value.into()));
+        self.config.Env.push(format!("{}={}", key.into(), value.into()));
         self
     }
 
     /// Set entrypoint
     pub fn with_entrypoint(mut self, entrypoint: Vec<String>) -> Self {
-        self.config.entrypoint = Some(entrypoint);
+        self.config.Entrypoint = Some(entrypoint);
         self
     }
 
     /// Set command
     pub fn with_cmd(mut self, cmd: Vec<String>) -> Self {
-        self.config.cmd = Some(cmd);
+        self.config.Cmd = Some(cmd);
         self
     }
 
     /// Set working directory
     pub fn with_working_dir(mut self, dir: impl Into<String>) -> Self {
-        self.config.working_dir = Some(dir.into());
+        self.config.WorkingDir = Some(dir.into());
         self
     }
 
     /// Set user
     pub fn with_user(mut self, user: impl Into<String>) -> Self {
-        self.config.user = Some(user.into());
+        self.config.User = Some(user.into());
         self
     }
 
     /// Add a label
     pub fn add_label(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.config.labels.insert(key.into(), value.into());
+        self.config.Labels.insert(key.into(), value.into());
         self
     }
 
     /// Expose a port
     pub fn expose_port(mut self, port: impl Into<String>) -> Self {
-        self.config.exposed_ports.insert(port.into(), serde_json::Value::Object(serde_json::Map::new()));
+        self.config.ExposedPorts.insert(port.into(), serde_json::Value::Object(serde_json::Map::new()));
         self
     }
 
     /// Add a volume
     pub fn add_volume(mut self, path: impl Into<String>) -> Self {
-        self.config.volumes.insert(path.into(), serde_json::Value::Object(serde_json::Map::new()));
+        self.config.Volumes.insert(path.into(), serde_json::Value::Object(serde_json::Map::new()));
         self
     }
 
     /// Get an environment variable value
     pub fn get_env(&self, key: &str) -> Option<&str> {
-        self.config.env.iter()
-            .find(|e| e.starts_with(&format!("{}=", key)))
+        self.config.Env.iter()
+            .find(|e: &&String| e.starts_with(&format!("{}=", key)))
             .map(|e| &e[key.len() + 1..])
     }
 
@@ -146,8 +146,10 @@ impl ImageConfig {
 ///
 /// These settings define how a container should be run,
 /// including environment, command, and exposed ports.
+/// Field names use OCI image spec PascalCase convention.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(JsonSchema, ToSchema))]
+#[allow(non_snake_case)]
 pub struct ContainerConfig {
     /// Environment variables (KEY=VALUE format)
     #[serde(default)]
@@ -338,11 +340,11 @@ mod tests {
 
         assert_eq!(config.architecture, "arm64");
         assert_eq!(config.os, "linux");
-        assert!(config.config.entrypoint.is_some());
-        assert!(config.config.cmd.is_some());
-        assert_eq!(config.config.working_dir, Some("/app".to_string()));
-        assert_eq!(config.config.user, Some("appuser".to_string()));
-        assert_eq!(config.config.labels.get("version"), Some(&"1.0.0".to_string()));
+        assert!(config.config.Entrypoint.is_some());
+        assert!(config.config.Cmd.is_some());
+        assert_eq!(config.config.WorkingDir, Some("/app".to_string()));
+        assert_eq!(config.config.User, Some("appuser".to_string()));
+        assert_eq!(config.config.Labels.get("version"), Some(&"1.0.0".to_string()));
     }
 
     #[test]
@@ -388,6 +390,6 @@ mod tests {
 
         let config: ImageConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.architecture, "arm64");
-        assert_eq!(config.config.env.len(), 1);
+        assert_eq!(config.config.Env.len(), 1);
     }
 }

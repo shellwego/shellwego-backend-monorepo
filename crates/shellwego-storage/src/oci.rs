@@ -11,20 +11,18 @@
 //! - GitHub Container Registry (ghcr.io)
 //! - Generic OCI-compliant registries
 
+use crate::StorageError;
+use base64::{engine::general_purpose::STANDARD, Engine as _};
+use futures_util::StreamExt;
+use serde::Deserialize;
 use std::path::PathBuf;
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tracing::{debug, info};
 use tokio::fs::File;
 use tokio::io::{AsyncWriteExt, BufWriter};
-use futures_util::StreamExt;
-use crate::StorageError;
-use base64::{Engine as _, engine::general_purpose::STANDARD};
+use tracing::{debug, info};
 
 // Import OCI types from schema
-pub use shellwego_schema::oci::{
-    OciConfig, Platform, Manifest, ConfigDescriptor, LayerDescriptor,
-};
+pub use shellwego_schema::oci::{ConfigDescriptor, LayerDescriptor, Manifest, OciConfig, Platform};
 
 const MAX_MANIFEST_SIZE: usize = 10 * 1024 * 1024; // 10MB
 
@@ -64,7 +62,9 @@ impl OciClient {
             builder = builder.danger_accept_invalid_certs(true);
         }
 
-        let http_client = builder.build().map_err(|e| OciError::Registry(e.to_string()))?;
+        let http_client = builder
+            .build()
+            .map_err(|e| OciError::Registry(e.to_string()))?;
 
         Ok(Self {
             config,
@@ -80,7 +80,15 @@ impl OciClient {
         } else if registry == "docker.io" {
             "https://registry-1.docker.io".to_string()
         } else {
-            format!("{}://{}", if self.config.insecure { "http" } else { "https" }, registry)
+            format!(
+                "{}://{}",
+                if self.config.insecure {
+                    "http"
+                } else {
+                    "https"
+                },
+                registry
+            )
         }
     }
 
@@ -90,11 +98,18 @@ impl OciClient {
         }
 
         let registry_url = self.registry_url();
-        let auth_url = format!("{}/token?scope=repository:{}:pull", registry_url, repository);
+        let auth_url = format!(
+            "{}/token?scope=repository:{}:pull",
+            registry_url, repository
+        );
 
         if let (Some(username), Some(password)) = (&self.config.username, &self.config.password) {
-            let basic = format!("Basic {}", STANDARD.encode(format!("{}:{}", username, password)));
-            let resp = self.http_client
+            let basic = format!(
+                "Basic {}",
+                STANDARD.encode(format!("{}:{}", username, password))
+            );
+            let resp = self
+                .http_client
                 .get(&auth_url)
                 .header("Authorization", basic)
                 .send()
@@ -106,16 +121,20 @@ impl OciClient {
                 struct TokenResponse {
                     token: String,
                 }
-                let token_resp: TokenResponse = resp.json().await
+                let token_resp: TokenResponse = resp
+                    .json()
+                    .await
                     .map_err(|e| OciError::Registry(e.to_string()))?;
-                self.auth_cache.insert(repository.to_string(), token_resp.token.clone());
+                self.auth_cache
+                    .insert(repository.to_string(), token_resp.token.clone());
                 return Ok(token_resp.token);
             }
         }
 
         // For Docker Hub, we need special handling
         if self.config.registry == "docker.io" {
-            let resp = self.http_client
+            let resp = self
+                .http_client
                 .get("https://auth.docker.io/token")
                 .query(&[
                     ("service", "registry.docker.io"),
@@ -130,9 +149,12 @@ impl OciClient {
                 struct TokenResponse {
                     token: String,
                 }
-                let token_resp: TokenResponse = resp.json().await
+                let token_resp: TokenResponse = resp
+                    .json()
+                    .await
                     .map_err(|e| OciError::Registry(e.to_string()))?;
-                self.auth_cache.insert(repository.to_string(), token_resp.token.clone());
+                self.auth_cache
+                    .insert(repository.to_string(), token_resp.token.clone());
                 return Ok(token_resp.token);
             }
         }
@@ -142,13 +164,22 @@ impl OciClient {
 
     async fn get_manifest(&self, repository: &str, reference: &str) -> Result<Manifest, OciError> {
         let token = self.get_auth_token(repository).await?;
-        let url = format!("{}/{}/manifests/{}", self.registry_url(), repository, reference);
+        let url = format!(
+            "{}/{}/manifests/{}",
+            self.registry_url(),
+            repository,
+            reference
+        );
 
-        let resp = self.http_client
+        let resp = self
+            .http_client
             .get(&url)
             .header("Authorization", format!("Bearer {}", token))
             .header("Accept", "application/vnd.oci.image.manifest.v1+json")
-            .header("Accept", "application/vnd.docker.distribution.manifest.v2+json")
+            .header(
+                "Accept",
+                "application/vnd.docker.distribution.manifest.v2+json",
+            )
             .send()
             .await
             .map_err(|e| OciError::Registry(e.to_string()))?;
@@ -166,17 +197,25 @@ impl OciClient {
             return Err(OciError::ManifestParse("Manifest too large".to_string()));
         }
 
-        let manifest: Manifest = resp.json().await
+        let manifest: Manifest = resp
+            .json()
+            .await
             .map_err(|e| OciError::ManifestParse(e.to_string()))?;
 
         Ok(manifest)
     }
 
-    async fn get_blob(&self, repository: &str, digest: &str, writer: &mut (impl AsyncWriteExt + Unpin)) -> Result<(), OciError> {
+    async fn get_blob(
+        &self,
+        repository: &str,
+        digest: &str,
+        writer: &mut (impl AsyncWriteExt + Unpin),
+    ) -> Result<(), OciError> {
         let token = self.get_auth_token(repository).await?;
         let url = format!("{}/{}/blobs/{}", self.registry_url(), repository, digest);
 
-        let resp = self.http_client
+        let resp = self
+            .http_client
             .get(&url)
             .header("Authorization", format!("Bearer {}", token))
             .send()
@@ -194,7 +233,9 @@ impl OciClient {
         let mut stream = resp.bytes_stream();
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|e| OciError::LayerDownload(e.to_string()))?;
-            writer.write_all(&chunk).await
+            writer
+                .write_all(&chunk)
+                .await
                 .map_err(|e| OciError::LayerDownload(e.to_string()))?;
         }
 
@@ -216,17 +257,18 @@ impl OciClient {
         debug!("Manifest mediaType: {:?}", manifest.media_type);
         debug!("Schema version: {}", manifest.schema_version);
 
-        tokio::fs::create_dir_all(&mountpoint).await
-            .map_err(|e| OciError::Io(e))?;
+        tokio::fs::create_dir_all(&mountpoint).await?;
 
         for layer in &manifest.layers {
             debug!("Processing layer: {} ({} bytes)", layer.digest, layer.size);
-            self.extract_layer(&repository, &layer.digest, &mountpoint).await?;
+            self.extract_layer(&repository, &layer.digest, &mountpoint)
+                .await?;
         }
 
         if let Some(config) = &manifest.config {
             debug!("Image config: {} ({} bytes)", config.digest, config.size);
-            self.extract_layer(&repository, &config.digest, &mountpoint).await?;
+            self.extract_layer(&repository, &config.digest, &mountpoint)
+                .await?;
         }
 
         info!("Successfully pulled image to {}", mountpoint.display());
@@ -234,27 +276,32 @@ impl OciClient {
         Ok(())
     }
 
-    async fn extract_layer(&self, repository: &str, digest: &str, mountpoint: &PathBuf) -> Result<(), OciError> {
-        let temp_file = tempfile::NamedTempFile::new()
-            .map_err(|e| OciError::Io(e))?;
+    async fn extract_layer(
+        &self,
+        repository: &str,
+        digest: &str,
+        mountpoint: &PathBuf,
+    ) -> Result<(), OciError> {
+        let temp_file = tempfile::NamedTempFile::new()?;
         let temp_path = temp_file.path().to_owned();
 
         {
-            let std_file = temp_file.reopen().map_err(|e| OciError::Io(e))?;
+            let std_file = temp_file.reopen()?;
             let tokio_file = File::from_std(std_file);
             let mut writer = BufWriter::new(tokio_file);
             self.get_blob(repository, digest, &mut writer).await?;
-            writer.flush().await.map_err(|e| OciError::Io(e))?;
+            writer.flush().await?;
         }
 
         info!("Extracting layer {}...", digest);
 
-        let reader = tokio::fs::File::open(&temp_path).await
-            .map_err(|e| OciError::Io(e))?;
+        let reader = tokio::fs::File::open(&temp_path).await?;
         let reader = tokio::io::BufReader::new(reader);
         let mut archive = tokio_tar::Archive::new(reader);
 
-        archive.unpack(mountpoint).await
+        archive
+            .unpack(mountpoint)
+            .await
             .map_err(|e| OciError::LayerDownload(e.to_string()))?;
 
         tokio::fs::remove_file(temp_path).await.ok();

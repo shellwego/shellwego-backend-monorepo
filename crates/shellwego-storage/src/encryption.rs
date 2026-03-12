@@ -12,15 +12,15 @@
 //!   3. Store wrapped_dek alongside encrypted data
 //!   4. Decrypt: fetch wrapped_dek, decrypt with KEK -> plaintext DEK
 
-use std::fmt;
-use aes_gcm::{Aes256Gcm, Nonce, KeyInit};
+use crate::StorageError;
 use aes_gcm::aead::{Aead, OsRng};
-use sha2::Sha256;
+use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use hmac::{Hmac, Mac as _};
 use rand::RngCore;
-use base64::{Engine as _, engine::general_purpose::STANDARD};
+use sha2::Sha256;
+use std::fmt;
 use thiserror::Error;
-use crate::StorageError;
 
 const DEK_SIZE: usize = 32;
 const IV_SIZE: usize = 12;
@@ -54,6 +54,7 @@ pub struct EncryptionProvider {
 #[derive(Debug, Clone)]
 pub struct EncryptionConfig {
     pub master_key: String,
+    #[allow(dead_code)]
     pub algorithm: Option<String>,
 }
 
@@ -63,9 +64,10 @@ impl EncryptionProvider {
             .map_err(|e| EncryptionError::KeyGen(format!("Invalid hex: {}", e)))?;
 
         if master_key.len() != 32 {
-            return Err(EncryptionError::KeyGen(
-                format!("Master key must be 32 bytes, got {}", master_key.len())
-            ));
+            return Err(EncryptionError::KeyGen(format!(
+                "Master key must be 32 bytes, got {}",
+                master_key.len()
+            )));
         }
 
         Ok(EncryptionProvider { master_key })
@@ -84,29 +86,45 @@ impl EncryptionProvider {
         })
     }
 
-    pub async fn decrypt_dek(&self, encrypted_dek: &[u8], iv: &[u8]) -> Result<Vec<u8>, EncryptionError> {
+    pub async fn decrypt_dek(
+        &self,
+        encrypted_dek: &[u8],
+        iv: &[u8],
+    ) -> Result<Vec<u8>, EncryptionError> {
         self.unwrap_dek(encrypted_dek, iv)
     }
 
-    pub fn encrypt_block(&self, plaintext: &[u8], key: &[u8], iv: &[u8]) -> Result<Vec<u8>, EncryptionError> {
+    pub fn encrypt_block(
+        &self,
+        plaintext: &[u8],
+        key: &[u8],
+        iv: &[u8],
+    ) -> Result<Vec<u8>, EncryptionError> {
         let cipher = Aes256Gcm::new_from_slice(key)
             .map_err(|e| EncryptionError::Encrypt(format!("Invalid key: {}", e)))?;
 
         let nonce = Nonce::from_slice(iv);
 
-        let ciphertext = cipher.encrypt(nonce, plaintext)
+        let ciphertext = cipher
+            .encrypt(nonce, plaintext)
             .map_err(|e| EncryptionError::Encrypt(format!("AEAD error: {}", e)))?;
 
         Ok(ciphertext)
     }
 
-    pub fn decrypt_block(&self, ciphertext: &[u8], key: &[u8], iv: &[u8]) -> Result<Vec<u8>, EncryptionError> {
+    pub fn decrypt_block(
+        &self,
+        ciphertext: &[u8],
+        key: &[u8],
+        iv: &[u8],
+    ) -> Result<Vec<u8>, EncryptionError> {
         let cipher = Aes256Gcm::new_from_slice(key)
             .map_err(|e| EncryptionError::Decrypt(format!("Invalid key: {}", e)))?;
 
         let nonce = Nonce::from_slice(iv);
 
-        let plaintext = cipher.decrypt(nonce, ciphertext)
+        let plaintext = cipher
+            .decrypt(nonce, ciphertext)
             .map_err(|_| EncryptionError::AuthFailed)?;
 
         Ok(plaintext)
@@ -132,7 +150,8 @@ impl EncryptionProvider {
         let ciphertext = ciphertext.to_vec();
 
         let actual_tag = self.compute_hmac(&ciphertext);
-        let expected_hmac: [u8; HMAC_SIZE] = expected_tag.try_into()
+        let expected_hmac: [u8; HMAC_SIZE] = expected_tag
+            .try_into()
             .map_err(|_| EncryptionError::InvalidKey)?;
 
         if actual_tag.as_slice() != expected_hmac.as_slice() {
@@ -149,8 +168,8 @@ impl EncryptionProvider {
     }
 
     fn compute_hmac(&self, data: &[u8]) -> Vec<u8> {
-        let mut mac: Hmac<Sha256> = hmac::Mac::new_from_slice(&self.master_key)
-            .expect("HMAC key size valid");
+        let mut mac: Hmac<Sha256> =
+            hmac::Mac::new_from_slice(&self.master_key).expect("HMAC key size valid");
         mac.update(data);
         let result = mac.finalize().into_bytes();
         result.to_vec()
@@ -180,18 +199,19 @@ impl DataKey {
     pub fn to_base64(&self) -> String {
         let iv_len_bytes = (self.iv.len() as u32).to_be_bytes();
         let ciphertext_len_bytes = (self.ciphertext.len() as u32).to_be_bytes();
-        
+
         let mut combined = Vec::with_capacity(8 + self.iv.len() + self.ciphertext.len());
         combined.extend_from_slice(&iv_len_bytes);
         combined.extend_from_slice(&self.iv);
         combined.extend_from_slice(&ciphertext_len_bytes);
         combined.extend_from_slice(&self.ciphertext);
-        
+
         STANDARD.encode(combined)
     }
 
     pub fn from_base64(s: &str) -> Result<Self, EncryptionError> {
-        let combined = STANDARD.decode(s)
+        let combined = STANDARD
+            .decode(s)
             .map_err(|_| EncryptionError::InvalidKey)?;
 
         if combined.len() < 8 {
@@ -203,14 +223,15 @@ impl DataKey {
             return Err(EncryptionError::InvalidKey);
         }
 
-        let ciphertext_len = u32::from_be_bytes(combined[4+iv_len..8+iv_len].try_into().unwrap()) as usize;
+        let ciphertext_len =
+            u32::from_be_bytes(combined[4 + iv_len..8 + iv_len].try_into().unwrap()) as usize;
 
         if combined.len() != 8 + iv_len + ciphertext_len {
             return Err(EncryptionError::InvalidKey);
         }
 
-        let iv = combined[4..4+iv_len].to_vec();
-        let ciphertext = combined[8+iv_len..].to_vec();
+        let iv = combined[4..4 + iv_len].to_vec();
+        let ciphertext = combined[8 + iv_len..].to_vec();
 
         Ok(DataKey {
             ciphertext,
@@ -220,10 +241,14 @@ impl DataKey {
     }
 }
 
-
 impl fmt::Display for DataKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "DataKey(iv={}, ciphertext_len={})", self.iv.len(), self.ciphertext.len())
+        write!(
+            f,
+            "DataKey(iv={}, ciphertext_len={})",
+            self.iv.len(),
+            self.ciphertext.len()
+        )
     }
 }
 
@@ -240,14 +265,21 @@ mod tests {
 
         let provider = EncryptionProvider::new(&config).await.unwrap();
         let dek = provider.generate_dek().await.unwrap();
-        let plaintext_dek = provider.decrypt_dek(&dek.ciphertext, &dek.iv).await.unwrap();
+        let plaintext_dek = provider
+            .decrypt_dek(&dek.ciphertext, &dek.iv)
+            .await
+            .unwrap();
 
         assert_eq!(plaintext_dek.len(), 32);
 
         let test_data = b"Hello, World! This is a test of encryption.";
         let iv = provider.generate_iv();
-        let encrypted = provider.encrypt_block(test_data, &plaintext_dek, &iv).unwrap();
-        let decrypted = provider.decrypt_block(&encrypted, &plaintext_dek, &iv).unwrap();
+        let encrypted = provider
+            .encrypt_block(test_data, &plaintext_dek, &iv)
+            .unwrap();
+        let decrypted = provider
+            .decrypt_block(&encrypted, &plaintext_dek, &iv)
+            .unwrap();
 
         assert_eq!(&decrypted, test_data);
     }

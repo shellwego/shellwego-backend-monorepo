@@ -6,52 +6,52 @@
 use std::path::PathBuf;
 use thiserror::Error;
 
-pub mod zfs;
-pub mod s3;
 pub mod encryption;
 pub mod oci;
+pub mod s3;
+pub mod zfs;
 
-pub use zfs::ZfsManager;
+pub use encryption::{DataKey, EncryptionConfig, EncryptionProvider};
 pub use s3::{S3Backend, S3Config};
-pub use encryption::{EncryptionProvider, EncryptionConfig, DataKey};
+pub use zfs::ZfsManager;
 
 // Re-export OCI types from schema
-pub use shellwego_schema::oci::{OciConfig, Platform, Manifest, ConfigDescriptor, LayerDescriptor};
 pub use oci::{OciClient, OciError};
+pub use shellwego_schema::oci::{ConfigDescriptor, LayerDescriptor, Manifest, OciConfig, Platform};
 
 /// Storage backend trait for pluggability
 #[async_trait::async_trait]
 pub trait StorageBackend: Send + Sync {
     /// Create a new dataset/volume
     async fn create(&self, name: &str, size: u64) -> Result<VolumeInfo, StorageError>;
-    
+
     /// Destroy dataset and all snapshots
     async fn destroy(&self, name: &str, force: bool) -> Result<(), StorageError>;
-    
+
     /// Create snapshot
     async fn snapshot(&self, source: &str, snap_name: &str) -> Result<SnapshotInfo, StorageError>;
-    
+
     /// Clone from snapshot
     async fn clone(&self, snap: &str, target: &str) -> Result<VolumeInfo, StorageError>;
-    
+
     /// Rollback to snapshot
     async fn rollback(&self, snap: &str, force: bool) -> Result<(), StorageError>;
-    
+
     /// List datasets
     async fn list(&self, prefix: Option<&str>) -> Result<Vec<VolumeInfo>, StorageError>;
-    
+
     /// Get dataset info
     async fn info(&self, name: &str) -> Result<VolumeInfo, StorageError>;
-    
+
     /// Mount dataset to host path
     async fn mount(&self, name: &str, mountpoint: &PathBuf) -> Result<(), StorageError>;
-    
+
     /// Unmount
     async fn unmount(&self, name: &str) -> Result<(), StorageError>;
-    
+
     /// Set property (quota, compression, etc)
     async fn set_property(&self, name: &str, key: &str, value: &str) -> Result<(), StorageError>;
-    
+
     /// Get property
     async fn get_property(&self, name: &str, key: &str) -> Result<String, StorageError>;
 }
@@ -84,28 +84,28 @@ pub struct SnapshotInfo {
 pub enum StorageError {
     #[error("ZFS command failed: {0}")]
     ZfsCommand(String),
-    
+
     #[error("Dataset not found: {0}")]
     NotFound(String),
-    
+
     #[error("Dataset already exists: {0}")]
     AlreadyExists(String),
-    
+
     #[error("Snapshot not found: {0}")]
     SnapshotNotFound(String),
-    
+
     #[error("Insufficient space: needed {needed}MB, available {available}MB")]
     InsufficientSpace { needed: u64, available: u64 },
-    
+
     #[error("Permission denied: {0}")]
     PermissionDenied(String),
-    
+
     #[error("Invalid name: {0}")]
     InvalidName(String),
-    
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
-    
+
     #[error("Parse error: {0}")]
     Parse(String),
 
@@ -120,13 +120,14 @@ pub enum StorageError {
 pub fn sanitize_name(name: &str) -> Result<String, StorageError> {
     // ZFS names can contain: letters, numbers, underscore, hyphen, colon, period, slash
     // We restrict further for safety
-    let sanitized: String = name.chars()
+    let sanitized: String = name
+        .chars()
         .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
         .collect();
-        
+
     if sanitized.is_empty() || sanitized.len() > 255 {
         return Err(StorageError::InvalidName(name.to_string()));
     }
-    
+
     Ok(sanitized)
 }

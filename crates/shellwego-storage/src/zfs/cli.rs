@@ -1,15 +1,15 @@
 //! ZFS CLI wrapper
-//! 
+//!
 //! Executes `zfs` and `zpool` commands with structured output parsing.
 
 use std::process::Stdio;
 use tokio::process::Command;
-use tracing::{trace, error};
+use tracing::{error, trace};
 
+use crate::zfs::PoolMetrics;
+use crate::SnapshotInfo;
 use crate::StorageError;
 use crate::VolumeInfo;
-use crate::SnapshotInfo;
-use crate::zfs::PoolMetrics;
 
 /// ZFS command interface
 #[derive(Clone)]
@@ -37,18 +37,19 @@ impl ZfsCli {
             .args(["list", "-H", "-o", "health", pool])
             .output()
             .await?;
-            
+
         if !output.status.success() {
             return Err(StorageError::NotFound(format!("pool: {}", pool)));
         }
-        
+
         let health = String::from_utf8_lossy(&output.stdout).trim().to_string();
         if health != "ONLINE" {
             return Err(StorageError::ZfsCommand(format!(
-                "Pool {} is {}", pool, health
+                "Pool {} is {}",
+                pool, health
             )));
         }
-        
+
         Ok(())
     }
 
@@ -59,7 +60,7 @@ impl ZfsCli {
             .stderr(Stdio::null())
             .status()
             .await?;
-            
+
         Ok(status.success())
     }
 
@@ -70,13 +71,13 @@ impl ZfsCli {
     ) -> Result<(), StorageError> {
         let mut cmd = Command::new("zfs");
         cmd.arg("create");
-        
-        if let Some(_p) = parent {
+
+        if parent.is_some() {
             cmd.arg("-p"); // Create parents
         }
-        
+
         cmd.arg(name);
-        
+
         let output = cmd.output().await?;
         self.check_output(output, &format!("create {}", name))
     }
@@ -84,13 +85,13 @@ impl ZfsCli {
     pub async fn destroy_dataset(&self, name: &str, force: bool) -> Result<(), StorageError> {
         let mut cmd = Command::new("zfs");
         cmd.arg("destroy");
-        
+
         if force {
             cmd.arg("-r"); // Recursive
         }
-        
+
         cmd.arg(name);
-        
+
         let output = cmd.output().await?;
         self.check_output(output, &format!("destroy {}", name))
     }
@@ -101,7 +102,7 @@ impl ZfsCli {
             .args(["snapshot", &full])
             .output()
             .await?;
-            
+
         self.check_output(output, &format!("snapshot {}", full))
     }
 
@@ -113,16 +114,12 @@ impl ZfsCli {
         self.snapshot(dataset, snap_name).await
     }
 
-    pub async fn clone_snapshot(
-        &self,
-        snapshot: &str,
-        target: &str,
-    ) -> Result<(), StorageError> {
+    pub async fn clone_snapshot(&self, snapshot: &str, target: &str) -> Result<(), StorageError> {
         let output = Command::new("zfs")
             .args(["clone", snapshot, target])
             .output()
             .await?;
-            
+
         self.check_output(output, &format!("clone {} to {}", snapshot, target))
     }
 
@@ -131,20 +128,20 @@ impl ZfsCli {
             .args(["promote", dataset])
             .output()
             .await?;
-            
+
         self.check_output(output, &format!("promote {}", dataset))
     }
 
     pub async fn rollback(&self, snapshot: &str, force: bool) -> Result<(), StorageError> {
         let mut cmd = Command::new("zfs");
         cmd.arg("rollback");
-        
+
         if force {
             cmd.arg("-r"); // Destroy intermediate snapshots
         }
-        
+
         cmd.arg(snapshot);
-        
+
         let output = cmd.output().await?;
         self.check_output(output, &format!("rollback {}", snapshot))
     }
@@ -159,7 +156,7 @@ impl ZfsCli {
             .args(["set", &format!("{}={}", key, value), dataset])
             .output()
             .await?;
-            
+
         self.check_output(output, &format!("set {}={} on {}", key, value, dataset))
     }
 
@@ -168,31 +165,36 @@ impl ZfsCli {
             .args(["get", "-H", "-o", "value", key, dataset])
             .output()
             .await?;
-            
+
         if !output.status.success() {
             return Err(StorageError::ZfsCommand(
-                String::from_utf8_lossy(&output.stderr).to_string()
+                String::from_utf8_lossy(&output.stderr).to_string(),
             ));
         }
-        
+
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
 
-    pub async fn mount(&self, dataset: &str, mountpoint: &std::path::PathBuf) -> Result<(), StorageError> {
+    pub async fn mount(
+        &self,
+        dataset: &str,
+        mountpoint: &std::path::PathBuf,
+    ) -> Result<(), StorageError> {
         // Set mountpoint property
-        self.set_property(dataset, "mountpoint", &mountpoint.to_string_lossy()).await
+        self.set_property(dataset, "mountpoint", &mountpoint.to_string_lossy())
+            .await
     }
 
     pub async fn unmount(&self, dataset: &str, force: bool) -> Result<(), StorageError> {
         let mut cmd = Command::new("zfs");
         cmd.arg("unmount");
-        
+
         if force {
             cmd.arg("-f");
         }
-        
+
         cmd.arg(dataset);
-        
+
         let output = cmd.output().await?;
         self.check_output(output, &format!("unmount {}", dataset))
     }
@@ -218,12 +220,15 @@ impl ZfsCli {
         let parts: Vec<&str> = line.trim().split('\t').collect();
 
         if parts.len() < 7 {
-            return Err(StorageError::Parse(format!("Unexpected zfs list output: {}", line)));
+            return Err(StorageError::Parse(format!(
+                "Unexpected zfs list output: {}",
+                line
+            )));
         }
 
-        let created_ts: i64 = parts[6].parse().map_err(|e| {
-            StorageError::Parse(format!("Invalid creation timestamp: {}", e))
-        })?;
+        let created_ts: i64 = parts[6]
+            .parse()
+            .map_err(|e| StorageError::Parse(format!("Invalid creation timestamp: {}", e)))?;
 
         let properties = self.get_all_properties(dataset).await?;
 
@@ -244,13 +249,17 @@ impl ZfsCli {
         })
     }
 
-    async fn get_all_properties(&self, dataset: &str) -> Result<std::collections::HashMap<String, String>, StorageError> {
+    async fn get_all_properties(
+        &self,
+        dataset: &str,
+    ) -> Result<std::collections::HashMap<String, String>, StorageError> {
         let output = Command::new("zfs")
             .args([
                 "get",
                 "-H",
                 "-p",
-                "-o", "name,property,value",
+                "-o",
+                "name,property,value",
                 "all",
                 dataset,
             ])
@@ -277,38 +286,38 @@ impl ZfsCli {
         Ok(properties)
     }
 
-    pub async fn list_snapshots(
-        &self,
-        dataset: &str,
-    ) -> Result<Vec<SnapshotInfo>, StorageError> {
+    pub async fn list_snapshots(&self, dataset: &str) -> Result<Vec<SnapshotInfo>, StorageError> {
         let output = Command::new("zfs")
             .args([
                 "list",
                 "-H",
                 "-p",
-                "-t", "snapshot",
-                "-o", "name,used,referenced,creation",
-                "-r", dataset,
+                "-t",
+                "snapshot",
+                "-o",
+                "name,used,referenced,creation",
+                "-r",
+                dataset,
             ])
             .output()
             .await?;
-            
+
         if !output.status.success() {
             return Err(StorageError::ZfsCommand(
-                String::from_utf8_lossy(&output.stderr).to_string()
+                String::from_utf8_lossy(&output.stderr).to_string(),
             ));
         }
-        
+
         let mut snapshots = vec![];
         for line in String::from_utf8_lossy(&output.stdout).lines() {
             let parts: Vec<&str> = line.split('\t').collect();
             if parts.len() < 4 {
                 continue;
             }
-            
+
             let name = parts[0].to_string();
             let dataset = name.split('@').next().unwrap_or("").to_string();
-            
+
             snapshots.push(SnapshotInfo {
                 name,
                 dataset,
@@ -318,13 +327,16 @@ impl ZfsCli {
                     .unwrap_or_else(|| chrono::Utc::now()),
             });
         }
-        
+
         Ok(snapshots)
     }
 
     pub async fn get_snapshot_info(&self, snapshot: &str) -> Result<SnapshotInfo, StorageError> {
-        let snaps = self.list_snapshots(snapshot.split('@').next().unwrap_or("")).await?;
-        snaps.into_iter()
+        let snaps = self
+            .list_snapshots(snapshot.split('@').next().unwrap_or(""))
+            .await?;
+        snaps
+            .into_iter()
             .find(|s| s.name == snapshot)
             .ok_or_else(|| StorageError::SnapshotNotFound(snapshot.to_string()))
     }
@@ -341,20 +353,22 @@ impl ZfsCli {
             ])
             .output()
             .await?;
-            
+
         if !output.status.success() {
             return Err(StorageError::NotFound(format!("pool: {}", pool)));
         }
-        
+
         let line = String::from_utf8_lossy(&output.stdout);
         let parts: Vec<&str> = line.trim().split('\t').collect();
-        
+
         if parts.len() < 5 {
-            return Err(StorageError::Parse("Unexpected zpool list output".to_string()));
+            return Err(StorageError::Parse(
+                "Unexpected zpool list output".to_string(),
+            ));
         }
-        
+
         let parse = |s: &str| s.parse().unwrap_or(0);
-        
+
         Ok(PoolMetrics {
             name: pool.to_string(),
             size_bytes: parse(parts[0]),
@@ -365,7 +379,11 @@ impl ZfsCli {
         })
     }
 
-    fn check_output(&self, output: std::process::Output, context: &str) -> Result<(), StorageError> {
+    fn check_output(
+        &self,
+        output: std::process::Output,
+        context: &str,
+    ) -> Result<(), StorageError> {
         if output.status.success() {
             trace!("zfs {} succeeded", context);
             Ok(())

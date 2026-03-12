@@ -83,8 +83,8 @@ pub struct ListAppsQuery {
 fn default_per_page() -> u32 { 20 }
 
 pub async fn list_apps(
-    State(state): State<Arc<AppState>>,
-    Query(params): Query<ListAppsQuery>,
+    State(_state): State<Arc<AppState>>,
+    Query(_params): Query<ListAppsQuery>,
 ) -> Json<PaginatedResponse<App>> {
     Json(PaginatedResponse::empty())
 }
@@ -119,7 +119,7 @@ pub async fn get_app(
 
 pub async fn delete_app(
     State(_state): State<Arc<AppState>>,
-    Path(app_id): Path<Uuid>,
+    Path(_app_id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
     Err((
         StatusCode::NOT_FOUND,
@@ -128,7 +128,7 @@ pub async fn delete_app(
 }
 
 pub async fn deploy_app(
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
     Path(app_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
     Ok(Json(serde_json::json!({
@@ -140,7 +140,7 @@ pub async fn deploy_app(
 
 pub async fn scale_app(
     State(_state): State<Arc<AppState>>,
-    Path(app_id): Path<Uuid>,
+    Path(_app_id): Path<Uuid>,
     Json(_body): Json<ScaleRequest>,
 ) -> Result<Json<App>, (StatusCode, Json<ErrorResponse>)> {
     Err((
@@ -181,7 +181,7 @@ pub async fn start_app(
 
 pub async fn get_logs(
     State(_state): State<Arc<AppState>>,
-    Path(app_id): Path<Uuid>,
+    Path(_app_id): Path<Uuid>,
     Query(_params): Query<LogQuery>,
 ) -> Result<Json<Vec<LogEntry>>, (StatusCode, Json<ErrorResponse>)> {
     Ok(Json(Vec::new()))
@@ -280,7 +280,7 @@ pub async fn register_node(
 
 pub async fn get_node(
     State(_state): State<Arc<AppState>>,
-    Path(node_id): Path<Uuid>,
+    Path(_node_id): Path<Uuid>,
 ) -> Result<Json<Node>, (StatusCode, Json<ErrorResponse>)> {
     Err((
         StatusCode::NOT_FOUND,
@@ -352,7 +352,7 @@ pub async fn create_volume(
 
 pub async fn get_volume(
     State(_state): State<Arc<AppState>>,
-    Path(volume_id): Path<Uuid>,
+    Path(_volume_id): Path<Uuid>,
 ) -> Result<Json<Volume>, (StatusCode, Json<ErrorResponse>)> {
     Err((
         StatusCode::NOT_FOUND,
@@ -362,7 +362,7 @@ pub async fn get_volume(
 
 pub async fn delete_volume(
     State(_state): State<Arc<AppState>>,
-    Path(volume_id): Path<Uuid>,
+    Path(_volume_id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
     Err((
         StatusCode::NOT_FOUND,
@@ -372,7 +372,7 @@ pub async fn delete_volume(
 
 pub async fn attach_volume(
     State(_state): State<Arc<AppState>>,
-    Path(volume_id): Path<Uuid>,
+    Path(_volume_id): Path<Uuid>,
     Json(_body): Json<AttachVolumeRequest>,
 ) -> Result<Json<Volume>, (StatusCode, Json<ErrorResponse>)> {
     Err((
@@ -388,7 +388,7 @@ pub struct AttachVolumeRequest {
 
 pub async fn detach_volume(
     State(_state): State<Arc<AppState>>,
-    Path(volume_id): Path<Uuid>,
+    Path(_volume_id): Path<Uuid>,
 ) -> Result<Json<Volume>, (StatusCode, Json<ErrorResponse>)> {
     Err((
         StatusCode::NOT_FOUND,
@@ -450,7 +450,7 @@ pub async fn create_domain(
 
 pub async fn get_domain(
     State(_state): State<Arc<AppState>>,
-    Path(domain_id): Path<Uuid>,
+    Path(_domain_id): Path<Uuid>,
 ) -> Result<Json<Domain>, (StatusCode, Json<ErrorResponse>)> {
     Err((
         StatusCode::NOT_FOUND,
@@ -460,7 +460,7 @@ pub async fn get_domain(
 
 pub async fn delete_domain(
     State(_state): State<Arc<AppState>>,
-    Path(domain_id): Path<Uuid>,
+    Path(_domain_id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
     Err((
         StatusCode::NOT_FOUND,
@@ -526,7 +526,7 @@ pub async fn create_database(
 
 pub async fn get_database(
     State(_state): State<Arc<AppState>>,
-    Path(db_id): Path<Uuid>,
+    Path(_db_id): Path<Uuid>,
 ) -> Result<Json<Database>, (StatusCode, Json<ErrorResponse>)> {
     Err((
         StatusCode::NOT_FOUND,
@@ -536,7 +536,7 @@ pub async fn get_database(
 
 pub async fn delete_database(
     State(_state): State<Arc<AppState>>,
-    Path(db_id): Path<Uuid>,
+    Path(_db_id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
     Err((
         StatusCode::NOT_FOUND,
@@ -623,7 +623,7 @@ pub async fn create_secret(
 
 pub async fn get_secret(
     State(_state): State<Arc<AppState>>,
-    Path(secret_id): Path<Uuid>,
+    Path(_secret_id): Path<Uuid>,
 ) -> Result<Json<Secret>, (StatusCode, Json<ErrorResponse>)> {
     Err((
         StatusCode::NOT_FOUND,
@@ -633,7 +633,7 @@ pub async fn get_secret(
 
 pub async fn delete_secret(
     State(_state): State<Arc<AppState>>,
-    Path(secret_id): Path<Uuid>,
+    Path(_secret_id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
     Err((
         StatusCode::NOT_FOUND,
@@ -643,7 +643,7 @@ pub async fn delete_secret(
 
 pub async fn rotate_secret(
     State(_state): State<Arc<AppState>>,
-    Path(secret_id): Path<Uuid>,
+    Path(_secret_id): Path<Uuid>,
     Json(_body): Json<RotateSecretRequest>,
 ) -> Result<Json<Secret>, (StatusCode, Json<ErrorResponse>)> {
     Err((
@@ -674,7 +674,7 @@ pub async fn list_builds(
 
 pub async fn get_build(
     State(_state): State<Arc<AppState>>,
-    Path(build_id): Path<Uuid>,
+    Path(_build_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
     Err((
         StatusCode::NOT_FOUND,
@@ -684,7 +684,7 @@ pub async fn get_build(
 
 pub async fn get_build_logs(
     State(_state): State<Arc<AppState>>,
-    Path(build_id): Path<Uuid>,
+    Path(_build_id): Path<Uuid>,
 ) -> Result<Json<Vec<String>>, (StatusCode, Json<ErrorResponse>)> {
     Ok(Json(Vec::new()))
 }

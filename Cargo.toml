@@ -4,18 +4,52 @@ resolver = "2"
 
 # Reduce disk and memory usage during builds
 [profile.dev]
-codegen-units = 1
-debug = "line-tables-only"
-incremental = false
+codegen-units = 256
+debug = 1
+incremental = true
 
 [profile.dev.package."*"]
-codegen-units = 1
+codegen-units = 256
 opt-level = 0
 
 [profile.release]
-codegen-units = 1
+codegen-units = 16
 debug = false
-lto = false
+lto = "thin"
+
+# CI profile - optimized for speed and low memory
+[profile.ci]
+inherits = "dev"
+codegen-units = 256
+debug = 0
+incremental = false
+opt-level = 0
+
+# Clippy configuration
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"
+nursery = "allow"
+cargo = "warn"
+
+# Allow some common patterns
+multiple_crate_versions = "allow"
+module_name_repetitions = "allow"
+too_many_arguments = "allow"
+too_many_lines = "allow"
+similar_names = "allow"
+struct_excessive_bools = "allow"
+default_trait_access = "allow"
+explicit_deref_methods = "allow"
+implicit_hasher = "allow"
+items_after_statements = "allow"
+match_same_arms = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"
+redundant_pub_crate = "allow"
+return_self_not_must_use = "allow"
+used_underscore_binding = "allow"
 
 [workspace.package]
 version = "0.1.0-alpha.1"

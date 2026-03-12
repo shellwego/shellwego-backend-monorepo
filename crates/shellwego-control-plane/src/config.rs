@@ -2,9 +2,6 @@
 //!
 //! Loads configuration from environment variables and config files.
 
-use std::net::SocketAddr;
-use std::path::Path;
-
 use serde::Deserialize;
 use tracing::info;
 

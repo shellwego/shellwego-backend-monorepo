@@ -84,93 +84,92 @@ pub use vmm::client::FirecrackerClient;
 
 // Re-export commonly used models from schema
 pub use shellwego_schema::firecracker::{
-    // Instance
-    InstanceInfo,
-    InstanceState,
-    FirecrackerVersion,
-
-    // Boot
-    BootSource,
-
-    // Machine
-    MachineConfiguration,
-    CpuTemplate,
-    HugePages,
-
-    // CPU
-    CpuConfig,
-
-    // Drives
-    Drive,
-    PartialDrive,
-    CacheType,
-    IoEngine,
-
-    // PMEM
-    Pmem,
-
-    // Network
-    NetworkInterface,
-    PartialNetworkInterface,
-
-    // Rate Limiting
-    RateLimiter,
-    TokenBucket,
+    ActionType,
 
     // Balloon
     Balloon,
-    BalloonUpdate,
-    BalloonStats,
-    BalloonStatsUpdate,
-    BalloonStartCmd,
     BalloonHintingStatus,
 
-    // Vsock
-    Vsock,
+    BalloonStartCmd,
+    BalloonStats,
+    BalloonStatsUpdate,
+    BalloonUpdate,
+    // Boot
+    BootSource,
 
+    CacheType,
+    // CPU
+    CpuConfig,
+
+    CpuTemplate,
+    // Drives
+    Drive,
     // Entropy
     EntropyDevice,
 
-    // Serial
-    SerialDevice,
-
-    // Logger & Metrics
-    Logger,
-    LogLevel,
-    Metrics,
+    // Error
+    Error,
     FirecrackerMetrics,
+
+    FirecrackerVersion,
+
+    // Full Config
+    FullVmConfiguration,
+
+    HugePages,
 
     // Actions
     InstanceActionInfo,
-    ActionType,
+    // Instance
+    InstanceInfo,
+    InstanceState,
+    IoEngine,
 
-    // VM State
-    Vm,
-    VmState,
-
-    // Snapshot
-    SnapshotCreateParams,
-    SnapshotLoadParams,
-    SnapshotType,
+    LogLevel,
+    // Logger & Metrics
+    Logger,
+    // Machine
+    MachineConfiguration,
     MemoryBackend,
     MemoryBackendType,
-    NetworkOverride,
-
     // Memory Hotplug
     MemoryHotplugConfig,
     MemoryHotplugSizeUpdate,
     MemoryHotplugStatus,
 
+    Metrics,
     // MMDS
     MmdsConfig,
-    MmdsVersion,
     MmdsContentsObject,
 
-    // Full Config
-    FullVmConfiguration,
+    MmdsVersion,
+    // Network
+    NetworkInterface,
+    NetworkOverride,
 
-    // Error
-    Error,
+    PartialDrive,
+    PartialNetworkInterface,
+
+    // PMEM
+    Pmem,
+
+    // Rate Limiting
+    RateLimiter,
+    // Serial
+    SerialDevice,
+
+    // Snapshot
+    SnapshotCreateParams,
+    SnapshotLoadParams,
+    SnapshotType,
+    TokenBucket,
+
+    // VM State
+    Vm,
+    VmState,
+
+    // Vsock
+    Vsock,
 };
 
 /// SDK version

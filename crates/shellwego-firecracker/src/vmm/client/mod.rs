@@ -3,13 +3,13 @@
 //! HTTP client for communicating with Firecracker over Unix Domain Sockets.
 //! Based on Firecracker API specification v1.16.0-dev.
 
-use std::path::{Path, PathBuf};
 use crate::models::*;
-use anyhow::{Result, Context};
-use hyper::{Request, Method, StatusCode};
-use hyper_util::rt::TokioIo;
-use http_body_util::{BodyExt, Full};
+use anyhow::{Context, Result};
 use bytes::Bytes;
+use http_body_util::{BodyExt, Full};
+use hyper::{Method, Request, StatusCode};
+use hyper_util::rt::TokioIo;
+use std::path::{Path, PathBuf};
 use tokio::net::UnixStream;
 
 /// Firecracker API client for communicating over Unix Domain Sockets.
@@ -36,8 +36,14 @@ impl FirecrackerClient {
         uri: &str,
         body: Option<T>,
     ) -> Result<String> {
-        let stream = UnixStream::connect(&self.socket_path).await
-            .with_context(|| format!("Failed to connect to firecracker socket at {:?}", self.socket_path))?;
+        let stream = UnixStream::connect(&self.socket_path)
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to connect to firecracker socket at {:?}",
+                    self.socket_path
+                )
+            })?;
 
         let io = TokioIo::new(stream);
         let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await?;
@@ -164,11 +170,17 @@ impl FirecrackerClient {
     // ========================================================================
 
     pub async fn put_network_interface(&self, iface_id: &str, net: NetworkInterface) -> Result<()> {
-        self.put(&format!("/network-interfaces/{}", iface_id), net).await
+        self.put(&format!("/network-interfaces/{}", iface_id), net)
+            .await
     }
 
-    pub async fn patch_network_interface(&self, iface_id: &str, net: PartialNetworkInterface) -> Result<()> {
-        self.patch(&format!("/network-interfaces/{}", iface_id), net).await
+    pub async fn patch_network_interface(
+        &self,
+        iface_id: &str,
+        net: PartialNetworkInterface,
+    ) -> Result<()> {
+        self.patch(&format!("/network-interfaces/{}", iface_id), net)
+            .await
     }
 
     // ========================================================================
@@ -244,19 +256,22 @@ impl FirecrackerClient {
     pub async fn start_instance(&self) -> Result<()> {
         self.put_actions(InstanceActionInfo {
             action_type: ActionType::InstanceStart,
-        }).await
+        })
+        .await
     }
 
     pub async fn flush_metrics(&self) -> Result<()> {
         self.put_actions(InstanceActionInfo {
             action_type: ActionType::FlushMetrics,
-        }).await
+        })
+        .await
     }
 
     pub async fn send_ctrl_alt_del(&self) -> Result<()> {
         self.put_actions(InstanceActionInfo {
             action_type: ActionType::SendCtrlAltDel,
-        }).await
+        })
+        .await
     }
 
     // ========================================================================
@@ -268,11 +283,17 @@ impl FirecrackerClient {
     }
 
     pub async fn pause_vm(&self) -> Result<()> {
-        self.patch_vm(Vm { state: VmState::Paused }).await
+        self.patch_vm(Vm {
+            state: VmState::Paused,
+        })
+        .await
     }
 
     pub async fn resume_vm(&self) -> Result<()> {
-        self.patch_vm(Vm { state: VmState::Resumed }).await
+        self.patch_vm(Vm {
+            state: VmState::Resumed,
+        })
+        .await
     }
 
     pub async fn get_vm_config(&self) -> Result<FullVmConfiguration> {
@@ -352,7 +373,9 @@ mod tests {
 
     #[test]
     fn test_vm_state_serialization() {
-        let vm = Vm { state: VmState::Paused };
+        let vm = Vm {
+            state: VmState::Paused,
+        };
         let json = serde_json::to_string(&vm).unwrap();
         assert_eq!(json, r#"{"state":"Paused"}"#);
     }

@@ -14,7 +14,10 @@ pub mod oci;
 pub use zfs::ZfsManager;
 pub use s3::{S3Backend, S3Config};
 pub use encryption::{EncryptionProvider, EncryptionConfig, DataKey};
-pub use oci::{OciClient, OciConfig, OciError};
+
+// Re-export OCI types from schema
+pub use shellwego_schema::oci::{OciConfig, Platform, Manifest, ConfigDescriptor, LayerDescriptor};
+pub use oci::{OciClient, OciError};
 
 /// Storage backend trait for pluggability
 #[async_trait::async_trait]

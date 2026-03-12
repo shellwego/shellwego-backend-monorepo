@@ -4,7 +4,7 @@
 
 This plan addresses the critical DRY (Don't Repeat Yourself) violations in the ShellWeGo backend monorepo where `shellwego-schema` exists but is NOT being used as the single source of truth for type definitions. Multiple crates define their own types locally, creating maintenance burden, type mismatch risks, and documentation fragmentation.
 
-**Status**: Phase 1, 2 & 4 Complete - Network Types Consolidated
+**Status**: Phase 1, 2, 4 & 5 Complete - Network and OCI Types Consolidated
 **Author**: Architecture Review
 **Date**: 2025-01-20
 **Last Updated**: 2025-01-22
@@ -19,7 +19,7 @@ This plan addresses the critical DRY (Don't Repeat Yourself) violations in the S
 | Phase 2 | ✅ **COMPLETE** | Agent Types consolidated to schema |
 | Phase 3 | ⏳ Pending | Control Plane Handlers |
 | Phase 4 | ✅ **COMPLETE** | Network Consolidation |
-| Phase 5 | ⏳ Pending | Registry/Storage |
+| Phase 5 | ✅ **COMPLETE** | Registry/Storage OCI types moved to `schema/src/oci/` |
 | Phase 6 | ⏳ Pending | Billing Entities |
 
 ---
@@ -313,14 +313,38 @@ shellwego-schema/src/network/
 - `shellwego-network` re-exports types from schema for convenience
 - `shellwego-agent` now imports types directly from schema
 
-### Phase 5: Registry/Storage Consolidation (Week 3-4)
+### Phase 5: Registry/Storage Consolidation ✅ COMPLETE
 
 **Objective:** Consolidate OCI/Registry types.
 
-**Tasks:**
-1. Create `shellwego-schema/src/oci/` module
-2. Move shared types: `Manifest`, `Platform`, `Descriptor`, `ConfigDescriptor`
-3. Update both registry and storage crates to use schema
+**Status:** Completed on 2025-01-21
+
+**Completed Tasks:**
+- [x] Create `shellwego-schema/src/oci/` module structure
+- [x] Move shared types: `Manifest`, `Platform`, `Descriptor`, `ConfigDescriptor`, `LayerDescriptor`, `ManifestDescriptor`
+- [x] Move: `ImageConfig`, `ContainerConfig`, `RootFs`, `HistoryEntry`
+- [x] Move: `RegistryAuth`, `AuthToken`, `OciConfig`
+- [x] Update `shellwego-registry` to use schema types
+- [x] Update `shellwego-storage` to use schema types
+- [x] Delete duplicate type definitions from both crates
+
+**Implemented File Structure:**
+```
+shellwego-schema/src/oci/
+├── mod.rs              # Module exports
+├── manifest.rs         # Manifest, ManifestIndex
+├── descriptor.rs       # Descriptor, ConfigDescriptor, LayerDescriptor, ManifestDescriptor
+├── platform.rs         # Platform
+├── config.rs           # ImageConfig, ContainerConfig, RootFs, HistoryEntry
+└── auth.rs             # RegistryAuth, AuthToken, OciConfig
+```
+
+**Key Changes Made:**
+- `shellwego-registry/src/lib.rs` now imports OCI types from `shellwego-schema`
+- `shellwego-registry/src/cache.rs` uses schema's `Manifest`, `Descriptor`, `Platform`
+- `shellwego-registry/src/pull.rs` uses schema's `Manifest`, `RegistryAuth`, `ImageConfig`, etc.
+- `shellwego-storage/src/oci.rs` uses schema's `OciConfig`, `Platform`, `Manifest`, etc.
+- Both crates' `Cargo.toml` now depend on `shellwego-schema`
 
 ### Phase 6: Billing Entity Migration (Week 4)
 
@@ -688,13 +712,14 @@ All Agent types have been moved to `schema/src/agent/`:
 | `control-plane/src/state.rs` | AgentConnection | DELETE - Use schema type |
 | `control-plane/src/operators/mod.rs` | DatabaseSpec, ResourceSpec, HaConfig, BackupConfig, ConnectionInfo, InstanceStatus, BackupInfo, OperatorConfig, ResourceQuotas | Consolidate with schema entities |
 
-### E. Types to Migrate (Phase 5 - Registry/Storage)
+### E. Types Migrated (Phase 5 - Registry/Storage) ✅ COMPLETE
 
-| Current Location | Types | Target |
-|------------------|-------|--------|
-| `registry/src/lib.rs` | AuthToken, RegistryAuth, Manifest, ConfigDescriptor, LayerDescriptor, ManifestDescriptor, Platform, ImageConfig, ContainerConfig, RootFs, HistoryEntry | `schema/src/oci/` |
-| `registry/src/cache.rs` | LayerCache, CachedImageInfo, CacheStats | Keep in registry |
-| `storage/src/oci.rs` | OciConfig, Platform, OciClient, Manifest, ConfigDescriptor, LayerDescriptor | Consolidate with registry types |
+| Previous Location | Types | New Location |
+|-------------------|-------|--------------|
+| `registry/src/lib.rs` | ~~AuthToken, RegistryAuth, Manifest, ConfigDescriptor, LayerDescriptor, ManifestDescriptor, Platform, ImageConfig, ContainerConfig, RootFs, HistoryEntry~~ | `schema/src/oci/` |
+| `registry/src/cache.rs` | LayerCache, CachedImageInfo, CacheStats | Kept in registry (implementation-specific) |
+| `storage/src/oci.rs` | ~~OciConfig, Platform, Manifest, ConfigDescriptor, LayerDescriptor~~ | `schema/src/oci/` |
+| `storage/src/oci.rs` | OciClient, OciError | Kept in storage (implementation logic) |
 
 ---
 

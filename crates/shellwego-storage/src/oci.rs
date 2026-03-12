@@ -21,6 +21,11 @@ use futures_util::StreamExt;
 use crate::StorageError;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 
+// Import OCI types from schema
+pub use shellwego_schema::oci::{
+    OciConfig, Platform, Manifest, ConfigDescriptor, LayerDescriptor,
+};
+
 const MAX_MANIFEST_SIZE: usize = 10 * 1024 * 1024; // 10MB
 
 #[derive(Debug, Error)]
@@ -45,23 +50,6 @@ impl From<OciError> for StorageError {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct OciConfig {
-    pub registry: String,
-    pub username: Option<String>,
-    pub password: Option<String>,
-    pub insecure: bool, // Allow HTTP (not HTTPS)
-    pub platform: Option<Platform>,
-}
-
-#[derive(Debug, Clone)]
-pub struct Platform {
-    pub os: String,
-    pub architecture: String,
-    pub variant: Option<String>,
-    pub os_version: Option<String>,
-}
-
 pub struct OciClient {
     config: OciConfig,
     http_client: reqwest::Client,
@@ -72,7 +60,7 @@ impl OciClient {
     pub async fn new(config: OciConfig) -> Result<Self, OciError> {
         let mut builder = reqwest::Client::builder();
 
-        if config.insecure {
+        if config.insecure || config.skip_tls_verify {
             builder = builder.danger_accept_invalid_certs(true);
         }
 
@@ -92,7 +80,7 @@ impl OciClient {
         } else if registry == "docker.io" {
             "https://registry-1.docker.io".to_string()
         } else {
-            format!("https://{}", registry)
+            format!("{}://{}", if self.config.insecure { "http" } else { "https" }, registry)
         }
     }
 
@@ -306,51 +294,13 @@ impl OciClient {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Manifest {
-    #[serde(rename = "schemaVersion")]
-    pub schema_version: u32,
-    #[serde(rename = "mediaType")]
-    pub media_type: Option<String>,
-    #[serde(rename = "config")]
-    pub config: Option<ConfigDescriptor>,
-    #[serde(rename = "layers")]
-    pub layers: Vec<LayerDescriptor>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConfigDescriptor {
-    #[serde(rename = "mediaType")]
-    pub media_type: String,
-    #[serde(rename = "digest")]
-    pub digest: String,
-    #[serde(rename = "size")]
-    pub size: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LayerDescriptor {
-    #[serde(rename = "mediaType")]
-    pub media_type: String,
-    #[serde(rename = "digest")]
-    pub digest: String,
-    #[serde(rename = "size")]
-    pub size: u64,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[tokio::test]
     async fn test_parse_reference_with_tag() {
-        let client = OciClient::new(OciConfig {
-            registry: "docker.io".to_string(),
-            username: None,
-            password: None,
-            insecure: false,
-            platform: None,
-        }).await.unwrap();
+        let client = OciClient::new(OciConfig::new("docker.io")).await.unwrap();
 
         let (repo, ref_) = client.parse_reference("alpine:3.18").unwrap();
         assert_eq!(repo, "library/alpine");
@@ -359,13 +309,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_parse_reference_with_registry() {
-        let client = OciClient::new(OciConfig {
-            registry: "ghcr.io".to_string(),
-            username: None,
-            password: None,
-            insecure: false,
-            platform: None,
-        }).await.unwrap();
+        let client = OciClient::new(OciConfig::new("ghcr.io")).await.unwrap();
 
         let (repo, ref_) = client.parse_reference("ghcr.io/user/repo:v1.0").unwrap();
         assert_eq!(repo, "user/repo");
@@ -374,13 +318,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_parse_reference_latest() {
-        let client = OciClient::new(OciConfig {
-            registry: "docker.io".to_string(),
-            username: None,
-            password: None,
-            insecure: false,
-            platform: None,
-        }).await.unwrap();
+        let client = OciClient::new(OciConfig::new("docker.io")).await.unwrap();
 
         let (repo, ref_) = client.parse_reference("ubuntu").unwrap();
         assert_eq!(repo, "library/ubuntu");

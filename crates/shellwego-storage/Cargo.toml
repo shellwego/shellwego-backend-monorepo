@@ -9,6 +9,9 @@ rust-version.workspace = true
 description = "Storage drivers: ZFS dataset management, snapshots, and clones"
 
 [dependencies]
+# Schema types
+shellwego-schema = { path = "../shellwego-schema" }
+
 tokio = { workspace = true, features = ["process", "fs"] }
 thiserror = { workspace = true }
 anyhow = { workspace = true }

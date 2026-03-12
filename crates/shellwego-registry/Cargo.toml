@@ -9,6 +9,9 @@ rust-version.workspace = true
 description = "Container image registry cache and OCI pull operations"
 
 [dependencies]
+# Schema types
+shellwego-schema = { path = "../shellwego-schema" }
+
 # Core async
 tokio = { workspace = true, features = ["process", "fs"] }
 
@@ -42,6 +45,9 @@ anyhow = { workspace = true }
 
 # Tracing
 tracing = { workspace = true }
+
+# Date/time
+chrono = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3.8"

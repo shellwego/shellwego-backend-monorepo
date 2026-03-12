@@ -11,11 +11,19 @@ use std::time::Duration;
 use bytes::Bytes;
 use futures_util::stream::StreamExt;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
 use sha2::{Sha256, Digest as Sha256Digest};
 use tracing::{debug, error, info, warn};
 
-use crate::{RegistryBackend, RegistryAuth, RegistryError, Manifest, ImageConfig};
+// Import OCI types from schema
+use shellwego_schema::oci::{
+    Manifest, RegistryAuth, AuthToken, ImageConfig,
+    ConfigDescriptor, LayerDescriptor,
+};
+
+use crate::{RegistryBackend, RegistryError};
+
+// Re-export types needed by pull module
+use crate::cache::LayerCache;
 
 /// Image puller with progress tracking
 pub struct ImagePuller {
@@ -24,16 +32,22 @@ pub struct ImagePuller {
     /// Authentication store
     auth_store: HashMap<String, RegistryAuth>,
     /// Cache of auth tokens per registry
-    token_cache: Arc<tokio::sync::RwLock<HashMap<String, AuthToken>>>,
+    token_cache: Arc<tokio::sync::RwLock<HashMap<String, AuthTokenInternal>>>,
     /// Cache reference for storage
-    cache: Option<crate::cache::LayerCache>,
+    cache: Option<LayerCache>,
 }
 
-/// Authentication token from registry
+/// Internal auth token with expiration tracking
 #[derive(Debug, Clone)]
-struct AuthToken {
+struct AuthTokenInternal {
     token: String,
     expires_at: std::time::Instant,
+}
+
+impl From<AuthTokenInternal> for AuthToken {
+    fn from(internal: AuthTokenInternal) -> Self {
+        AuthToken::new(internal.token)
+    }
 }
 
 /// Pulled image result
@@ -89,7 +103,7 @@ pub struct ImageReference {
 }
 
 /// Registry token response
-#[derive(Debug, Deserialize)]
+#[derive(Debug, serde::Deserialize)]
 struct TokenResponse {
     token: String,
     #[serde(default)]
@@ -125,7 +139,7 @@ impl ImagePuller {
     }
 
     /// Create puller with cache
-    pub fn with_cache(cache: crate::cache::LayerCache) -> Self {
+    pub fn with_cache(cache: LayerCache) -> Self {
         let mut puller = Self::new();
         puller.cache = Some(cache);
         puller
@@ -141,7 +155,7 @@ impl ImagePuller {
         let (registry, rest) = if image_ref.contains('/') {
             let first_slash = image_ref.find('/').unwrap();
             let host_part = &image_ref[..first_slash];
-            
+
             // Check if this looks like a registry host
             if host_part.contains('.') || host_part.contains(':') || host_part == "localhost" {
                 (host_part.to_string(), image_ref[first_slash + 1..].to_string())
@@ -256,7 +270,7 @@ impl ImagePuller {
         // Cache token
         {
             let mut cache = self.token_cache.write().await;
-            cache.insert(registry.to_string(), AuthToken {
+            cache.insert(registry.to_string(), AuthTokenInternal {
                 token: token_resp.token.clone(),
                 expires_at: std::time::Instant::now() + Duration::from_secs(expires_in - 60),
             });
@@ -550,7 +564,7 @@ impl ImagePuller {
         let token = self.get_auth_token(&parsed.registry, &parsed.repository).await?;
 
         // Construct signature manifest tag
-        let signature_tag = format!("{}-sha256-{}.sig", 
+        let signature_tag = format!("{}-sha256-{}.sig",
             parsed.repository.replace('/', "-"),
             // We'd need the actual digest here
             "signature"
@@ -650,7 +664,7 @@ mod tests {
     #[test]
     fn test_parse_image_ref_docker_hub() {
         let puller = ImagePuller::new();
-        
+
         let parsed = puller.parse_image_ref("nginx:latest").unwrap();
         assert_eq!(parsed.registry, "registry-1.docker.io");
         assert_eq!(parsed.repository, "library/nginx");
@@ -661,7 +675,7 @@ mod tests {
     #[test]
     fn test_parse_image_ref_ghcr() {
         let puller = ImagePuller::new();
-        
+
         let parsed = puller.parse_image_ref("ghcr.io/org/image:v1.0").unwrap();
         assert_eq!(parsed.registry, "ghcr.io");
         assert_eq!(parsed.repository, "org/image");
@@ -672,7 +686,7 @@ mod tests {
     #[test]
     fn test_parse_image_ref_with_digest() {
         let puller = ImagePuller::new();
-        
+
         let parsed = puller.parse_image_ref("nginx@sha256:abc123").unwrap();
         assert_eq!(parsed.registry, "registry-1.docker.io");
         assert_eq!(parsed.repository, "library/nginx");

@@ -13,6 +13,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::RegistryError;
 
+// Import OCI types from schema
+use shellwego_schema::oci::{Manifest, Descriptor, Platform};
+
 /// Layer cache manager
 pub struct LayerCache {
     /// ZFS pool name
@@ -65,49 +68,6 @@ pub struct CacheStats {
     pub misses: u64,
 }
 
-/// OCI Image Manifest (simplified)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Manifest {
-    /// Schema version
-    #[serde(rename = "schemaVersion", default = "default_schema_version")]
-    pub schema_version: i32,
-    /// Media type
-    #[serde(rename = "mediaType")]
-    pub media_type: Option<String>,
-    /// Image config digest
-    pub config: Option<Descriptor>,
-    /// Layer descriptors
-    pub layers: Vec<Descriptor>,
-    /// Manifest list for multi-arch
-    #[serde(default)]
-    pub manifests: Vec<Descriptor>,
-}
-
-fn default_schema_version() -> i32 { 2 }
-
-/// Content descriptor
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Descriptor {
-    /// Media type
-    #[serde(rename = "mediaType")]
-    pub media_type: Option<String>,
-    /// Content digest
-    pub digest: String,
-    /// Size in bytes
-    pub size: u64,
-    /// Platform for multi-arch
-    pub platform: Option<Platform>,
-}
-
-/// Platform specification
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Platform {
-    pub architecture: String,
-    pub os: String,
-    #[serde(default)]
-    pub variant: Option<String>,
-}
-
 /// Layer information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LayerInfo {
@@ -145,7 +105,7 @@ impl LayerCache {
         // Create sub-datasets
         let images_dataset = format!("{}/images", base_dataset);
         let layers_dataset = format!("{}/layers", base_dataset);
-        
+
         Self::ensure_dataset(&images_dataset).await?;
         Self::ensure_dataset(&layers_dataset).await?;
 
@@ -241,7 +201,7 @@ impl LayerCache {
     /// Load existing cached images into index
     async fn load_existing_images(&self) -> Result<(), RegistryError> {
         let images_dataset = format!("{}/images", self.base_dataset);
-        
+
         let output = tokio::process::Command::new("zfs")
             .args(["list", "-H", "-r", "-o", "name", &images_dataset])
             .output()
@@ -283,7 +243,7 @@ impl LayerCache {
         // Check in-memory index first
         {
             let index = self.manifest_index.read().await;
-            if let Some(info) = index.get(image_ref) {
+            if let Some(_info) = index.get(image_ref) {
                 // Update last accessed
                 return true;
             }
@@ -292,7 +252,7 @@ impl LayerCache {
         // Check filesystem
         let sanitized = Self::sanitize_image_ref(image_ref);
         let dataset = format!("{}/images/{}", self.base_dataset, sanitized);
-        
+
         let output = tokio::process::Command::new("zfs")
             .args(["list", "-H", "-o", "name", &dataset])
             .output()
@@ -328,7 +288,7 @@ impl LayerCache {
         }
 
         let mountpoint = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        
+
         // Update last accessed
         {
             let mut index = self.manifest_index.write().await;
@@ -369,7 +329,7 @@ impl LayerCache {
         // Import each layer
         for (i, layer) in layers.iter().enumerate() {
             let layer_digest = manifest.layers.get(i)
-                .map(|d| d.digest.clone())
+                .map(|l| l.digest.clone())
                 .unwrap_or_else(|| format!("layer-{}", i));
 
             info!("Importing layer {} of {} ({})", i + 1, manifest.layers.len(), layer_digest);
@@ -446,12 +406,12 @@ impl LayerCache {
             .await?;
 
         let mountpoint = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        
+
         if mountpoint == "none" || mountpoint == "-" {
             // Set mountpoint
             let mount_path = format!("/var/lib/shellwego/registry/{}", dataset.replace('/', "_"));
             tokio::fs::create_dir_all(&mount_path).await?;
-            
+
             let _ = tokio::process::Command::new("zfs")
                 .args(["set", &format!("mountpoint={}", mount_path), dataset])
                 .output()
@@ -606,7 +566,7 @@ impl LayerCache {
 
         // Create clone
         let clone_dataset = format!("{}/containers/{}", self.base_dataset, container_id);
-        
+
         let output = tokio::process::Command::new("zfs")
             .args(["clone", &source_snapshot, &clone_dataset])
             .output()
@@ -710,23 +670,5 @@ mod tests {
         let stats = CacheStats::default();
         assert_eq!(stats.total_bytes, 0);
         assert_eq!(stats.image_count, 0);
-    }
-
-    #[test]
-    fn test_manifest_deserialization() {
-        let json = r#"{
-            "schemaVersion": 2,
-            "mediaType": "application/vnd.docker.distribution.manifest.v2+json",
-            "config": {
-                "mediaType": "application/vnd.docker.container.image.v1+json",
-                "digest": "sha256:abc123",
-                "size": 1234
-            },
-            "layers": []
-        }"#;
-
-        let manifest: Manifest = serde_json::from_str(json).unwrap();
-        assert_eq!(manifest.schema_version, 2);
-        assert!(manifest.config.is_some());
     }
 }

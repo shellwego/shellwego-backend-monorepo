@@ -3,8 +3,9 @@ use tokio::signal;
 use tracing::{error, info};
 
 use shellwego_agent::{
-    daemon::Daemon, detect_capabilities, metrics::MetricsCollector, migration::MigrationManager,
-    reconciler::Reconciler, snapshot::SnapshotManager, vmm::VmmManager, wasm, AgentConfig, metrics,
+    daemon::Daemon, detect_capabilities, metrics, metrics::MetricsCollector,
+    migration::MigrationManager, reconciler::Reconciler, snapshot::SnapshotManager,
+    vmm::VmmManager, wasm, AgentConfig,
 };
 use shellwego_network::CniNetwork;
 
@@ -22,19 +23,14 @@ async fn main() -> anyhow::Result<()> {
     let _wasm_runtime = wasm::WasmRuntime::new(&wasm::WasmConfig { max_memory_mb: 512 }).await?;
     let network = Arc::new(CniNetwork::new("sw0", "10.0.0.0/16").await?);
 
-    let daemon = Daemon::new(
-        config.clone(),
-        capabilities,
-        vmm.clone(),
-        metrics.clone(),
-    )
-    .await?;
+    let daemon = Daemon::new(config.clone(), capabilities, vmm.clone(), metrics.clone()).await?;
 
     let reconciler = Reconciler::new(vmm.clone(), network, daemon.state_client());
 
     let _snapshot_manager = SnapshotManager::new(&config.data_dir).await?;
     let mut migration_manager = MigrationManager::new(&config.data_dir, vmm.clone()).await?;
-    let migration_transport = std::sync::Arc::new(shellwego_agent::migration::QuicMigrationTransport::new(9001).await?);
+    let migration_transport =
+        std::sync::Arc::new(shellwego_agent::migration::QuicMigrationTransport::new(9001).await?);
     migration_manager.set_transport(migration_transport);
 
     let heartbeat_handle = tokio::spawn({
@@ -69,7 +65,7 @@ async fn main() -> anyhow::Result<()> {
         async move {
             let collection = metrics.run_collection_loop();
             let server = metrics::start_metrics_server(metrics.clone(), 9100);
-            
+
             // Run both collection loop and server
             let res = tokio::try_join!(collection, server);
             if let Err(e) = res {
@@ -78,7 +74,8 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    let mut term_signal = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    let mut term_signal =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
 
     tokio::select! {
         _ = signal::ctrl_c() => { info!("Received SIGINT..."); }

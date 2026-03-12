@@ -4,19 +4,19 @@
 //! Supports creating, restoring, and managing VM snapshots with both
 //! memory state and disk state persistence.
 
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
-use serde::{Serialize, Deserialize};
-use chrono::{DateTime, Utc};
 
-use crate::vmm::{VmmManager, MicrovmConfig};
+use crate::vmm::{MicrovmConfig, VmmManager};
 
 // Re-export types from schema
-pub use shellwego_schema::{AgentSnapshotType, AgentSnapshotInfo};
+pub use shellwego_schema::{AgentSnapshotInfo, AgentSnapshotType};
 
 /// Internal metadata for snapshot tracking
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,15 +63,18 @@ impl ZfsSnapshotManager {
         }
 
         let app_dataset = format!("{}/shellwego/apps/{}", self.pool, app_id);
-        
+
         // Check if the app dataset exists
         if !self.dataset_exists(&app_dataset).await? {
-            debug!("App dataset {} does not exist, skipping disk snapshot", app_dataset);
+            debug!(
+                "App dataset {} does not exist, skipping disk snapshot",
+                app_dataset
+            );
             return Ok(None);
         }
 
         let snapshot_full = format!("{}@{}", app_dataset, snapshot_name);
-        
+
         // Create ZFS snapshot
         let output = tokio::process::Command::new("zfs")
             .args(["snapshot", &snapshot_full])
@@ -105,10 +108,10 @@ impl ZfsSnapshotManager {
 
         let source_dataset = parts[0];
         let snap_name = parts[1];
-        
+
         // Create new dataset for the cloned app
         let target_dataset = format!("{}/shellwego/apps/{}", self.pool, new_app_id);
-        
+
         // Clone the snapshot
         let output = tokio::process::Command::new("zfs")
             .args(["clone", snapshot_path, &target_dataset])
@@ -116,11 +119,14 @@ impl ZfsSnapshotManager {
             .await?;
 
         if output.status.success() {
-            info!("Cloned ZFS snapshot {} to {}", snapshot_path, target_dataset);
+            info!(
+                "Cloned ZFS snapshot {} to {}",
+                snapshot_path, target_dataset
+            );
             Ok(Some(target_dataset))
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::b!("Failed to clone ZFS snapshot: {}", stderr);
+            anyhow::bail!("Failed to clone ZFS snapshot: {}", stderr)
         }
     }
 
@@ -201,7 +207,7 @@ impl SnapshotManager {
     pub async fn new(data_dir: &Path) -> anyhow::Result<Self> {
         let snapshot_dir = data_dir.join("snapshots");
         let metadata_path = snapshot_dir.join("metadata").join("snapshots.json");
-        
+
         tokio::fs::create_dir_all(snapshot_dir.join("memory")).await?;
         tokio::fs::create_dir_all(snapshot_dir.join("metadata")).await?;
 
@@ -225,7 +231,7 @@ impl SnapshotManager {
     pub async fn with_zfs_pool(data_dir: &Path, zfs_pool: &str) -> anyhow::Result<Self> {
         let snapshot_dir = data_dir.join("snapshots");
         let metadata_path = snapshot_dir.join("metadata").join("snapshots.json");
-        
+
         tokio::fs::create_dir_all(snapshot_dir.join("memory")).await?;
         tokio::fs::create_dir_all(snapshot_dir.join("metadata")).await?;
 
@@ -259,12 +265,12 @@ impl SnapshotManager {
     async fn save_metadata(&self) -> anyhow::Result<()> {
         let meta = self.metadata.read().await;
         let content = serde_json::to_string_pretty(&*meta)?;
-        
+
         // Ensure parent directory exists
         if let Some(parent) = self.metadata_path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
-        
+
         tokio::fs::write(&self.metadata_path, content).await?;
         Ok(())
     }
@@ -304,17 +310,18 @@ impl SnapshotManager {
 
         // 1. Pause VM to ensure consistency
         debug!("Pausing VM for snapshot");
-        vmm_manager.pause(app_id).await
-            .map_err(|e| {
-                error!("Failed to pause VM for snapshot: {}", e);
-                e
-            })?;
+        vmm_manager.pause(app_id).await.map_err(|e| {
+            error!("Failed to pause VM for snapshot: {}", e);
+            e
+        })?;
 
         // Track if we need to resume on error
         let mut should_resume = true;
 
         // 2. Take memory snapshot
-        let memory_result = vmm_manager.snapshot_vm_state(app_id, mem_path.clone(), snap_path.clone()).await;
+        let memory_result = vmm_manager
+            .snapshot_vm_state(app_id, mem_path.clone(), snap_path.clone())
+            .await;
         if let Err(e) = &memory_result {
             error!("Failed to create memory snapshot: {}", e);
             // Try to resume VM on error
@@ -348,11 +355,10 @@ impl SnapshotManager {
         // 4. Resume VM
         if should_resume {
             debug!("Resuming VM after snapshot");
-            vmm_manager.resume(app_id).await
-                .map_err(|e| {
-                    error!("Failed to resume VM after snapshot: {}", e);
-                    e
-                })?;
+            vmm_manager.resume(app_id).await.map_err(|e| {
+                error!("Failed to resume VM after snapshot: {}", e);
+                e
+            })?;
         }
 
         // Calculate total size
@@ -376,7 +382,7 @@ impl SnapshotManager {
         }
 
         let now = Utc::now();
-        
+
         // Store metadata
         let snapshot_metadata = SnapshotMetadata {
             id: snapshot_id.clone(),
@@ -430,7 +436,10 @@ impl SnapshotManager {
         snapshot_name: &str,
     ) -> anyhow::Result<AgentSnapshotInfo> {
         let snapshot_id = format!("{}-{}", snapshot_name, Uuid::new_v4());
-        info!("Creating disk-only snapshot {} for app {}", snapshot_id, app_id);
+        info!(
+            "Creating disk-only snapshot {} for app {}",
+            snapshot_id, app_id
+        );
 
         let disk_snapshot = if let Some(ref zfs) = self.zfs {
             zfs.create_disk_snapshot(app_id, &snapshot_id).await?
@@ -497,14 +506,18 @@ impl SnapshotManager {
         snapshot_id: &str,
         new_app_id: Uuid,
     ) -> anyhow::Result<()> {
-        info!("Restoring snapshot {} to new app {}", snapshot_id, new_app_id);
-        
+        info!(
+            "Restoring snapshot {} to new app {}",
+            snapshot_id, new_app_id
+        );
+
         let meta = self.metadata.read().await;
-        let snapshot_info = meta.get(snapshot_id)
+        let snapshot_info = meta
+            .get(snapshot_id)
             .ok_or_else(|| anyhow::anyhow!("Snapshot metadata not found for {}", snapshot_id))?
             .clone();
         drop(meta);
-        
+
         // Handle disk snapshot restoration
         if let Some(disk_snap) = &snapshot_info.disk_snapshot {
             if let Some(ref zfs) = self.zfs {
@@ -528,26 +541,39 @@ impl SnapshotManager {
         if snapshot_info.includes_memory {
             let mem_path = PathBuf::from(&snapshot_info.memory_path);
             let snap_path = PathBuf::from(&snapshot_info.snapshot_path);
-            
+
             if !mem_path.exists() || !snap_path.exists() {
-                anyhow::bail!("Snapshot files missing on disk: {:?}, {:?}", mem_path, snap_path);
+                anyhow::bail!(
+                    "Snapshot files missing on disk: {:?}, {:?}",
+                    mem_path,
+                    snap_path
+                );
             }
 
-            vmm_manager.restore_from_snapshot(new_app_id, mem_path, snap_path).await?;
+            vmm_manager
+                .restore_from_snapshot(new_app_id, mem_path, snap_path)
+                .await?;
         } else {
             // For disk-only snapshots, we need to start a fresh VM
             // The disk has been cloned, but we need configuration
             info!("Disk-only snapshot restored. VM needs to be started with appropriate configuration.");
         }
-        
-        info!("Successfully restored snapshot {} to app {}", snapshot_id, new_app_id);
+
+        info!(
+            "Successfully restored snapshot {} to app {}",
+            snapshot_id, new_app_id
+        );
         Ok(())
     }
 
     /// List all snapshots, optionally filtered by app ID
-    pub async fn list_snapshots(&self, app_id: Option<Uuid>) -> anyhow::Result<Vec<AgentSnapshotInfo>> {
+    pub async fn list_snapshots(
+        &self,
+        app_id: Option<Uuid>,
+    ) -> anyhow::Result<Vec<AgentSnapshotInfo>> {
         let meta = self.metadata.read().await;
-        Ok(meta.values()
+        Ok(meta
+            .values()
             .filter(|m| app_id.map_or(true, |id| m.app_id == id))
             .map(|m| AgentSnapshotInfo {
                 id: m.id.clone(),
@@ -568,7 +594,7 @@ impl SnapshotManager {
     /// Removes both memory files and ZFS snapshots
     pub async fn delete_snapshot(&self, snapshot_id: &str) -> anyhow::Result<()> {
         info!("Deleting snapshot {}", snapshot_id);
-        
+
         let mut meta = self.metadata.write().await;
         if let Some(m) = meta.remove(snapshot_id) {
             // Delete memory snapshot files
@@ -607,7 +633,10 @@ impl SnapshotManager {
     }
 
     /// Get snapshot info by ID
-    pub async fn get_snapshot(&self, snapshot_id: &str) -> anyhow::Result<Option<AgentSnapshotInfo>> {
+    pub async fn get_snapshot(
+        &self,
+        snapshot_id: &str,
+    ) -> anyhow::Result<Option<AgentSnapshotInfo>> {
         let meta = self.metadata.read().await;
         Ok(meta.get(snapshot_id).map(|m| AgentSnapshotInfo {
             id: m.id.clone(),

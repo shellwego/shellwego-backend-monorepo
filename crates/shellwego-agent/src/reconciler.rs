@@ -1,14 +1,14 @@
 //! Desired state reconciler
-//! 
+//!
 //! Continuously compares actual state (running VMs) with desired state
 //! (from control plane) and converges them. Kubernetes-style but lighter.
 
 use tokio::time::{interval, Duration};
-use tracing::{info, debug, error};
+use tracing::{debug, error, info};
 
+use crate::daemon::{DesiredApp, StateClient};
+use crate::vmm::{DriveConfig, MicrovmConfig, NetworkInterface, VmmManager};
 use shellwego_network::{CniNetwork, NetworkConfig};
-use crate::vmm::{self, VmmManager, MicrovmConfig};
-use crate::daemon::{StateClient, DesiredApp};
 
 /// Reconciler enforces desired state
 #[derive(Clone)]
@@ -20,17 +20,25 @@ pub struct Reconciler {
 }
 
 impl Reconciler {
-    pub fn new(vmm: VmmManager, network: std::sync::Arc<CniNetwork>, state_client: StateClient) -> Self {
-        Self { vmm, network, state_client }
+    pub fn new(
+        vmm: VmmManager,
+        network: std::sync::Arc<CniNetwork>,
+        state_client: StateClient,
+    ) -> Self {
+        Self {
+            vmm,
+            network,
+            state_client,
+        }
     }
 
     /// Main reconciliation loop
     pub async fn run(&self) -> anyhow::Result<()> {
         let mut ticker = interval(Duration::from_secs(10));
-        
+
         loop {
             ticker.tick().await;
-            
+
             match self.reconcile().await {
                 Ok(changes) => {
                     if changes > 0 {
@@ -51,12 +59,12 @@ impl Reconciler {
     async fn reconcile(&self) -> anyhow::Result<usize> {
         // Fetch desired state from control plane
         let desired = self.state_client.get_desired_state().await?;
-        
+
         // Get actual state from VMM
         let actual = self.vmm.list_running().await?;
-        
+
         let mut changes = 0;
-        
+
         // 1. Create missing apps
         for app in &desired.apps {
             if !actual.iter().any(|vm| vm.app_id == app.app_id) {
@@ -73,7 +81,7 @@ impl Reconciler {
                 }
             }
         }
-        
+
         // 2. Remove extraneous apps
         for vm in &actual {
             if !desired.apps.iter().any(|a| a.app_id == vm.app_id) {
@@ -82,10 +90,10 @@ impl Reconciler {
                 changes += 1;
             }
         }
-        
+
         // 3. Reconcile volumes
         self.reconcile_volumes(&desired.apps).await?;
-        
+
         // 4. Network policies
         self.reconcile_network_policies(&desired.apps).await?;
 
@@ -98,7 +106,7 @@ impl Reconciler {
 
         // Root drive (container image as ext4)
         let rootfs_path = self.prepare_rootfs(&app.image).await?;
-        drives.push(vmm::DriveConfig {
+        drives.push(DriveConfig {
             drive_id: "rootfs".to_string(),
             path_on_host: rootfs_path,
             is_root_device: true,
@@ -108,7 +116,7 @@ impl Reconciler {
 
         // Add volume mounts
         for vol in &app.volumes {
-            drives.push(vmm::DriveConfig {
+            drives.push(DriveConfig {
                 drive_id: format!("vol-{}", vol.volume_id),
                 path_on_host: vol.device.clone().into(),
                 is_root_device: false,
@@ -122,20 +130,23 @@ impl Reconciler {
         drives.push(secret_drive);
 
         // Delegating network setup to shellwego-network
-        let net_setup = self.network.setup(&NetworkConfig {
-            app_id: app.app_id,
-            vm_id: uuid::Uuid::new_v4(),
-            bridge_name: self.network.bridge_name().to_string(),
-            tap_name: format!("tap-{}", &app.app_id.to_string()[..8]),
-            guest_mac: shellwego_network::generate_mac(&app.app_id),
-            guest_ip: std::net::Ipv4Addr::UNSPECIFIED, // IPAM handles this
-            host_ip: std::net::Ipv4Addr::UNSPECIFIED,
-            subnet: "10.0.0.0/16".parse().unwrap(),
-            gateway: "10.0.0.1".parse().unwrap(),
-            mtu: 1500,
-            bandwidth_limit_mbps: Some(100),
-        }).await?;
-        
+        let net_setup = self
+            .network
+            .setup(&NetworkConfig {
+                app_id: app.app_id,
+                vm_id: uuid::Uuid::new_v4(),
+                bridge_name: self.network.bridge_name().to_string(),
+                tap_name: format!("tap-{}", &app.app_id.to_string()[..8]),
+                guest_mac: shellwego_network::generate_mac(&app.app_id),
+                guest_ip: std::net::Ipv4Addr::UNSPECIFIED, // IPAM handles this
+                host_ip: std::net::Ipv4Addr::UNSPECIFIED,
+                subnet: "10.0.0.0/16".parse().unwrap(),
+                gateway: "10.0.0.1".parse().unwrap(),
+                mtu: 1500,
+                bandwidth_limit_mbps: Some(100),
+            })
+            .await?;
+
         let config = MicrovmConfig {
             app_id: app.app_id,
             vm_id: uuid::Uuid::new_v4(),
@@ -148,7 +159,7 @@ impl Reconciler {
                 net_setup.guest_ip, net_setup.host_ip
             ),
             drives,
-            network_interfaces: vec![crate::vmm::NetworkInterface {
+            network_interfaces: vec![NetworkInterface {
                 iface_id: "eth0".into(),
                 host_dev_name: net_setup.tap_device,
                 guest_mac: shellwego_network::generate_mac(&app.app_id),
@@ -159,42 +170,51 @@ impl Reconciler {
             }],
             vsock_path: format!("/var/run/shellwego/{}.sock", app.app_id),
         };
-        
+
         self.vmm.start(config).await?;
-        
+
         // TODO: Wait for health check before marking ready
-        
+
         Ok(())
     }
 
     async fn prepare_rootfs(&self, image: &str) -> anyhow::Result<std::path::PathBuf> {
         let safe_name = image.replace(|c: char| !c.is_alphanumeric(), "_");
-        let image_path = std::path::PathBuf::from(format!("/var/lib/shellwego/images/{}.ext4", safe_name));
-        
+        let image_path =
+            std::path::PathBuf::from(format!("/var/lib/shellwego/images/{}.ext4", safe_name));
+
         if image_path.exists() {
             Ok(image_path)
         } else {
             // Attempt to "pull" (copy from base for prototype)
-            info!("Image {} not found, attempting to provision from base...", image);
-            
+            info!(
+                "Image {} not found, attempting to provision from base...",
+                image
+            );
+
             let base = std::path::PathBuf::from("/var/lib/shellwego/images/base.ext4");
             if base.exists() {
-                tokio::fs::copy(&base, &image_path).await
+                tokio::fs::copy(&base, &image_path)
+                    .await
                     .map_err(|e| anyhow::anyhow!("Failed to provision image from base: {}", e))?;
                 Ok(image_path)
             } else {
                 // Last resort: check if an absolute path was provided (dev mode)
                 let path = std::path::PathBuf::from(image);
                 if path.exists() {
-                     Ok(path)
+                    Ok(path)
                 } else {
-                    anyhow::bail!("Image {} not found and no base image available at {:?}", image, base);
+                    anyhow::bail!(
+                        "Image {} not found and no base image available at {:?}",
+                        image,
+                        base
+                    );
                 }
             }
         }
     }
 
-    async fn setup_secrets_tmpfs(&self, app: &DesiredApp) -> anyhow::Result<vmm::DriveConfig> {
+    async fn setup_secrets_tmpfs(&self, app: &DesiredApp) -> anyhow::Result<DriveConfig> {
         let run_dir = format!("/run/shellwego/secrets/{}", app.app_id);
 
         tokio::fs::create_dir_all(&run_dir).await?;
@@ -203,14 +223,14 @@ impl Reconciler {
         let content = serde_json::to_vec(&app.env)?;
 
         tokio::fs::write(&secrets_path, content).await?;
-        
+
         // Ensure strict permissions for secrets
         use std::os::unix::fs::PermissionsExt;
         let mut perms = tokio::fs::metadata(&run_dir).await?.permissions();
         perms.set_mode(0o700); // Only owner can read
         tokio::fs::set_permissions(&run_dir, perms).await?;
 
-        Ok(vmm::DriveConfig {
+        Ok(DriveConfig {
             drive_id: "secrets".to_string(),
             path_on_host: secrets_path,
             is_root_device: false,
@@ -223,12 +243,12 @@ impl Reconciler {
     pub async fn check_image_updates(&self, app: &DesiredApp) -> anyhow::Result<bool> {
         // In a real registry, we'd query the manifest digest.
         // Here we check if the file modified time changed or if the name implies a tag change.
-        
-        // For now, we assume if the App ID exists but the requested image is different 
+
+        // For now, we assume if the App ID exists but the requested image is different
         // from what's running, we return true.
         // Since we don't store the running image in VmmManager yet, we rely on Reconciler logic:
         // If the file on disk has changed recently, we might trigger update.
-        
+
         // Simplified: Return false until we persist running image version in VMM state.
         Ok(false)
     }
@@ -274,4 +294,3 @@ impl Reconciler {
         Ok(())
     }
 }
-

@@ -1,37 +1,37 @@
 //! WebAssembly runtime for lightweight workloads
-//! 
+//!
 //! Alternative to Firecracker for sub-10ms cold starts.
 
-use thiserror::Error;
 use std::sync::Arc;
-use wasmtime::{Linker, Store};
-use wasmtime_wasi::{WasiCtx, WasiCtxBuilder};
+use thiserror::Error;
 use tokio::sync::Mutex;
 use wasi_common::pipe::WritePipe;
+use wasmtime::{Linker, Store};
+use wasmtime_wasi::{WasiCtx, WasiCtxBuilder};
 
 pub mod runtime;
 use runtime::WasmtimeRuntime;
 
 // Re-export types from schema
-pub use shellwego_schema::{WasmRuntimeConfig, WasmRuntimeStats, WasmExitStatus};
+pub use shellwego_schema::{WasmExitStatus, WasmRuntimeConfig, WasmRuntimeStats};
 
 #[derive(Error, Debug)]
 pub enum WasmError {
     #[error("Module compilation failed: {0}")]
     CompileError(String),
-    
+
     #[error("Instantiation failed: {0}")]
     InstantiateError(String),
-    
+
     #[error("Execution error: {0}")]
     ExecutionError(String),
-    
+
     #[error("Resource limit exceeded: {0}")]
     ResourceLimit(String),
-    
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
-    
+
     #[error("Unknown error: {0}")]
     Other(String),
 }
@@ -68,7 +68,7 @@ impl WasmRuntime {
     ) -> Result<WasmInstance, WasmError> {
         let engine = self.runtime.engine();
         let mut linker = Linker::new(engine);
-        
+
         // Enable WASI
         wasmtime_wasi::add_to_linker(&mut linker, |s: &mut WasmContext| &mut s.wasi)
             .map_err(|e| WasmError::InstantiateError(e.to_string()))?;
@@ -76,24 +76,29 @@ impl WasmRuntime {
         // Setup Pipes
         let stdout = WritePipe::new_in_memory();
         let stderr = WritePipe::new_in_memory();
-        
+
         // Setup WASI context
         let mut builder = WasiCtxBuilder::new();
         builder
             .stdout(Box::new(stdout.clone()))
             .stderr(Box::new(stderr.clone()))
-            .args(args).map_err(|e| WasmError::InstantiateError(e.to_string()))?
-            .envs(env_vars).map_err(|e| WasmError::InstantiateError(e.to_string()))?;
+            .args(args)
+            .map_err(|e| WasmError::InstantiateError(e.to_string()))?
+            .envs(env_vars)
+            .map_err(|e| WasmError::InstantiateError(e.to_string()))?;
 
         let wasi = builder.build();
         let ctx = WasmContext { wasi };
-        
-        let mut store = Store::new(engine, ctx);
-        
-        // Set limits (e.g. 500ms CPU time approx)
-        store.add_fuel(10_000_000).map_err(|e| WasmError::ResourceLimit(e.to_string()))?;
 
-        let instance = linker.instantiate(&mut store, &module.inner)
+        let mut store = Store::new(engine, ctx);
+
+        // Set limits (e.g. 500ms CPU time approx)
+        store
+            .add_fuel(10_000_000)
+            .map_err(|e| WasmError::ResourceLimit(e.to_string()))?;
+
+        let instance = linker
+            .instantiate(&mut store, &module.inner)
             .map_err(|e| WasmError::InstantiateError(e.to_string()))?;
 
         Ok(WasmInstance {
@@ -128,19 +133,27 @@ impl WasmInstance {
     /// This runs the `_start` function of the WASI module
     pub async fn wait(self, _timeout: std::time::Duration) -> Result<WasmExitStatus, WasmError> {
         let mut store = self.store.lock().await;
-        
+
         // Get the entry point (usually _start for WASI command modules)
-        let func = self.instance.get_typed_func::<(), ()>(&mut *store, "_start")
+        let func = self
+            .instance
+            .get_typed_func::<(), ()>(&mut *store, "_start")
             .map_err(|_| WasmError::ExecutionError("Missing _start function".to_string()))?;
-            
+
         // TODO: Run in a separate thread/task with timeout to avoid blocking executor
         // For now, we run directly (blocking)
         match func.call(&mut *store, ()) {
-            Ok(_) => Ok(WasmExitStatus { success: true, code: 0 }),
+            Ok(_) => Ok(WasmExitStatus {
+                success: true,
+                code: 0,
+            }),
             Err(e) => {
                 // Check if it's a clean exit (WASI exit)
                 if let Some(i32_exit) = e.downcast_ref::<wasmtime_wasi::I32Exit>() {
-                    Ok(WasmExitStatus { success: i32_exit.0 == 0, code: i32_exit.0 })
+                    Ok(WasmExitStatus {
+                        success: i32_exit.0 == 0,
+                        code: i32_exit.0,
+                    })
                 } else {
                     Err(WasmError::ExecutionError(e.to_string()))
                 }
@@ -150,10 +163,10 @@ impl WasmInstance {
 
     /// Retrieve stdout content
     pub async fn get_stdout(&self) -> Vec<u8> {
-        // In a real stream, we'd read from the pipe. 
+        // In a real stream, we'd read from the pipe.
         // WritePipe::try_into_inner is complex with Arc, so we assume we can read the buffer.
         // For this impl, we just stub it as the pipe logic in wasi-common is involved.
-        Vec::new() 
+        Vec::new()
     }
 }
 

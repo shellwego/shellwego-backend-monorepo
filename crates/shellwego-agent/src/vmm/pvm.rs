@@ -8,9 +8,9 @@
 //!
 //! Reference: https://blog.alexellis.io/how-to-run-firecracker-without-kvm-on-regular-cloud-vms
 
+use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use anyhow::{Context, Result};
 use tracing::{debug, info, warn};
 
 /// PVM configuration options
@@ -250,12 +250,18 @@ pub fn estimate_pvm_memory_overhead(configured_memory_mb: u64) -> u64 {
 pub fn validate_pvm_config(config: &super::MicrovmConfig) -> Result<()> {
     // Memory must be at least 64MB
     if config.memory_mb < 64 {
-        anyhow::bail!("PVM requires at least 64MB of memory, got {}MB", config.memory_mb);
+        anyhow::bail!(
+            "PVM requires at least 64MB of memory, got {}MB",
+            config.memory_mb
+        );
     }
 
     // Memory should not exceed reasonable limits (e.g., 32GB per VM)
     if config.memory_mb > 32 * 1024 {
-        warn!("PVM memory allocation ({}) exceeds recommended maximum (32GB)", config.memory_mb);
+        warn!(
+            "PVM memory allocation ({}) exceeds recommended maximum (32GB)",
+            config.memory_mb
+        );
     }
 
     // CPU shares should be reasonable
@@ -318,13 +324,19 @@ mod tests {
         let config = PvmConfig::default();
         assert!(config.enable_ksm);
         assert!((config.memory_overcommit - 1.5).abs() < 0.01);
-        assert_eq!(config.binary_path, PathBuf::from("/usr/local/bin/firecracker-pvm"));
+        assert_eq!(
+            config.binary_path,
+            PathBuf::from("/usr/local/bin/firecracker-pvm")
+        );
     }
 
     #[test]
     fn test_pvm_config_with_binary() {
         let config = PvmConfig::with_binary(PathBuf::from("/custom/path/to/firecracker"));
-        assert_eq!(config.binary_path, PathBuf::from("/custom/path/to/firecracker"));
+        assert_eq!(
+            config.binary_path,
+            PathBuf::from("/custom/path/to/firecracker")
+        );
         // Other defaults should still apply
         assert!(config.enable_ksm);
         assert!((config.memory_overcommit - 1.5).abs() < 0.01);
@@ -379,9 +391,10 @@ mod tests {
         // Should have some reasonable values based on the system
         assert!(recommendations.recommended_max_vms > 0);
         // max_memory_for_vms_mb depends on /proc/meminfo, might be 0 if not readable
-        println!("Recommendations: max_memory={}MB, max_vms={}", 
-                 recommendations.max_memory_for_vms_mb, 
-                 recommendations.recommended_max_vms);
+        println!(
+            "Recommendations: max_memory={}MB, max_vms={}",
+            recommendations.max_memory_for_vms_mb, recommendations.recommended_max_vms
+        );
     }
 
     // ============================================
@@ -549,12 +562,12 @@ mod tests {
     fn test_is_pvm_available_with_env_override() {
         // Set env override
         std::env::set_var("SHELLWEGO_PVM_AVAILABLE", "1");
-        
+
         // The function checks binary path first, but env override in lib.rs is_pvm_available
         // This tests the standalone is_pvm_available in pvm.rs which checks the binary
         let result = is_pvm_available(Path::new("/nonexistent/binary"));
         assert!(!result); // Still false because binary doesn't exist
-        
+
         std::env::remove_var("SHELLWEGO_PVM_AVAILABLE");
     }
 
@@ -720,7 +733,11 @@ mod tests {
                 cpu_shares: shares,
                 ..Default::default()
             };
-            assert!(validate_pvm_config(&config).is_ok(), "CPU shares {} should be valid", shares);
+            assert!(
+                validate_pvm_config(&config).is_ok(),
+                "CPU shares {} should be valid",
+                shares
+            );
         }
     }
 
@@ -760,7 +777,11 @@ mod tests {
                 ..Default::default()
             };
             adjust_config_for_pvm(&mut config);
-            assert!(config.memory_mb >= 64, "Memory {} should be adjusted to at least 64", mem);
+            assert!(
+                config.memory_mb >= 64,
+                "Memory {} should be adjusted to at least 64",
+                mem
+            );
         }
     }
 
@@ -821,7 +842,10 @@ mod tests {
         };
         let result = setup_pvm_environment(&config);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("PVM binary not found"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("PVM binary not found"));
     }
 
     // ============================================
@@ -846,11 +870,17 @@ mod tests {
         for size in sizes {
             let overhead = estimate_pvm_memory_overhead(size);
             let percentage = (overhead as f64 / size as f64) * 100.0;
-            println!("Memory: {}MB, Overhead: {}MB ({:.1}%)", size, overhead, percentage);
+            println!(
+                "Memory: {}MB, Overhead: {}MB ({:.1}%)",
+                size, overhead, percentage
+            );
 
             // Overhead should be reasonable (15-20% range)
             assert!(overhead >= 3, "Overhead should be at least base 3MB");
-            assert!(percentage < 25.0, "Overhead percentage should be reasonable");
+            assert!(
+                percentage < 25.0,
+                "Overhead percentage should be reasonable"
+            );
         }
     }
 
@@ -894,8 +924,15 @@ mod tests {
         if let Some(binary_path) = real_firecracker_binary() {
             let result = is_pvm_available(&binary_path);
             println!("Testing with real binary at: {:?}", binary_path);
-            assert!(result, "PVM should be available with real binary at {:?}", binary_path);
-            println!("✓ Real Firecracker binary detected successfully at {:?}", binary_path);
+            assert!(
+                result,
+                "PVM should be available with real binary at {:?}",
+                binary_path
+            );
+            println!(
+                "✓ Real Firecracker binary detected successfully at {:?}",
+                binary_path
+            );
         } else {
             panic!("No real Firecracker binary found! Install firecracker to run this test.");
         }
@@ -911,7 +948,11 @@ mod tests {
             };
 
             let result = setup_pvm_environment(&config);
-            assert!(result.is_ok(), "setup_pvm_environment should succeed with real binary: {:?}", result);
+            assert!(
+                result.is_ok(),
+                "setup_pvm_environment should succeed with real binary: {:?}",
+                result
+            );
             println!("✓ PVM environment setup succeeded with real binary");
         } else {
             panic!("No real Firecracker binary found!");
@@ -922,24 +963,30 @@ mod tests {
     fn test_real_firecracker_binary_version_check() {
         if let Some(binary_path) = real_firecracker_binary() {
             // Actually run the real binary with --version
-            let output = Command::new(&binary_path)
-                .arg("--version")
-                .output();
+            let output = Command::new(&binary_path).arg("--version").output();
 
-            assert!(output.is_ok(), "Should be able to execute real firecracker binary");
+            assert!(
+                output.is_ok(),
+                "Should be able to execute real firecracker binary"
+            );
             let output = output.unwrap();
-            assert!(output.status.success(), "Real binary should return success for --version");
-            
+            assert!(
+                output.status.success(),
+                "Real binary should return success for --version"
+            );
+
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
             println!("✓ Real Firecracker version: {}", stdout.trim());
             if !stderr.trim().is_empty() {
                 println!("  Stderr: {}", stderr.trim());
             }
-            
+
             // Verify version format
-            assert!(stdout.contains("Firecracker") || stderr.contains("Firecracker"), 
-                    "Output should contain 'Firecracker'");
+            assert!(
+                stdout.contains("Firecracker") || stderr.contains("Firecracker"),
+                "Output should contain 'Firecracker'"
+            );
         } else {
             panic!("No real Firecracker binary found!");
         }
@@ -948,17 +995,20 @@ mod tests {
     #[test]
     fn test_real_firecracker_help_output() {
         if let Some(binary_path) = real_firecracker_binary() {
-            let output = Command::new(&binary_path)
-                .arg("--help")
-                .output();
+            let output = Command::new(&binary_path).arg("--help").output();
 
-            assert!(output.is_ok(), "Should be able to get help from real binary");
+            assert!(
+                output.is_ok(),
+                "Should be able to get help from real binary"
+            );
             let output = output.unwrap();
             let stdout = String::from_utf8_lossy(&output.stdout);
-            
+
             // Verify it's a valid firecracker binary by checking help content
-            assert!(stdout.contains("api-sock") || stdout.contains("config-file"),
-                    "Help should contain expected firecracker options");
+            assert!(
+                stdout.contains("api-sock") || stdout.contains("config-file"),
+                "Help should contain expected firecracker options"
+            );
             println!("✓ Real Firecracker help output verified");
         } else {
             panic!("No real Firecracker binary found!");
@@ -972,7 +1022,10 @@ mod tests {
             let content = std::fs::read_to_string(ksm_run);
             assert!(content.is_ok(), "Should be able to read KSM status");
             let content = content.unwrap();
-            println!("✓ KSM is available on this system, current state: {}", content.trim());
+            println!(
+                "✓ KSM is available on this system, current state: {}",
+                content.trim()
+            );
         } else {
             println!("KSM not available on this system (normal for containers)");
         }
@@ -983,10 +1036,13 @@ mod tests {
         // Test that get_recommended_settings can actually read /proc/meminfo
         let meminfo = std::fs::read_to_string("/proc/meminfo");
         assert!(meminfo.is_ok(), "Should be able to read /proc/meminfo");
-        
+
         let content = meminfo.unwrap();
-        assert!(content.contains("MemTotal:"), "meminfo should contain MemTotal");
-        
+        assert!(
+            content.contains("MemTotal:"),
+            "meminfo should contain MemTotal"
+        );
+
         // Parse total memory
         for line in content.lines() {
             if line.starts_with("MemTotal:") {

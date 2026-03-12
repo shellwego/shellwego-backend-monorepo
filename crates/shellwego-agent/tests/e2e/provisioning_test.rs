@@ -63,10 +63,7 @@ fn print_mode() {
         Ok(cap) => {
             println!(
                 "Detected virtualization mode: {} (KVM: {}, PVM: {}, WASM: {})",
-                cap.virtualization_mode,
-                cap.kvm_available,
-                cap.pvm_available,
-                cap.wasm_available
+                cap.virtualization_mode, cap.kvm_available, cap.pvm_available, cap.wasm_available
             );
         }
         Err(e) => {
@@ -117,13 +114,13 @@ async fn test_cold_start_gauntlet_tc_e2e_1() {
     let app_id = Uuid::new_v4();
     let vm_id = Uuid::new_v4();
 
-    let metrics = Arc::new(shellwego_agent::metrics::MetricsCollector::new(Uuid::new_v4()));
+    let metrics = Arc::new(shellwego_agent::metrics::MetricsCollector::new(
+        Uuid::new_v4(),
+    ));
     let vmm_manager = VmmManager::new(&test_config(), metrics)
         .await
         .expect("VMM init failed");
-    let zfs_manager = ZfsManager::new("shellwego")
-        .await
-        .expect("ZFS init failed");
+    let zfs_manager = ZfsManager::new("shellwego").await.expect("ZFS init failed");
 
     let rootfs_path = zfs_manager
         .init_app_storage(app_id)
@@ -151,13 +148,19 @@ async fn test_cold_start_gauntlet_tc_e2e_1() {
 
     vmm_manager.start(config).await.expect("Failed to start VM");
 
-    let running = vmm_manager.list_running().await.expect("Failed to list VMs");
+    let running = vmm_manager
+        .list_running()
+        .await
+        .expect("Failed to list VMs");
     assert!(
         running.iter().any(|vm| vm.app_id == app_id),
         "VM should be running"
     );
 
-    let state = vmm_manager.get_state(app_id).await.expect("Failed to get VM state");
+    let state = vmm_manager
+        .get_state(app_id)
+        .await
+        .expect("Failed to get VM state");
     assert!(state.is_some(), "VM state should exist");
 
     let elapsed = start_time.elapsed();
@@ -168,7 +171,10 @@ async fn test_cold_start_gauntlet_tc_e2e_1() {
     );
 
     vmm_manager.stop(app_id).await.expect("Failed to stop VM");
-    zfs_manager.cleanup_app(app_id).await.expect("ZFS cleanup failed");
+    zfs_manager
+        .cleanup_app(app_id)
+        .await
+        .expect("ZFS cleanup failed");
 
     println!("E2E cold start PASSED in {:?}", elapsed);
 }
@@ -202,13 +208,13 @@ async fn test_secret_injection_security_tc_e2e_2() {
         .await
         .expect("Failed to write secrets");
 
-    let metrics = Arc::new(shellwego_agent::metrics::MetricsCollector::new(Uuid::new_v4()));
+    let metrics = Arc::new(shellwego_agent::metrics::MetricsCollector::new(
+        Uuid::new_v4(),
+    ));
     let vmm_manager = VmmManager::new(&test_config(), metrics)
         .await
         .expect("VMM init failed");
-    let zfs_manager = ZfsManager::new("shellwego")
-        .await
-        .expect("ZFS init failed");
+    let zfs_manager = ZfsManager::new("shellwego").await.expect("ZFS init failed");
     let rootfs_path = zfs_manager
         .init_app_storage(app_id)
         .await
@@ -227,11 +233,17 @@ async fn test_secret_injection_security_tc_e2e_2() {
         .await
         .expect("Failed to start VM with secrets");
 
-    let running = vmm_manager.list_running().await.expect("Failed to list VMs");
+    let running = vmm_manager
+        .list_running()
+        .await
+        .expect("Failed to list VMs");
     assert!(running.iter().any(|vm| vm.app_id == app_id));
 
     vmm_manager.stop(app_id).await.expect("Failed to stop VM");
-    zfs_manager.cleanup_app(app_id).await.expect("ZFS cleanup failed");
+    zfs_manager
+        .cleanup_app(app_id)
+        .await
+        .expect("ZFS cleanup failed");
     tokio::fs::remove_dir_all(&secrets_dir).await.ok();
 
     println!("E2E secret injection PASSED");

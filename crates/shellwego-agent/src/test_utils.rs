@@ -106,11 +106,8 @@ pub struct TestFixture {
 impl TestFixture {
     /// Create a new test fixture with a unique temp directory
     pub fn new(name: &str) -> Self {
-        let temp_dir = std::env::temp_dir().join(format!(
-            "shellwego-test-{}-{}",
-            name,
-            uuid::Uuid::new_v4()
-        ));
+        let temp_dir =
+            std::env::temp_dir().join(format!("shellwego-test-{}-{}", name, uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
         Self { temp_dir }
     }
@@ -410,9 +407,7 @@ mod tests {
 
     #[test]
     fn test_config_builder_with_max_microvms() {
-        let config = TestConfigBuilder::new()
-            .with_max_microvms(100)
-            .build();
+        let config = TestConfigBuilder::new().with_max_microvms(100).build();
 
         assert_eq!(config.max_microvms, 100);
     }

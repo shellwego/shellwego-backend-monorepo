@@ -177,10 +177,7 @@ fn test_mac_address_determinism_different_ids() {
 
 #[test]
 fn test_reconciliation_plan_generation() {
-    let desired_apps = vec![
-        Uuid::new_v4(),
-        Uuid::new_v4(),
-    ];
+    let desired_apps = vec![Uuid::new_v4(), Uuid::new_v4()];
     let actual_apps = vec![desired_apps[0]];
 
     let creates: Vec<Uuid> = desired_apps

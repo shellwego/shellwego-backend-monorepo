@@ -1,12 +1,12 @@
+use shellwego_network::{Message, QuicConfig, QuinnClient};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::{interval, Duration};
-use tracing::{info, warn, error};
-use shellwego_network::{QuinnClient, Message, QuicConfig};
+use tracing::{error, info, warn};
 
-use crate::{AgentConfig, Capabilities, DesiredState, DesiredApp, VolumeMount, DesiredVolume};
-use crate::vmm::VmmManager;
 use crate::metrics::MetricsCollector;
+use crate::vmm::VmmManager;
+use crate::{AgentConfig, Capabilities, DesiredApp, DesiredState};
 
 #[derive(Clone)]
 pub struct Daemon {
@@ -46,7 +46,11 @@ impl Daemon {
 
     async fn register(&self) -> anyhow::Result<()> {
         info!("Registering with control plane...");
-        self.quic.lock().await.connect(&self.config.control_plane_url).await?;
+        self.quic
+            .lock()
+            .await
+            .connect(&self.config.control_plane_url)
+            .await?;
 
         let msg = Message::Register {
             hostname: gethostname::gethostname().to_string_lossy().to_string(),
@@ -81,7 +85,12 @@ impl Daemon {
 
             if let Err(e) = self.quic.lock().await.send(msg).await {
                 error!("Heartbeat lost: {}. Reconnecting...", e);
-                let _ = self.quic.lock().await.connect(&self.config.control_plane_url).await;
+                let _ = self
+                    .quic
+                    .lock()
+                    .await
+                    .connect(&self.config.control_plane_url)
+                    .await;
             }
         }
     }
@@ -89,7 +98,9 @@ impl Daemon {
     pub async fn command_consumer(&self) -> anyhow::Result<()> {
         loop {
             match self.quic.lock().await.receive().await {
-                Ok(Message::ScheduleApp { app_id, image: _, .. }) => {
+                Ok(Message::ScheduleApp {
+                    app_id, image: _, ..
+                }) => {
                     info!("CP ordered: Schedule app {}", app_id);
                     // In a full implementation, we would parse the full spec from the message
                     // For now, we update the cache to trigger the reconciler

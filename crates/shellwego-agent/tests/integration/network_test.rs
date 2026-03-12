@@ -2,15 +2,13 @@ use shellwego_network::NetworkConfig;
 use uuid::Uuid;
 
 fn cni_available() -> bool {
-    let output = std::process::Command::new("which")
-        .arg("brctl")
-        .output();
+    let output = std::process::Command::new("which").arg("brctl").output();
 
     if !output.map(|o| o.status.success()).unwrap_or(false) {
         println!("SKIPPING: bridge-utils not installed. Install: sudo apt install bridge-utils");
         return false;
     }
-    
+
     if unsafe { libc::geteuid() } != 0 {
         println!("SKIPPING: Root privileges required for network tests (bridge/tap creation).");
         return false;
@@ -20,7 +18,9 @@ fn cni_available() -> bool {
 
 #[tokio::test]
 async fn test_tap_bridge_connectivity_tc_i3() {
-    if !cni_available() { return; }
+    if !cni_available() {
+        return;
+    }
 
     let bridge_name = "swg-br0-test";
     let tap_name = format!("tap-test-{}", Uuid::new_v4().to_string()[..8].to_string());
@@ -32,7 +32,10 @@ async fn test_tap_bridge_connectivity_tc_i3() {
         .expect("Failed to create bridge");
 
     if !output.status.success() {
-        panic!("Failed to create bridge: {}", String::from_utf8_lossy(&output.stderr));
+        panic!(
+            "Failed to create bridge: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     let _output = std::process::Command::new("ip")
@@ -79,13 +82,23 @@ async fn test_ip_allocation() {
         bandwidth_limit_mbps: Some(100),
     };
 
-    assert!(config.guest_ip.to_string().parse::<std::net::Ipv4Addr>().is_ok());
-    assert!(config.host_ip.to_string().parse::<std::net::Ipv4Addr>().is_ok());
+    assert!(config
+        .guest_ip
+        .to_string()
+        .parse::<std::net::Ipv4Addr>()
+        .is_ok());
+    assert!(config
+        .host_ip
+        .to_string()
+        .parse::<std::net::Ipv4Addr>()
+        .is_ok());
 }
 
 #[tokio::test]
 async fn test_cni_bridge_setup() {
-    if !cni_available() { return; }
+    if !cni_available() {
+        return;
+    }
 
     let bridge_name = format!("swg-br0-{}", Uuid::new_v4().to_string()[..8].to_string());
 
@@ -126,7 +139,9 @@ async fn test_cni_bridge_setup() {
 
 #[tokio::test]
 async fn test_tap_device_creation() {
-    if !cni_available() { return; }
+    if !cni_available() {
+        return;
+    }
 
     let tap_name = format!("tap-test-{}", Uuid::new_v4().to_string()[..8].to_string());
 
@@ -166,7 +181,10 @@ async fn test_ebpf_qos_rules() {
         .output();
 
     if !output.as_ref().map(|o| o.status.success()).unwrap_or(false) {
-        let stderr = output.as_ref().map(|o| String::from_utf8_lossy(&o.stderr).to_string()).unwrap_or_default();
+        let stderr = output
+            .as_ref()
+            .map(|o| String::from_utf8_lossy(&o.stderr).to_string())
+            .unwrap_or_default();
         if stderr.contains("cannot find") {
             assert!(true, "Device doesn't exist, QoS rules cannot be verified");
         }

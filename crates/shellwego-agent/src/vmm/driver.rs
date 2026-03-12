@@ -6,9 +6,9 @@
 
 use anyhow::Context;
 use shellwego_firecracker::models::{
-    BootSource, CacheType, CpuTemplate, Drive, FirecrackerMetrics,
-    InstanceState, IoEngine, MachineConfiguration, Metrics, NetworkInterface,
-    SnapshotCreateParams, SnapshotLoadParams, SnapshotType,
+    BootSource, CacheType, CpuTemplate, Drive, FirecrackerMetrics, InstanceState, IoEngine,
+    MachineConfiguration, Metrics, NetworkInterface, SnapshotCreateParams, SnapshotLoadParams,
+    SnapshotType,
 };
 use shellwego_firecracker::vmm::client::FirecrackerClient;
 use std::path::{Path, PathBuf};
@@ -64,7 +64,10 @@ impl FirecrackerDriver {
     }
 
     /// Create a new Firecracker driver with explicit virtualization mode
-    pub async fn with_mode(binary: &PathBuf, mode: crate::VirtualizationMode) -> anyhow::Result<Self> {
+    pub async fn with_mode(
+        binary: &PathBuf,
+        mode: crate::VirtualizationMode,
+    ) -> anyhow::Result<Self> {
         let mut driver = Self::new(binary).await?;
         driver.mode = Some(mode);
         Ok(driver)
@@ -91,9 +94,7 @@ impl FirecrackerDriver {
     /// Internal helper to get the active client or bail
     fn client(&self) -> anyhow::Result<&FirecrackerClient> {
         self.client.as_ref().ok_or_else(|| {
-            anyhow::anyhow!(
-                "Driver not initialized for a socket. Call for_socket() first."
-            )
+            anyhow::anyhow!("Driver not initialized for a socket. Call for_socket() first.")
         })
     }
 
@@ -171,7 +172,9 @@ impl FirecrackerDriver {
                     },
                 )
                 .await
-                .with_context(|| format!("Failed to configure network interface {}", net.iface_id))?;
+                .with_context(|| {
+                    format!("Failed to configure network interface {}", net.iface_id)
+                })?;
         }
 
         Ok(())
@@ -203,17 +206,18 @@ impl FirecrackerDriver {
     }
 
     /// Get instance information
-    pub async fn describe_instance(&self) -> anyhow::Result<shellwego_firecracker::models::InstanceInfo> {
+    pub async fn describe_instance(
+        &self,
+    ) -> anyhow::Result<shellwego_firecracker::models::InstanceInfo> {
         let client = self.client()?;
-        client.describe_instance().await.with_context(|| "Failed to get VM info")
+        client
+            .describe_instance()
+            .await
+            .with_context(|| "Failed to get VM info")
     }
 
     /// Create a snapshot
-    pub async fn create_snapshot(
-        &self,
-        mem_path: &str,
-        snapshot_path: &str,
-    ) -> anyhow::Result<()> {
+    pub async fn create_snapshot(&self, mem_path: &str, snapshot_path: &str) -> anyhow::Result<()> {
         let client = self.client()?;
         client
             .create_snapshot(SnapshotCreateParams {
@@ -293,15 +297,25 @@ impl FirecrackerDriver {
             serde_json::from_str(&content).with_context(|| "Failed to parse metrics JSON")?;
 
         // Aggregate block metrics
-        let (block_read, block_write) = fc_metrics.block
+        let (block_read, block_write) = fc_metrics
+            .block
             .as_ref()
-            .map(|b| b.values().fold((0, 0), |acc, m| (acc.0 + m.read_bytes, acc.1 + m.write_bytes)))
+            .map(|b| {
+                b.values().fold((0, 0), |acc, m| {
+                    (acc.0 + m.read_bytes, acc.1 + m.write_bytes)
+                })
+            })
             .unwrap_or((0, 0));
 
         // Aggregate network metrics
-        let (net_rx, net_tx) = fc_metrics.net
+        let (net_rx, net_tx) = fc_metrics
+            .net
             .as_ref()
-            .map(|n| n.values().fold((0, 0), |acc, m| (acc.0 + m.rx_bytes_count, acc.1 + m.tx_bytes_count)))
+            .map(|n| {
+                n.values().fold((0, 0), |acc, m| {
+                    (acc.0 + m.rx_bytes_count, acc.1 + m.tx_bytes_count)
+                })
+            })
             .unwrap_or((0, 0));
 
         Ok(super::MicrovmMetrics {

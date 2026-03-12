@@ -17,12 +17,12 @@ mod driver;
 mod pvm;
 
 // Re-export types from schema (these were moved there)
-pub use shellwego_schema::{
-    DriveConfig, MicrovmConfig, MicrovmMetrics, MicrovmState, NetworkInterface, 
-    RateLimiterConfig, MicrovmSummary, VirtualizationMode
-};
 pub use driver::FirecrackerDriver;
 pub use pvm::{PvmConfig, PvmRecommendations};
+pub use shellwego_schema::{
+    DriveConfig, MicrovmConfig, MicrovmMetrics, MicrovmState, MicrovmSummary, NetworkInterface,
+    RateLimiterConfig, VirtualizationMode,
+};
 
 use crate::metrics::MetricsCollector;
 use crate::{detect_capabilities, AgentConfig};
@@ -65,11 +65,16 @@ impl VmmManager {
         let capabilities = detect_capabilities()?;
 
         // Determine virtualization mode (respect force_mode if set)
-        let mode = config.force_mode.unwrap_or(capabilities.virtualization_mode);
+        let mode = config
+            .force_mode
+            .unwrap_or(capabilities.virtualization_mode);
 
         info!(
             "Initializing VMM manager with {} mode (KVM: {}, PVM: {}, WASM: {})",
-            mode, capabilities.kvm_available, capabilities.pvm_available, capabilities.wasm_available
+            mode,
+            capabilities.kvm_available,
+            capabilities.pvm_available,
+            capabilities.wasm_available
         );
 
         // Get the appropriate binary for this mode
@@ -152,9 +157,7 @@ impl VmmManager {
             VirtualizationMode::Kvm | VirtualizationMode::Pvm => {
                 self.start_firecracker_vm(config).await
             }
-            VirtualizationMode::Wasm => {
-                self.start_wasm_function(config).await
-            }
+            VirtualizationMode::Wasm => self.start_wasm_function(config).await,
         }
     }
 
@@ -211,15 +214,11 @@ impl VmmManager {
 
         info!(
             "Started {} microVM {} for app {} ({}MB, {} CPU) in {:?}",
-            self.mode,
-            config.vm_id,
-            config.app_id,
-            config.memory_mb,
-            config.cpu_shares,
-            spawn_time
+            self.mode, config.vm_id, config.app_id, config.memory_mb, config.cpu_shares, spawn_time
         );
 
-        self.metrics.record_spawn(spawn_time.as_millis() as u64, true);
+        self.metrics
+            .record_spawn(spawn_time.as_millis() as u64, true);
 
         inner.vms.insert(
             config.app_id,
@@ -310,11 +309,18 @@ impl VmmManager {
             tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
         }
 
-        let driver = self.driver.for_socket(&socket_path).with_metrics_path(metrics_path);
+        let driver = self
+            .driver
+            .for_socket(&socket_path)
+            .with_metrics_path(metrics_path);
 
         // Load Snapshot
         driver
-            .load_snapshot(mem_path.to_str().unwrap(), snap_path.to_str().unwrap(), false)
+            .load_snapshot(
+                mem_path.to_string_lossy().as_ref(),
+                snap_path.to_string_lossy().as_ref(),
+                false,
+            )
             .await?;
 
         // Create placeholder config
@@ -341,7 +347,10 @@ impl VmmManager {
             },
         );
 
-        info!("Restored {} microVM for app {} from snapshot", self.mode, app_id);
+        info!(
+            "Restored {} microVM for app {} from snapshot",
+            self.mode, app_id
+        );
         Ok(())
     }
 
@@ -365,10 +374,7 @@ impl VmmManager {
         let timeout = tokio::time::Duration::from_secs(10);
         let child_opt = vm.process.take();
         if let Some(mut child) = child_opt {
-            if tokio::time::timeout(timeout, child.wait())
-                .await
-                .is_err()
-            {
+            if tokio::time::timeout(timeout, child.wait()).await.is_err() {
                 warn!("Firecracker shutdown timeout, forcing SIGKILL");
                 if let Err(e) = child.start_kill() {
                     error!("Failed to kill firecracker process: {}", e);
@@ -457,7 +463,10 @@ impl VmmManager {
         if let Some(vm) = inner.vms.get(&app_id) {
             let driver = self.driver.for_socket(&vm.socket_path);
             driver
-                .create_snapshot(mem_path.to_str().unwrap(), snap_path.to_str().unwrap())
+                .create_snapshot(
+                    mem_path.to_string_lossy().as_ref(),
+                    snap_path.to_string_lossy().as_ref(),
+                )
                 .await?;
             Ok(())
         } else {
@@ -481,7 +490,10 @@ impl VmmManager {
             anyhow::bail!("Snapshot not supported in WASM mode");
         }
 
-        info!("Creating snapshot for app {} at {:?}", app_id, snapshot_path);
+        info!(
+            "Creating snapshot for app {} at {:?}",
+            app_id, snapshot_path
+        );
 
         // Ensure snapshot directory exists
         if let Some(parent) = snapshot_path.parent() {
@@ -503,10 +515,12 @@ impl VmmManager {
             let inner = self.inner.read().await;
             if let Some(vm) = inner.vms.get(&app_id) {
                 let driver = self.driver.for_socket(&vm.socket_path);
-                driver.create_snapshot(
-                    mem_path.to_str().unwrap(),
-                    snap_path.to_str().unwrap(),
-                ).await
+                driver
+                    .create_snapshot(
+                        mem_path.to_string_lossy().as_ref(),
+                        snap_path.to_string_lossy().as_ref(),
+                    )
+                    .await
             } else {
                 should_resume = false;
                 anyhow::bail!("VM {} not found for snapshotting", app_id);

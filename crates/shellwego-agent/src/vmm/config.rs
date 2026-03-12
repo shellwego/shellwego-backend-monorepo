@@ -5,6 +5,6 @@
 
 // Re-export all config types from schema
 pub use shellwego_schema::{
-    MicrovmConfig, DriveConfig, NetworkInterface, RateLimiterConfig,
-    MicrovmState, MicrovmMetrics, WasmConfig,
+    DriveConfig, MicrovmConfig, MicrovmMetrics, MicrovmState, NetworkInterface, RateLimiterConfig,
+    WasmConfig,
 };

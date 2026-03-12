@@ -1,15 +1,15 @@
 //! Agent-local metrics collection and export
 
-use std::sync::{Arc, Mutex};
-use std::net::SocketAddr;
+use bytes::Bytes;
+use http_body_util::Full;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
-use tokio::net::TcpListener;
-use http_body_util::Full;
-use bytes::Bytes;
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
 use sysinfo::{Disks, System};
+use tokio::net::TcpListener;
 use tracing::info;
 
 /// Agent metrics collector
@@ -25,7 +25,7 @@ impl MetricsCollector {
         let mut system = System::new_all();
         system.refresh_all();
         let disks = Disks::new_with_refreshed_list();
-        
+
         Self {
             node_id,
             system: Arc::new(Mutex::new(system)),
@@ -55,13 +55,16 @@ impl MetricsCollector {
         let total_mem = sys.total_memory();
         let used_mem = sys.used_memory();
         let available_mem = sys.available_memory();
-        
+
         let cpu_usage = sys.global_cpu_info().cpu_usage();
-        
+
         // Simple disk summation
         let disks = self.disks.lock().unwrap();
         let (disk_total, disk_used) = disks.list().iter().fold((0, 0), |acc, disk| {
-            (acc.0 + disk.total_space(), acc.1 + (disk.total_space() - disk.available_space()))
+            (
+                acc.0 + disk.total_space(),
+                acc.1 + (disk.total_space() - disk.available_space()),
+            )
         });
 
         ResourceSnapshot {
@@ -82,31 +85,40 @@ impl MetricsCollector {
         let mut buffer = String::new();
 
         // Node resources
-        let _ = std::fmt::Write::write_fmt(&mut buffer, format_args!(
-            "# HELP shellwego_node_memory_bytes Node memory stats\n\
+        let _ = std::fmt::Write::write_fmt(
+            &mut buffer,
+            format_args!(
+                "# HELP shellwego_node_memory_bytes Node memory stats\n\
              # TYPE shellwego_node_memory_bytes gauge\n\
              shellwego_node_memory_bytes{{type=\"total\"}} {}\n\
              shellwego_node_memory_bytes{{type=\"used\"}} {}\n\
              shellwego_node_memory_bytes{{type=\"available\"}} {}\n",
-            snap.memory_total, snap.memory_used, snap.memory_available
-        ));
+                snap.memory_total, snap.memory_used, snap.memory_available
+            ),
+        );
 
-        let _ = std::fmt::Write::write_fmt(&mut buffer, format_args!(
-            "# HELP shellwego_node_cpu_percent Node CPU usage\n\
+        let _ = std::fmt::Write::write_fmt(
+            &mut buffer,
+            format_args!(
+                "# HELP shellwego_node_cpu_percent Node CPU usage\n\
              # TYPE shellwego_node_cpu_percent gauge\n\
              shellwego_node_cpu_percent {}\n",
-            snap.cpu_usage_percent
-        ));
+                snap.cpu_usage_percent
+            ),
+        );
 
-        let _ = std::fmt::Write::write_fmt(&mut buffer, format_args!(
-            "# HELP shellwego_microvm_count Number of running microVMs\n\
+        let _ = std::fmt::Write::write_fmt(
+            &mut buffer,
+            format_args!(
+                "# HELP shellwego_microvm_count Number of running microVMs\n\
              # TYPE shellwego_microvm_count gauge\n\
              shellwego_microvm_count {}\n",
-            snap.microvm_count
-        ));
+                snap.microvm_count
+            ),
+        );
 
         // TODO: Add metrics per microVM (needs VMM integration here)
-        
+
         buffer
     }
 
@@ -129,30 +141,36 @@ impl MetricsCollector {
 
 /// Start the Prometheus exporter HTTP server
 pub async fn start_metrics_server(
-    collector: Arc<MetricsCollector>, 
-    port: u16
+    collector: Arc<MetricsCollector>,
+    port: u16,
 ) -> Result<(), MetricsError> {
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    let listener = TcpListener::bind(addr).await
+    let listener = TcpListener::bind(addr)
+        .await
         .map_err(|e| MetricsError::ExportFailed(e.to_string()))?;
-        
+
     info!("Metrics server listening on http://{}", addr);
 
     loop {
-        let (stream, _) = listener.accept().await
+        let (stream, _) = listener
+            .accept()
+            .await
             .map_err(|e| MetricsError::ExportFailed(e.to_string()))?;
-            
+
         let io = TokioIo::new(stream);
         let collector = collector.clone();
-        
+
         tokio::task::spawn(async move {
             if let Err(err) = http1::Builder::new()
-                .serve_connection(io, service_fn(move |_req: Request<hyper::body::Incoming>| {
-                    let body = collector.generate_prometheus();
-                    async move {
-                        Ok::<_, anyhow::Error>(Response::new(Full::new(Bytes::from(body))))
-                    }
-                }))
+                .serve_connection(
+                    io,
+                    service_fn(move |_req: Request<hyper::body::Incoming>| {
+                        let body = collector.generate_prometheus();
+                        async move {
+                            Ok::<_, anyhow::Error>(Response::new(Full::new(Bytes::from(body))))
+                        }
+                    }),
+                )
                 .await
             {
                 info!("Error serving metrics: {:?}", err);

@@ -6,12 +6,14 @@
 //! foundation that can be extended.
 
 use std::collections::HashMap;
+use std::net::ToSocketAddrs;
 use std::sync::Arc;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
-use tracing::{info, debug};
+use tracing::{debug, info};
 use uuid::Uuid;
 
-use crate::snapshot::{SnapshotManager, SnapshotInfo};
+use crate::snapshot::{SnapshotInfo, SnapshotManager};
 use crate::vmm::VmmManager;
 
 /// Migration coordinator that manages VM migration between nodes
@@ -29,12 +31,9 @@ pub struct MigrationManager {
 
 impl MigrationManager {
     /// Create a new migration manager
-    pub async fn new(
-        data_dir: &std::path::Path,
-        vmm_manager: VmmManager,
-    ) -> anyhow::Result<Self> {
+    pub async fn new(data_dir: &std::path::Path, vmm_manager: VmmManager) -> anyhow::Result<Self> {
         let snapshot_manager = SnapshotManager::new(data_dir).await?;
-        
+
         Ok(Self {
             snapshot_manager,
             vmm_manager,
@@ -48,7 +47,7 @@ impl MigrationManager {
         &mut self,
         transport: Arc<T>,
     ) {
-        self.network_client = Some(transport); 
+        self.network_client = Some(transport);
     }
 
     /// Initiate live migration to target node
@@ -61,26 +60,32 @@ impl MigrationManager {
         target_node: &str,
         snapshot_name: Option<&str>,
     ) -> anyhow::Result<MigrationHandle> {
-        info!("Starting migration of app {} to node {}", app_id, target_node);
-        
+        info!(
+            "Starting migration of app {} to node {}",
+            app_id, target_node
+        );
+
         let session_id = format!("{}-{}", app_id, Uuid::new_v4());
         let snapshot_name = snapshot_name.unwrap_or("migration");
-        
+
         // Create snapshot (pauses VM, creates memory + disk state)
-        let snapshot_info = self.snapshot_manager
+        let snapshot_info = self
+            .snapshot_manager
             .create_snapshot(&self.vmm_manager, app_id, snapshot_name)
             .await?;
-        
+
         debug!("Snapshot {} created for migration", snapshot_info.id);
-        
+
         // Transfer snapshot to target node
         let transfer_result = if let Some(ref transport) = self.network_client {
-            transport.transfer_snapshot(&snapshot_info, target_node).await
+            transport
+                .transfer_snapshot(&snapshot_info, target_node)
+                .await
         } else {
             // Store locally for pickup (development mode)
             self.store_for_pickup(&snapshot_info).await
         };
-        
+
         let handle = MigrationHandle {
             session_id: session_id.clone(),
             app_id,
@@ -89,25 +94,27 @@ impl MigrationManager {
             started_at: chrono::Utc::now(),
             phase: MigrationPhase::Transferring,
         };
-        
+
         // Store session
         let mut sessions = self.sessions.write().await;
-        sessions.insert(session_id, MigrationSession {
-            _handle: handle.clone(),
-            transfer_status: transfer_result.ok(),
-        });
-        
+        sessions.insert(
+            session_id,
+            MigrationSession {
+                _handle: handle.clone(),
+                transfer_status: transfer_result.ok(),
+            },
+        );
+
         Ok(handle)
     }
 
     /// Receive incoming migration from source node
-    pub async fn migrate_in(
-        &self,
-        source_node: &str,
-        snapshot_id: &str,
-    ) -> anyhow::Result<Uuid> {
-        info!("Receiving migration of snapshot {} from node {}", snapshot_id, source_node);
-        
+    pub async fn migrate_in(&self, source_node: &str, snapshot_id: &str) -> anyhow::Result<Uuid> {
+        info!(
+            "Receiving migration of snapshot {} from node {}",
+            snapshot_id, source_node
+        );
+
         // Receive snapshot from source
         let snapshot_info = if let Some(ref transport) = self.network_client {
             transport.receive_snapshot(snapshot_id, source_node).await?
@@ -115,13 +122,13 @@ impl MigrationManager {
             // Development mode: receive from local storage
             self.receive_from_pickup(snapshot_id).await?
         };
-        
+
         // Restore VM from snapshot
         let new_app_id = Uuid::new_v4();
         self.snapshot_manager
             .restore_snapshot(&self.vmm_manager, &snapshot_info.id, new_app_id)
             .await?;
-        
+
         info!("Migration completed. Restored as app {}", new_app_id);
         Ok(new_app_id)
     }
@@ -129,7 +136,7 @@ impl MigrationManager {
     /// Check migration progress
     pub async fn progress(&self, handle: &MigrationHandle) -> anyhow::Result<MigrationStatus> {
         let sessions = self.sessions.read().await;
-        
+
         if let Some(session) = sessions.get(&handle.session_id) {
             let phase = handle.phase;
             let progress = match phase {
@@ -150,13 +157,17 @@ impl MigrationManager {
                 MigrationPhase::Failed => 0.0,
                 MigrationPhase::Rollback => 0.0,
             };
-            
+
             Ok(MigrationStatus {
                 phase,
                 progress_percent: progress,
                 bytes_transferred: session.transfer_status.unwrap_or(0),
                 estimated_remaining_bytes: session.transfer_status.unwrap_or(0),
-                downtime_ms: if phase == MigrationPhase::Completed { 0 } else { 100 },
+                downtime_ms: if phase == MigrationPhase::Completed {
+                    0
+                } else {
+                    100
+                },
             })
         } else {
             Ok(MigrationStatus {
@@ -172,16 +183,19 @@ impl MigrationManager {
     /// Cancel ongoing migration
     pub async fn cancel(&self, handle: MigrationHandle) -> anyhow::Result<()> {
         info!("Cancelling migration {}", handle.session_id);
-        
+
         // Remove session
         let mut sessions = self.sessions.write().await;
         sessions.remove(&handle.session_id);
-        
+
         // Cleanup snapshot if we created one
         if !handle.snapshot_id.is_empty() {
-            let _ = self.snapshot_manager.delete_snapshot(&handle.snapshot_id).await;
+            let _ = self
+                .snapshot_manager
+                .delete_snapshot(&handle.snapshot_id)
+                .await;
         }
-        
+
         Ok(())
     }
 
@@ -194,7 +208,8 @@ impl MigrationManager {
 
     /// Receive snapshot from local storage (development/testing mode)
     async fn receive_from_pickup(&self, snapshot_id: &str) -> anyhow::Result<SnapshotInfo> {
-        self.snapshot_manager.get_snapshot(snapshot_id)
+        self.snapshot_manager
+            .get_snapshot(snapshot_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Snapshot {} not found", snapshot_id))
     }
@@ -209,7 +224,7 @@ pub trait MigrationTransport {
         snapshot: &SnapshotInfo,
         target_node: &str,
     ) -> anyhow::Result<u64>;
-    
+
     /// Receive snapshot from source node
     async fn receive_snapshot(
         &self,
@@ -314,11 +329,8 @@ impl QuicMigrationTransport {
         let client_config = configure_client();
         let mut endpoint = quinn::Endpoint::client(std::net::SocketAddr::from(([0, 0, 0, 0], 0)))?;
         endpoint.set_default_client_config(client_config);
-        
-        Ok(Self {
-            endpoint,
-            port,
-        })
+
+        Ok(Self { endpoint, port })
     }
 }
 
@@ -352,33 +364,39 @@ impl MigrationTransport for QuicMigrationTransport {
         snapshot: &SnapshotInfo,
         target_node: &str,
     ) -> anyhow::Result<u64> {
-        info!("Opening QUIC migration stream to {}:{}", target_node, self.port);
-        
+        info!(
+            "Opening QUIC migration stream to {}:{}",
+            target_node, self.port
+        );
+
         // Resolve target
         let remote_addr: std::net::SocketAddr = format!("{}:{}", target_node, self.port)
             .to_socket_addrs()?
             .next()
             .ok_or_else(|| anyhow::anyhow!("Could not resolve target"))?;
 
-        let connection = self.endpoint.connect(remote_addr, "shellwego-migration")?.await?;
-        
+        let connection = self
+            .endpoint
+            .connect(remote_addr, "shellwego-migration")?
+            .await?;
+
         // Open uni-directional stream for file transfer
         let mut send_stream = connection.open_uni().await?;
-        
+
         // 1. Send Header (Snapshot ID length + ID)
         let id_bytes = snapshot.id.as_bytes();
         send_stream.write_u32(id_bytes.len() as u32).await?;
         send_stream.write_all(id_bytes).await?;
-        
+
         // 2. Stream File
         let mut file = tokio::fs::File::open(&snapshot.memory_path).await?;
         let bytes_transferred = tokio::io::copy(&mut file, &mut send_stream).await?;
-        
+
         send_stream.finish().await?;
-        
+
         Ok(bytes_transferred)
     }
-    
+
     async fn receive_snapshot(
         &self,
         _snapshot_id: &str,
@@ -387,18 +405,17 @@ impl MigrationTransport for QuicMigrationTransport {
         // QUIC is typically push-based for this use case.
         // The listener would be in the Daemon/Main handling incoming streams.
         // This method implies pulling, which we don't do in this architecture.
-        Err(anyhow::anyhow!("Pull-based migration not supported over QUIC push transport"))
+        Err(anyhow::anyhow!(
+            "Pull-based migration not supported over QUIC push transport"
+        ))
     }
 }
-
-use tokio::io::AsyncWriteExt;
-use std::net::ToSocketAddrs;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
-    
+
     #[tokio::test]
     async fn test_migration_manager_new() {
         let temp_dir = tempdir().unwrap();
@@ -406,13 +423,13 @@ mod tests {
         // For now, just verify basic construction
         assert!(temp_dir.path().exists());
     }
-    
+
     #[tokio::test]
     async fn test_migration_phases() {
         assert_eq!(MigrationPhase::Preparing, MigrationPhase::Preparing);
         assert_eq!(MigrationPhase::Completed, MigrationPhase::Completed);
     }
-    
+
     #[tokio::test]
     async fn test_migration_handle() {
         let handle = MigrationHandle {
@@ -423,7 +440,7 @@ mod tests {
             started_at: chrono::Utc::now(),
             phase: MigrationPhase::Preparing,
         };
-        
+
         assert_eq!(handle.phase, MigrationPhase::Preparing);
         assert!(!handle.session_id.is_empty());
     }

@@ -1,7 +1,7 @@
-use std::path::PathBuf;
-use std::os::unix::net::UnixStream;
+use shellwego_agent::vmm::{DriveConfig, FirecrackerDriver, MicrovmConfig, NetworkInterface};
 use std::io::{Read, Write};
-use shellwego_agent::vmm::{FirecrackerDriver, MicrovmConfig, DriveConfig, NetworkInterface};
+use std::os::unix::net::UnixStream;
+use std::path::PathBuf;
 use uuid::Uuid;
 
 fn kvm_available() -> bool {
@@ -18,12 +18,18 @@ async fn test_firecracker_driver_new_binary_missing() {
     let result = FirecrackerDriver::new(&missing_path).await;
     assert!(result.is_err());
     let err = result.unwrap_err();
-    assert!(err.to_string().contains("not found"), "Expected 'not found' error, got: {}", err);
+    assert!(
+        err.to_string().contains("not found"),
+        "Expected 'not found' error, got: {}",
+        err
+    );
 }
 
 #[tokio::test]
 async fn test_firecracker_driver_new_binary_exists() {
-    if !kvm_available() { return; }
+    if !kvm_available() {
+        return;
+    }
 
     let paths = vec![
         PathBuf::from("/usr/local/bin/firecracker"),
@@ -49,7 +55,9 @@ async fn test_firecracker_driver_new_binary_exists() {
 
 #[tokio::test]
 async fn test_firecracker_api_handshake_tc_i1() {
-    if !kvm_available() { return; }
+    if !kvm_available() {
+        return;
+    }
 
     let bin_path = PathBuf::from("/usr/local/bin/firecracker");
     if !bin_path.exists() {
@@ -57,13 +65,17 @@ async fn test_firecracker_api_handshake_tc_i1() {
         return;
     }
 
-    let driver = FirecrackerDriver::new(&bin_path).await.expect("Binary missing");
+    let driver = FirecrackerDriver::new(&bin_path)
+        .await
+        .expect("Binary missing");
     assert!(!driver.binary_path().as_os_str().is_empty());
 }
 
 #[tokio::test]
 async fn test_firecracker_version_via_uds() {
-    if !kvm_available() { return; }
+    if !kvm_available() {
+        return;
+    }
 
     let bin_path = PathBuf::from("/usr/local/bin/firecracker");
     if !bin_path.exists() {
@@ -71,7 +83,10 @@ async fn test_firecracker_version_via_uds() {
         return;
     }
 
-    let socket_path = tempfile::NamedTempFile::new().unwrap().path().with_extension("sock");
+    let socket_path = tempfile::NamedTempFile::new()
+        .unwrap()
+        .path()
+        .with_extension("sock");
     let log_path = socket_path.with_extension("log");
 
     let mut child = std::process::Command::new(&bin_path)
@@ -94,10 +109,14 @@ async fn test_firecracker_version_via_uds() {
         if socket_path.exists() {
             if let Ok(mut stream) = UnixStream::connect(&socket_path) {
                 let request = "GET /version HTTP/1.1\r\nHost: localhost\r\n\r\n";
-                stream.write_all(request.as_bytes()).expect("Failed to write");
+                stream
+                    .write_all(request.as_bytes())
+                    .expect("Failed to write");
 
                 let mut response = String::new();
-                stream.read_to_string(&mut response).expect("Failed to read");
+                stream
+                    .read_to_string(&mut response)
+                    .expect("Failed to read");
 
                 assert!(
                     response.contains("200") || response.contains("HTTP"),

@@ -1,4 +1,4 @@
-use shellwego_storage::zfs::{ZfsManager, ZfsCli};
+use shellwego_storage::zfs::{ZfsCli, ZfsManager};
 use uuid::Uuid;
 
 fn zfs_available() -> bool {
@@ -30,24 +30,37 @@ async fn test_zfs_manager_new_pool_missing() {
 
 #[tokio::test]
 async fn test_zfs_manager_new_pool_exists() {
-    if !zfs_available() { return; }
+    if !zfs_available() {
+        return;
+    }
 
     let result = ZfsManager::new("shellwego").await;
-    assert!(result.is_ok(), "Should succeed for existing pool 'shellwego'");
+    assert!(
+        result.is_ok(),
+        "Should succeed for existing pool 'shellwego'"
+    );
 }
 
 #[tokio::test]
 async fn test_zfs_clone_speed_tc_i2() {
-    if !zfs_available() { return; }
+    if !zfs_available() {
+        return;
+    }
 
-    let mgr = ZfsManager::new("shellwego").await.expect("Run: sudo zpool create shellwego ...");
+    let mgr = ZfsManager::new("shellwego")
+        .await
+        .expect("Run: sudo zpool create shellwego ...");
     let app_id = Uuid::new_v4();
 
     let start = std::time::Instant::now();
     let result = mgr.init_app_storage(app_id).await;
     let duration = start.elapsed();
 
-    assert!(result.is_ok(), "Failed to initialize app storage: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to initialize app storage: {:?}",
+        result.err()
+    );
     assert!(
         duration.as_millis() < 500,
         "ZFS too slow: {:?} (expected <500ms)",
@@ -65,7 +78,9 @@ async fn test_zfs_clone_speed_tc_i2() {
 
 #[tokio::test]
 async fn test_zfs_dataset_lifecycle_tc_i2() {
-    if !zfs_available() { return; }
+    if !zfs_available() {
+        return;
+    }
 
     let mgr = ZfsManager::new("shellwego").await.expect("Pool missing");
     let cli = ZfsCli::new();
@@ -78,7 +93,11 @@ async fn test_zfs_dataset_lifecycle_tc_i2() {
     let clone_name = format!("{}-clone", storage.rootfs);
 
     let result = cli.snapshot(&storage.rootfs, "pre-update").await;
-    assert!(result.is_ok(), "Snapshot creation failed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Snapshot creation failed: {:?}",
+        result.err()
+    );
 
     let result = cli.clone_snapshot(&snapshot_name, &clone_name).await;
     assert!(result.is_ok(), "Clone creation failed: {:?}", result.err());
@@ -92,7 +111,9 @@ async fn test_zfs_dataset_lifecycle_tc_i2() {
 
 #[tokio::test]
 async fn test_zfs_dataset_hierarchy() {
-    if !zfs_available() { return; }
+    if !zfs_available() {
+        return;
+    }
 
     let mgr = ZfsManager::new("shellwego").await.expect("Pool missing");
     let app_id = Uuid::new_v4();
@@ -108,7 +129,9 @@ async fn test_zfs_dataset_hierarchy() {
 
 #[tokio::test]
 async fn test_zfs_app_storage_structure() {
-    if !zfs_available() { return; }
+    if !zfs_available() {
+        return;
+    }
 
     let mgr = ZfsManager::new("shellwego").await.expect("Pool missing");
     let app_id = Uuid::new_v4();
@@ -123,7 +146,9 @@ async fn test_zfs_app_storage_structure() {
 
 #[tokio::test]
 async fn test_zfs_cleanup_is_idempotent() {
-    if !zfs_available() { return; }
+    if !zfs_available() {
+        return;
+    }
 
     let mgr = ZfsManager::new("shellwego").await.expect("Pool missing");
     let app_id = Uuid::new_v4();
@@ -133,12 +158,17 @@ async fn test_zfs_cleanup_is_idempotent() {
     let second_cleanup = mgr.cleanup_app(app_id).await;
 
     assert!(first_cleanup.is_ok(), "First cleanup should succeed");
-    assert!(second_cleanup.is_ok(), "Second cleanup should also succeed (idempotent)");
+    assert!(
+        second_cleanup.is_ok(),
+        "Second cleanup should also succeed (idempotent)"
+    );
 }
 
 #[tokio::test]
 async fn test_zfs_snapshot_and_rollback() {
-    if !zfs_available() { return; }
+    if !zfs_available() {
+        return;
+    }
 
     let mgr = ZfsManager::new("shellwego").await.expect("Pool missing");
     let _cli = ZfsCli::new();
@@ -157,7 +187,9 @@ async fn test_zfs_snapshot_and_rollback() {
 
 #[tokio::test]
 async fn test_zfs_volume_creation() {
-    if !zfs_available() { return; }
+    if !zfs_available() {
+        return;
+    }
 
     let mgr = ZfsManager::new("shellwego").await.expect("Pool missing");
     let volume_id = Uuid::new_v4();
@@ -171,7 +203,9 @@ async fn test_zfs_volume_creation() {
 
 #[tokio::test]
 async fn test_zfs_mountpoint_verification() {
-    if !zfs_available() { return; }
+    if !zfs_available() {
+        return;
+    }
 
     let mgr = ZfsManager::new("shellwego").await.expect("Pool missing");
     let app_id = Uuid::new_v4();
@@ -179,9 +213,15 @@ async fn test_zfs_mountpoint_verification() {
     let storage = mgr.init_app_storage(app_id).await.expect("Init failed");
 
     let cli = ZfsCli::new();
-    let info = cli.get_info(&storage.rootfs).await.expect("Get info failed");
+    let info = cli
+        .get_info(&storage.rootfs)
+        .await
+        .expect("Get info failed");
 
-    assert!(info.mountpoint.is_some(), "Dataset should have a mountpoint");
+    assert!(
+        info.mountpoint.is_some(),
+        "Dataset should have a mountpoint"
+    );
 
     let _ = mgr.cleanup_app(app_id).await;
 }

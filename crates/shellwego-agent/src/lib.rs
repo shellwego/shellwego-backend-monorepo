@@ -17,15 +17,31 @@ mod test_utils;
 
 // Re-export types from schema crate
 pub use shellwego_schema::{
-    // VMM types
-    VirtualizationMode, MicrovmConfig, MicrovmState, MicrovmSummary, 
-    DriveConfig, NetworkInterface, RateLimiterConfig, MicrovmMetrics,
     // Agent types
-    AgentConfig, AgentConfigJson, Capabilities, NodeCapacity,
+    AgentConfig,
+    AgentConfigJson,
+    Capabilities,
+    DesiredApp,
     // Desired state types
-    DesiredState, DesiredApp, DesiredVolume, VolumeMount,
+    DesiredState,
+    DesiredVolume,
+    DriveConfig,
+    Message,
+    MicrovmConfig,
+    MicrovmMetrics,
+    MicrovmState,
+    MicrovmSummary,
     // Network types
-    NetworkConfig, NetworkSetup, NetworkError, Message, QuicConfig,
+    NetworkConfig,
+    NetworkError,
+    NetworkInterface,
+    NetworkSetup,
+    NodeCapacity,
+    QuicConfig,
+    RateLimiterConfig,
+    // VMM types
+    VirtualizationMode,
+    VolumeMount,
 };
 
 /// Detect system capabilities and determine the best virtualization mode

@@ -4,11 +4,23 @@
 
 This plan addresses the critical DRY (Don't Repeat Yourself) violations in the ShellWeGo backend monorepo where `shellwego-schema` exists but is NOT being used as the single source of truth for type definitions. Multiple crates define their own types locally, creating maintenance burden, type mismatch risks, and documentation fragmentation.
 
-**Status**: Ready for Implementation
+**Status**: Phase 1 Complete - Firecracker Models Migrated
 **Author**: Architecture Review
 **Date**: 2025-01-20
+**Last Updated**: 2025-01-21
 **Priority**: Critical
 **Supersedes**: `schema-consolidation.plan.md` (which discussed renaming `shellwego-core` - now complete)
+
+### Migration Progress
+
+| Phase | Status | Description |
+|-------|--------|-------------|
+| Phase 1 | ✅ **COMPLETE** | Firecracker Models moved to `schema/src/firecracker/` |
+| Phase 2 | 🔄 In Progress | Agent Types consolidation started |
+| Phase 3 | ⏳ Pending | Control Plane Handlers |
+| Phase 4 | ⏳ Pending | Network Consolidation |
+| Phase 5 | ⏳ Pending | Registry/Storage |
+| Phase 6 | ⏳ Pending | Billing Entities |
 
 ---
 
@@ -27,10 +39,27 @@ crates/shellwego-schema/src/
 ├── vmm/                # VMM types (MicrovmConfig, DriveConfig, etc.)
 ├── network/            # Network types (NetworkConfig, QuicConfig, etc.)
 ├── api/                # API request/response types
-└── agent/              # Agent configuration types
+├── agent/              # Agent configuration types
+└── firecracker/        # ✅ NEW: Firecracker API models (Phase 1 complete)
+    ├── mod.rs          # Module exports
+    ├── instance.rs     # InstanceInfo, InstanceState, FirecrackerVersion
+    ├── boot.rs         # BootSource
+    ├── machine.rs      # MachineConfiguration, CpuTemplate, HugePages, CpuConfig
+    ├── drives.rs       # Drive, PartialDrive, CacheType, IoEngine, Pmem
+    ├── network.rs      # NetworkInterface, PartialNetworkInterface, RateLimiter, TokenBucket
+    ├── balloon.rs      # Balloon, BalloonUpdate, BalloonStats
+    ├── devices.rs      # Vsock, EntropyDevice, SerialDevice
+    ├── logging.rs      # Logger, LogLevel, Metrics
+    ├── metrics.rs      # FirecrackerMetrics, VmmMetrics, NetMetrics, BlockMetrics
+    ├── actions.rs      # InstanceActionInfo, ActionType, Vm, VmState
+    ├── snapshot.rs     # SnapshotCreateParams, SnapshotLoadParams, SnapshotType
+    ├── memory.rs       # MemoryHotplugConfig, MemoryHotplugSizeUpdate
+    ├── mmds.rs         # MmdsConfig, MmdsVersion
+    ├── full_config.rs  # FullVmConfiguration
+    └── error.rs        # Error
 ```
 
-However, many crates ignore this schema and define their own types locally.
+**Phase 1 Migration Complete**: All Firecracker models have been moved from `shellwego-firecracker/src/models.rs` to `shellwego-schema/src/firecracker/`. The firecracker crate now re-exports these types from schema.
 
 ### 1.2 Architecture Principle Violation
 
@@ -61,14 +90,15 @@ However, many crates ignore this schema and define their own types locally.
 
 ### 2.1 Critical Violations (Same Type Name, Different Location)
 
-| Type | Schema Location | Duplicate Location | Severity |
-|------|-----------------|-------------------|----------|
-| `NetworkInterface` | `schema/src/vmm/config.rs` | `firecracker/src/models.rs` | **CRITICAL** |
-| `WasmConfig` | `schema/src/vmm/config.rs` | `agent/src/wasm/mod.rs` | **CRITICAL** |
-| `AgentConnection` | `schema/src/network/quinn.rs` | `control-plane/src/state.rs` | **CRITICAL** |
-| `RateLimiter` / `RateLimiterConfig` | `schema/src/vmm/config.rs` | `firecracker/src/models.rs` | **HIGH** |
-| `SnapshotType` | `firecracker/src/models.rs` | `agent/src/snapshot.rs` | **HIGH** |
-| `ErrorResponse` | `schema/src/api/responses.rs` | `control-plane/src/api/mod.rs` | **HIGH** |
+| Type | Schema Location | Duplicate Location | Severity | Status |
+|------|-----------------|-------------------|----------|--------|
+| `NetworkInterface` | `schema/src/firecracker/network.rs` | ~~`firecracker/src/models.rs`~~ | **CRITICAL** | ✅ Resolved |
+| `RateLimiter` / `TokenBucket` | `schema/src/firecracker/network.rs` | ~~`firecracker/src/models.rs`~~ | **HIGH** | ✅ Resolved |
+| `SnapshotType` | `schema/src/firecracker/snapshot.rs` | ~~`firecracker/src/models.rs`~~ | **HIGH** | ✅ Resolved |
+| `AgentConnection` | `schema/src/network/quinn.rs` | ~~`control-plane/src/state.rs`~~ | **CRITICAL** | ✅ Resolved |
+| `WasmConfig` | `schema/src/vmm/config.rs` | `agent/src/wasm/mod.rs` | **CRITICAL** | 🔄 In Progress |
+| `SnapshotType` (Agent) | `schema/src/agent/snapshot.rs` | `agent/src/snapshot.rs` | **HIGH** | 🔄 In Progress |
+| `ErrorResponse` | `schema/src/api/responses.rs` | `control-plane/src/api/mod.rs` | **HIGH** | ⏳ Pending |
 
 ### 2.2 Entity Redefinitions in Control Plane
 
@@ -146,16 +176,48 @@ Types in `shellwego-observability` that could be shared:
 
 ## 3. Migration Strategy
 
-### Phase 1: Firecracker Models (Week 1)
+### Phase 1: Firecracker Models ✅ COMPLETE
 
 **Objective:** Move all Firecracker API models to schema.
 
-**Tasks:**
-1. Create `shellwego-schema/src/firecracker/` module structure
-2. Move all types from `shellwego-firecracker/src/models.rs`
-3. Add proper `cfg_attr` for OpenAPI derives
-4. Update `shellwego-firecracker` to re-export from schema
-5. Update `shellwego-agent` VMM types to use schema types
+**Status:** Completed on 2025-01-21
+
+**Completed Tasks:**
+- [x] Create `shellwego-schema/src/firecracker/` module structure
+- [x] Move all types from `shellwego-firecracker/src/models.rs` to schema
+- [x] Add proper `cfg_attr` for OpenAPI derives
+- [x] Update `shellwego-firecracker` to re-export from schema
+- [x] Delete original `models.rs` file
+- [x] Update Cargo.toml dependencies
+
+**Implemented File Structure:**
+```
+shellwego-schema/src/firecracker/
+├── mod.rs              # Module exports
+├── instance.rs         # InstanceInfo, InstanceState, FirecrackerVersion
+├── boot.rs             # BootSource
+├── machine.rs          # MachineConfiguration, CpuTemplate, HugePages, CpuConfig
+├── drives.rs           # Drive, PartialDrive, CacheType, IoEngine, Pmem
+├── network.rs          # NetworkInterface, PartialNetworkInterface, RateLimiter, TokenBucket
+├── balloon.rs          # Balloon, BalloonUpdate, BalloonStats, BalloonStatsUpdate
+├── devices.rs          # Vsock, EntropyDevice, SerialDevice
+├── logging.rs          # Logger, LogLevel, Metrics
+├── metrics.rs          # FirecrackerMetrics, VmmMetrics, NetMetrics, BlockMetrics
+├── actions.rs          # InstanceActionInfo, ActionType, Vm, VmState
+├── snapshot.rs         # SnapshotCreateParams, SnapshotLoadParams, SnapshotType
+├── memory.rs           # MemoryHotplugConfig, MemoryHotplugSizeUpdate, MemoryHotplugStatus
+├── mmds.rs             # MmdsConfig, MmdsVersion
+├── full_config.rs      # FullVmConfiguration
+└── error.rs            # Error
+```
+
+**Key Changes Made:**
+- `shellwego-firecracker/src/lib.rs` now re-exports types from `shellwego-schema`
+- `shellwego-firecracker/src/models.rs` has been DELETED
+- `shellwego-firecracker/Cargo.toml` now depends on `shellwego-schema`
+- All Firecracker models now have proper OpenAPI schema derives
+
+### Phase 2: Consolidate Agent Types 🔄 IN PROGRESS
 
 **File Structure:**
 ```
@@ -573,15 +635,34 @@ Migration is complete when:
 | `api/responses.rs` | ApiResponse, ErrorResponse, HealthResponse, ComponentHealth, ServiceStatus |
 | `agent/config.rs` | AgentConfig, AgentConfigJson |
 | `agent/capabilities.rs` | Capabilities, NodeCapacity |
+| `agent/wasm.rs` | ✅ NEW: WasmRuntimeConfig, WasmRuntimeStats, WasmExitStatus |
+| `agent/snapshot.rs` | ✅ NEW: AgentSnapshotType, AgentSnapshotInfo |
+| `firecracker/*` | ✅ NEW: All 50+ Firecracker API types (see Section B) |
 | `error.rs` | CoreError, CoreResult |
 
-### B. Types to Migrate (Phase 1 - Firecracker)
+### B. Types Migrated (Phase 1 - Firecracker) ✅ COMPLETE
 
-| Current Location | Types |
-|------------------|-------|
-| `firecracker/src/models.rs` | InstanceInfo, InstanceState, FirecrackerVersion, BootSource, MachineConfiguration, CpuTemplate, HugePages, CpuConfig, CpuidLeafModifier, CpuidRegisterModifier, MsrModifier, ArmRegisterModifier, VcpuFeatures, Drive, PartialDrive, CacheType, IoEngine, Pmem, NetworkInterface (FC), PartialNetworkInterface, RateLimiter, TokenBucket, Balloon, BalloonUpdate, BalloonStats, BalloonStatsUpdate, BalloonStartCmd, BalloonHintingStatus, Vsock, EntropyDevice, SerialDevice, Logger, LogLevel, Metrics, FirecrackerMetrics, VmmMetrics, NetMetrics, BlockMetrics, InstanceActionInfo, ActionType, Vm, VmState, SnapshotCreateParams, SnapshotLoadParams, SnapshotType, MemoryBackend, MemoryBackendType, NetworkOverride, MemoryHotplugConfig, MemoryHotplugSizeUpdate, MemoryHotplugStatus, MmdsConfig, MmdsVersion, FullVmConfiguration, Error |
+All Firecracker types have been moved to `schema/src/firecracker/`:
 
-### C. Types to Migrate (Phase 2 - Agent)
+| Module | Types |
+|--------|-------|
+| `firecracker/instance.rs` | InstanceInfo, InstanceState, FirecrackerVersion |
+| `firecracker/boot.rs` | BootSource |
+| `firecracker/machine.rs` | MachineConfiguration, CpuTemplate, HugePages, CpuConfig, CpuidLeafModifier, CpuidRegisterModifier, MsrModifier, ArmRegisterModifier, VcpuFeatures, CpuidRegister |
+| `firecracker/drives.rs` | Drive, PartialDrive, CacheType, IoEngine, Pmem |
+| `firecracker/network.rs` | NetworkInterface, PartialNetworkInterface, RateLimiter, TokenBucket |
+| `firecracker/balloon.rs` | Balloon, BalloonUpdate, BalloonStats, BalloonStatsUpdate, BalloonStartCmd, BalloonHintingStatus |
+| `firecracker/devices.rs` | Vsock, EntropyDevice, SerialDevice |
+| `firecracker/logging.rs` | Logger, LogLevel, Metrics |
+| `firecracker/metrics.rs` | FirecrackerMetrics, VmmMetrics, NetMetrics, BlockMetrics |
+| `firecracker/actions.rs` | InstanceActionInfo, ActionType, Vm, VmState |
+| `firecracker/snapshot.rs` | SnapshotCreateParams, SnapshotLoadParams, SnapshotType, MemoryBackend, MemoryBackendType, NetworkOverride |
+| `firecracker/memory.rs` | MemoryHotplugConfig, MemoryHotplugSizeUpdate, MemoryHotplugStatus |
+| `firecracker/mmds.rs` | MmdsConfig, MmdsVersion, MmdsContentsObject |
+| `firecracker/full_config.rs` | FullVmConfiguration |
+| `firecracker/error.rs` | Error |
+
+### C. Types to Migrate (Phase 2 - Agent) 🔄 IN PROGRESS
 
 | Current Location | Types | Target |
 |------------------|-------|--------|

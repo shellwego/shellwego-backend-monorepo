@@ -5,7 +5,11 @@
 
 pub mod capabilities;
 pub mod config;
+pub mod wasm;
+pub mod snapshot;
 
 // Re-export commonly used types at module level
 pub use capabilities::{Capabilities, NodeCapacity};
 pub use config::{AgentConfig, AgentConfigJson};
+pub use wasm::{WasmRuntimeConfig, WasmRuntimeStats, WasmExitStatus};
+pub use snapshot::{AgentSnapshotType, AgentSnapshotInfo};

@@ -19,6 +19,7 @@
 //! | `network` | Network configuration types |
 //! | `api` | API request/response types |
 //! | `agent` | Agent configuration types |
+//! | `firecracker` | Firecracker microVM API types |
 
 pub mod entities;
 pub mod error;
@@ -27,6 +28,7 @@ pub mod vmm;
 pub mod network;
 pub mod api;
 pub mod agent;
+pub mod firecracker;
 
 // Re-export commonly used types at crate root
 pub use entities::*;

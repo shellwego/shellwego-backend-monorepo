@@ -5,6 +5,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use uuid::Uuid;
+use chrono::{DateTime, Utc};
 
 /// QUIC message types
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -137,16 +138,46 @@ impl QuicConfig {
     }
 }
 
-/// Agent connection information
+/// Agent connection information.
+///
+/// Represents a connection to an agent node from the control plane.
+/// This is the unified type that consolidates connection state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema, schemars::JsonSchema))]
 pub struct AgentConnection {
-    /// Node ID
+    /// Node ID (assigned after registration)
     pub node_id: Uuid,
-    /// Remote address
+    /// Remote address of the agent
     pub remote_addr: String,
+    /// Hostname of the agent node
+    pub hostname: String,
+    /// Region where the agent is located
+    pub region: String,
     /// Connection established timestamp
-    pub connected_at: chrono::DateTime<chrono::Utc>,
+    pub connected_at: DateTime<Utc>,
+    /// Last heartbeat timestamp
+    pub last_heartbeat: DateTime<Utc>,
+}
+
+impl AgentConnection {
+    /// Create a new agent connection
+    pub fn new(node_id: Uuid, hostname: String, region: String) -> Self {
+        let now = Utc::now();
+        Self {
+            node_id,
+            remote_addr: String::new(),
+            hostname,
+            region,
+            connected_at: now,
+            last_heartbeat: now,
+        }
+    }
+
+    /// Create with remote address
+    pub fn with_remote_addr(mut self, addr: String) -> Self {
+        self.remote_addr = addr;
+        self
+    }
 }
 
 /// Channel priority for multiplexed streams

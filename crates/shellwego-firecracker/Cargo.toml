@@ -13,6 +13,7 @@ repository = "https://github.com/shellwego/shellwego"
 documentation = "https://docs.rs/shellwego-firecracker"
 
 [dependencies]
+shellwego-schema = { path = "../shellwego-schema" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["full"] }

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use dashmap::DashMap;
 use tracing::info;
 use uuid::Uuid;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 
 use crate::config::Config;
 use crate::orm::Database;
@@ -13,33 +13,8 @@ use crate::operators::{OperatorManager, OperatorConfig};
 use crate::git::{BuildQueue, BuildQueueConfig};
 use crate::kms::{KmsClient, KmsConfig};
 
-/// Connection to an agent (QUIC connection wrapper)
-#[derive(Clone)]
-pub struct AgentConnection {
-    /// Node ID
-    pub node_id: Uuid,
-    /// Node hostname
-    pub hostname: String,
-    /// Node region
-    pub region: String,
-    /// Connection established at
-    pub connected_at: DateTime<Utc>,
-    /// Last heartbeat
-    pub last_heartbeat: DateTime<Utc>,
-}
-
-impl AgentConnection {
-    pub fn new(node_id: Uuid, hostname: String, region: String) -> Self {
-        let now = Utc::now();
-        Self {
-            node_id,
-            hostname,
-            region,
-            connected_at: now,
-            last_heartbeat: now,
-        }
-    }
-}
+// Re-export AgentConnection from schema for convenience
+pub use shellwego_schema::network::AgentConnection;
 
 /// Application state container
 pub struct AppState {

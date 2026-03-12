@@ -71,14 +71,19 @@
 //! - Entropy device
 //! - MMDS v2
 
-pub mod models;
 pub mod vmm;
+
+// Re-export models from schema crate
+pub mod models {
+    //! Firecracker API models re-exported from shellwego-schema
+    pub use shellwego_schema::firecracker::*;
+}
 
 // Re-export main client
 pub use vmm::client::FirecrackerClient;
 
-// Re-export commonly used models
-pub use models::{
+// Re-export commonly used models from schema
+pub use shellwego_schema::firecracker::{
     // Instance
     InstanceInfo,
     InstanceState,

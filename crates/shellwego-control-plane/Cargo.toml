@@ -13,6 +13,9 @@ name = "shellwego-control-plane"
 path = "src/main.rs"
 
 [dependencies]
+# Internal crates
+shellwego-schema = { path = "../shellwego-schema" }
+
 # Async runtime
 tokio = { workspace = true }
 

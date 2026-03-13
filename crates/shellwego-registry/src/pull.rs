@@ -369,13 +369,17 @@ impl ImagePuller {
 
         info!("Successfully pulled image {} ({} bytes)", image_ref, total_size);
 
+        // Collect layer digests before moving manifest
+        let layer_digests: Vec<String> = manifest_resp.manifest.layers.iter().map(|l| l.digest.clone()).collect();
+        let manifest = manifest_resp.manifest;
+
         Ok(PulledImage {
             image_ref: image_ref.to_string(),
-            manifest: manifest_resp.manifest,
+            manifest,
             config,
             rootfs_path,
             size_bytes: total_size,
-            layer_digests: manifest_resp.manifest.layers.iter().map(|l| l.digest.clone()).collect(),
+            layer_digests,
         })
     }
 

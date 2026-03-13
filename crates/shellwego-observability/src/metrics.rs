@@ -222,21 +222,25 @@ impl MetricsRegistry {
                                     let metric_families = registry.gather();
                                     let mut buffer = Vec::new();
                                     match encoder.encode(&metric_families, &mut buffer) {
-                                        Ok(()) => Ok(hyper::Response::builder()
+                                        Ok(()) => hyper::Response::builder()
                                             .status(hyper::StatusCode::OK)
                                             .header("Content-Type", "text/plain; version=0.0.4")
-                                            .body(hyper::Body::from(buffer))),
-                                        Err(e) => Ok(hyper::Response::builder()
+                                            .body(hyper::Body::from(buffer))
+                                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string())),
+                                        Err(e) => hyper::Response::builder()
                                             .status(hyper::StatusCode::INTERNAL_SERVER_ERROR)
-                                            .body(hyper::Body::from(format!("Encoding error: {}", e)))),
+                                            .body(hyper::Body::from(format!("Encoding error: {}", e)))
+                                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string())),
                                     }
                                 }
-                                (&hyper::Method::GET, "/health") => Ok(hyper::Response::builder()
+                                (&hyper::Method::GET, "/health") => hyper::Response::builder()
                                     .status(hyper::StatusCode::OK)
-                                    .body(hyper::Body::from("OK"))),
-                                _ => Ok(hyper::Response::builder()
+                                    .body(hyper::Body::from("OK"))
+                                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string())),
+                                _ => hyper::Response::builder()
                                     .status(hyper::StatusCode::NOT_FOUND)
-                                    .body(hyper::Body::from("Not Found"))),
+                                    .body(hyper::Body::from("Not Found"))
+                                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string())),
                             }
                         }
                     }))
@@ -467,7 +471,7 @@ pub struct MetricsServerHandle {
 impl MetricsServerHandle {
     /// Stop metrics server gracefully
     pub async fn stop(self) -> Result<(), ObservabilityError> {
-        if let Some(tx) = self.shutdown_tx {
+        if let Some(tx) = self.shutdown_tx.as_ref() {
             let _ = tx.send(());
         }
         Ok(())

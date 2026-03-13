@@ -27,7 +27,7 @@ pub fn create_table() -> Table {
 }
 
 /// Format output based on user preference
-pub fn format_output<T: serde::Serialize>(data: &T, format: OutputFormat) -> anyhow::Result<String> {
+pub fn format_output<T: serde::Serialize + std::fmt::Debug>(data: &T, format: OutputFormat) -> anyhow::Result<String> {
     match format {
         OutputFormat::Json => Ok(serde_json::to_string_pretty(data)?),
         OutputFormat::Yaml => Ok(serde_yaml::to_string(data)?),

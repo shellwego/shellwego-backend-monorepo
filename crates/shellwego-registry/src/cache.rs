@@ -314,7 +314,7 @@ impl LayerCache {
         &self,
         image_ref: &str,
         manifest: &Manifest,
-        layers: &[Vec<u8>],
+        layers: &[bytes::Bytes],
     ) -> Result<PathBuf, RegistryError> {
         info!("Importing image {} ({} layers)", image_ref, manifest.layers.len());
 
@@ -479,34 +479,48 @@ impl LayerCache {
             return Ok(0);
         }
 
-        // Sort by last accessed time
+        // Sort by last accessed time (oldest first) and collect keys to remove
+        // We want to remove the oldest images, keeping the most recent ones
         let mut images: Vec<_> = index.iter().collect();
         images.sort_by(|a, b| a.1.last_accessed.cmp(&b.1.last_accessed));
 
-        // Remove oldest
-        let to_remove = total_images - keep_recent;
+        // Calculate how many to remove (total - keep_recent)
+        let to_remove_count = total_images.saturating_sub(keep_recent);
+
+        // Collect keys of oldest images to remove to avoid borrow checker issues
+        let keys_to_remove: Vec<String> = images
+            .into_iter()
+            .take(to_remove_count)
+            .map(|(k, _)| k.clone())
+            .collect();
+
         let mut bytes_freed = 0u64;
 
-        for (image_ref, info) in images.into_iter().take(to_remove) {
-            info!("GC: Removing image {}", image_ref);
+        for image_ref in keys_to_remove {
+            // Get info before removing
+            let info = index.get(&image_ref).cloned();
+            
+            if let Some(info) = info {
+                info!("GC: Removing image {}", image_ref);
 
-            // Destroy dataset
-            let output = tokio::process::Command::new("zfs")
-                .args(["destroy", "-r", &info.dataset])
-                .output()
-                .await?;
+                // Destroy dataset
+                let output = tokio::process::Command::new("zfs")
+                    .args(["destroy", "-r", &info.dataset])
+                    .output()
+                    .await?;
 
-            if output.status.success() {
-                bytes_freed += info.size_bytes;
-                index.remove(image_ref);
+                if output.status.success() {
+                    bytes_freed += info.size_bytes;
+                    index.remove(&image_ref);
 
-                // Remove metadata
-                let sanitized = Self::sanitize_image_ref(image_ref);
-                let metadata_dir = self.cache_dir.join(sanitized);
-                let _ = tokio::fs::remove_dir_all(&metadata_dir).await;
-            } else {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                warn!("Failed to destroy dataset {}: {}", info.dataset, stderr);
+                    // Remove metadata
+                    let sanitized = Self::sanitize_image_ref(&image_ref);
+                    let metadata_dir = self.cache_dir.join(sanitized);
+                    let _ = tokio::fs::remove_dir_all(&metadata_dir).await;
+                } else {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    warn!("Failed to destroy dataset {}: {}", info.dataset, stderr);
+                }
             }
         }
 

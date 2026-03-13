@@ -9,9 +9,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use bytes::Bytes;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use hyper::{Method, Request, Response, StatusCode};
+use hyper::{Body, Method, Request, Response, StatusCode};
 use tokio::net::TcpListener;
 use tokio::signal;
 use tokio::sync::{broadcast, mpsc, RwLock};
@@ -115,7 +116,7 @@ impl ServerHandle {
 }
 
 /// Proxy statistics
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ProxyStats {
     /// Total requests processed
     pub total_requests: AtomicU64,
@@ -129,6 +130,19 @@ pub struct ProxyStats {
     pub errors: AtomicU64,
     /// Start time
     pub start_time: std::time::Instant,
+}
+
+impl Default for ProxyStats {
+    fn default() -> Self {
+        Self {
+            total_requests: AtomicU64::new(0),
+            active_connections: AtomicU64::new(0),
+            requests_per_second: AtomicU64::new(0),
+            avg_latency_us: AtomicU64::new(0),
+            errors: AtomicU64::new(0),
+            start_time: std::time::Instant::now(),
+        }
+    }
 }
 
 impl EdgeProxy {
@@ -198,7 +212,7 @@ impl EdgeProxy {
             .await
             .map_err(|e| EdgeError::Io(e))?;
 
-        let shutdown_rx = self.shutdown_tx.subscribe();
+        let mut shutdown_rx = self.shutdown_tx.subscribe();
         let router = self.router.clone();
         let proxy = self.proxy.clone();
         let stats = Arc::new(self.stats.clone());
@@ -229,9 +243,10 @@ impl EdgeProxy {
                                     stats.active_connections.fetch_add(1, Ordering::Relaxed);
                                     stats.total_requests.fetch_add(1, Ordering::Relaxed);
 
-                                    let io = hyper_util::rt::TokioIo::new(stream);
+                                    let io = stream;
 
-                                    let service = service_fn(move |req: Request<hyper::body::Body>| {
+                                    let stats_for_decrement = stats.clone();
+                                    let service = service_fn(move |req: Request<Body>| {
                                         let router = router.clone();
                                         let proxy = proxy.clone();
                                         async move {
@@ -246,7 +261,7 @@ impl EdgeProxy {
                                             Response::builder()
                                                 .status(StatusCode::MOVED_PERMANENTLY)
                                                 .header("Location", https_url)
-                                                .body(hyper::body::Body::empty())
+                                                .body(Body::empty())
                                                 .map_err(|e| EdgeError::RoutingError(e.to_string()))
                                         }
                                     });
@@ -255,7 +270,7 @@ impl EdgeProxy {
                                         .serve_connection(io, service)
                                         .await;
 
-                                    stats.active_connections.fetch_sub(1, Ordering::Relaxed);
+                                    stats_for_decrement.active_connections.fetch_sub(1, Ordering::Relaxed);
                                 });
                             }
                             Err(e) => {
@@ -283,7 +298,7 @@ impl EdgeProxy {
             .await
             .map_err(|e| EdgeError::Io(e))?;
 
-        let shutdown_rx = self.shutdown_tx.subscribe();
+        let mut shutdown_rx = self.shutdown_tx.subscribe();
         let router = self.router.clone();
         let proxy = self.proxy.clone();
         let stats = Arc::new(self.stats.clone());
@@ -314,9 +329,10 @@ impl EdgeProxy {
                                     stats.active_connections.fetch_add(1, Ordering::Relaxed);
                                     stats.total_requests.fetch_add(1, Ordering::Relaxed);
 
-                                    let io = hyper_util::rt::TokioIo::new(stream);
+                                    let io = stream;
 
-                                    let service = service_fn(move |req: Request<hyper::body::Body>| {
+                                    let stats_for_decrement = stats.clone();
+                                    let service = service_fn(move |req: Request<Body>| {
                                         let router = router.clone();
                                         let proxy = proxy.clone();
                                         let stats = stats.clone();
@@ -339,24 +355,14 @@ impl EdgeProxy {
                                                         stats.errors.fetch_add(1, Ordering::Relaxed);
                                                     }
 
-                                                    result.map_err(|e| {
-                                                        hyper::Error::new(std::io::Error::new(
-                                                            std::io::ErrorKind::Other,
-                                                            e.to_string()
-                                                        ))
-                                                    })
+                                                    result
                                                 }
                                                 None => {
                                                     // No matching route
-                                                    Response::builder()
+                                                    Ok(Response::builder()
                                                         .status(StatusCode::NOT_FOUND)
-                                                        .body(hyper::body::Body::from("Not Found"))
-                                                        .map_err(|e| {
-                                                            hyper::Error::new(std::io::Error::new(
-                                                                std::io::ErrorKind::Other,
-                                                                e.to_string()
-                                                            ))
-                                                        })
+                                                        .body(Body::from("Not Found"))
+                                                        .unwrap())
                                                 }
                                             }
                                         }
@@ -366,7 +372,7 @@ impl EdgeProxy {
                                         .serve_connection(io, service)
                                         .await;
 
-                                    stats.active_connections.fetch_sub(1, Ordering::Relaxed);
+                                    stats_for_decrement.active_connections.fetch_sub(1, Ordering::Relaxed);
                                 });
                             }
                             Err(e) => {
@@ -456,6 +462,9 @@ pub enum EdgeError {
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("Certificate error: {0}")]
+    CertError(#[from] crate::tls::CertError),
 }
 
 #[cfg(test)]

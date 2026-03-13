@@ -6,7 +6,8 @@ use tracing::{error, info, warn};
 
 use crate::metrics::MetricsCollector;
 use crate::vmm::VmmManager;
-use crate::{AgentConfig, Capabilities, DesiredApp, DesiredState};
+use shellwego_schema::{DesiredApp, DesiredState};
+use crate::{AgentConfig, Capabilities};
 
 #[derive(Clone)]
 pub struct Daemon {

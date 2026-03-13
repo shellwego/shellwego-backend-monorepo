@@ -4,7 +4,7 @@ use clap::{Args, Subcommand};
 use colored::Colorize;
 use comfy_table::{Table, modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL};
 use dialoguer::{Input, Select, Confirm};
-use shellwego_schema::entities::app::{CreateAppRequest, ResourceRequest, ResourceSpec, UpdateAppRequest};
+use shellwego_schema::entities::app::{CreateAppRequest, ResourceRequest, ResourceSpec, UpdateAppRequest, EnvVars, VolumeMounts};
 
 use crate::{CliConfig, OutputFormat, client::ApiClient, commands::format_output};
 
@@ -105,18 +105,17 @@ async fn list(client: ApiClient, _org: Option<uuid::Uuid>, format: OutputFormat)
     match format {
         OutputFormat::Table => {
             let mut table = Table::new();
-            table.set_header(vec!["ID", "Name", "Status", "Image", "Replicas"]);
-            
+            table.set_header(vec!["ID", "Name", "Status", "Image"]);
+
             for app in apps {
                 table.add_row(vec![
                     app.id.to_string().chars().take(8).collect::<String>(),
                     app.name,
                     format!("{:?}", app.status),
                     app.image.chars().take(30).collect::<String>(),
-                    format!("{}/{}", app.replicas.current, app.replicas.desired),
                 ]);
             }
-            
+
             println!("{}", table);
         }
         _ => println!("{}", format_output(&apps, format)?),
@@ -147,9 +146,9 @@ async fn create(client: ApiClient, name: Option<String>, image: Option<String>) 
         image,
         command: None,
         resources: ResourceSpec::from(ResourceRequest::default()),
-        env: vec![],
+        env: EnvVars::default(),
         domains: vec![],
-        volumes: vec![],
+        volumes: VolumeMounts(vec![]),
         health_check: None,
         replicas: 1,
     };
@@ -166,27 +165,26 @@ async fn create(client: ApiClient, name: Option<String>, image: Option<String>) 
 
 async fn get(client: ApiClient, id: uuid::Uuid, format: OutputFormat) -> anyhow::Result<()> {
     let app = client.get_app(id).await?;
-    
+
     match format {
         OutputFormat::Table => {
             println!("{} {}", "App:".bold(), app.name);
             println!("{} {}", "ID:".bold(), app.id);
             println!("{} {:?}", "Status:".bold(), app.status);
             println!("{} {}", "Image:".bold(), app.image);
-            println!("{} {}/{}", "Replicas:".bold(), app.replicas.current, app.replicas.desired);
-            println!("{} {} ({} milli-CPU)", "Resources:".bold(), 
+            println!("{} {} ({} milli-CPU)", "Resources:".bold(),
                 format_bytes(app.resources.memory_bytes), app.resources.cpu_milli);
-            
-            if !app.domains.is_empty() {
+
+            if !app.domains.0.is_empty() {
                 println!("\n{}", "Domains:".bold());
-                for d in &app.domains {
-                    println!("  - {} (TLS: {})", d.hostname, d.tls_status);
+                for d in &app.domains.0 {
+                    println!("  - {} (TLS: {})", d.hostname, d.tls_enabled);
                 }
             }
         }
         _ => println!("{}", format_output(&app, format)?),
     }
-    
+
     Ok(())
 }
 

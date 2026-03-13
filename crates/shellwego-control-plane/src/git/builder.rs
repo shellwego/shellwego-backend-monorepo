@@ -131,15 +131,17 @@ impl BuildQueue {
         // Start queue processor
         let pending = queue.pending.clone();
         let running = queue.running.clone();
+        let completed = queue.completed.clone();
         let semaphore = queue.semaphore.clone();
-        
+
         tokio::spawn(async move {
             while let Some(spec) = receiver.recv().await {
                 let permit = semaphore.clone().acquire_owned().await.unwrap();
-                
+
                 let pending_clone = pending.clone();
                 let running_clone = running.clone();
-                
+                let completed_clone = completed.clone();
+
                 tokio::spawn(async move {
                     // Move spec to running
                     let job = {
@@ -148,37 +150,37 @@ impl BuildQueue {
                             .position(|j| j.spec.id == spec.id)
                             .map(|i| pending.remove(i))
                     };
-                    
+
                     if let Some(mut job) = job {
                         job.result.status = BuildStatus::Running;
                         job.result.started_at = Some(Utc::now());
-                        
+
                         {
                             let mut running = running_clone.write().await;
                             running.insert(spec.id, job.clone());
                         }
-                        
+
                         // Execute build (simulated)
                         let executor = BuildExecutor::new(Default::default());
                         let result = executor.execute(&job.spec).await;
-                        
+
                         // Move to completed
                         {
                             let mut running = running_clone.write().await;
                             running.remove(&spec.id);
                         }
-                        
+
                         {
-                            let mut completed = queue.completed.write().await;
+                            let mut completed = completed_clone.write().await;
                             completed.insert(spec.id, result);
                         }
                     }
-                    
+
                     drop(permit);
                 });
             }
         });
-        
+
         queue
     }
 
@@ -214,10 +216,11 @@ impl BuildQueue {
         }
         
         // Send to processor
+        let priority = spec.priority.clone();
         self.sender.send(spec).await
             .map_err(|e| BuildError::QueueError(e.to_string()))?;
-        
-        info!("Build {} submitted to queue (priority: {:?})", build_id, spec.priority);
+
+        info!("Build {} submitted to queue (priority: {:?})", build_id, priority);
         Ok(build_id)
     }
 

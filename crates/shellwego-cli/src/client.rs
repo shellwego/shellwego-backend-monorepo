@@ -5,12 +5,12 @@ use serde::de::DeserializeOwned;
 use std::time::Duration;
 
 use shellwego_schema::entities::{
-    app::{App, CreateAppRequest, UpdateAppRequest},
-    node::Node,
-    volume::{Volume, CreateVolumeRequest},
-    domain::{Domain, CreateDomainRequest},
-    database::{Database, CreateDatabaseRequest},
-    secret::{Secret, CreateSecretRequest},
+    App, CreateAppRequest, UpdateAppRequest,
+    Node,
+    Volume, CreateVolumeRequest,
+    Domain, CreateDomainRequest,
+    Database, CreateDatabaseRequest,
+    Secret, CreateSecretRequest,
 };
 
 /// Typed API client

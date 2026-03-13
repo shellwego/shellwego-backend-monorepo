@@ -9,8 +9,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use rustls::server::ResolvesServerCert;
-use rustls::{Certificate as RustlsCertificate, PrivateKey, ServerConfig};
+use rustls::ServerConfig;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
@@ -246,7 +247,7 @@ impl CertificateManager {
 
     /// Request new certificate via ACME
     pub async fn request_certificate(&self, domain: &str) -> Result<Certificate, CertError> {
-        let acme_config = self
+        let _acme_config = self
             .acme_config
             .as_ref()
             .ok_or_else(|| CertError::AcmeNotConfigured)?;
@@ -362,17 +363,17 @@ impl CertificateManager {
         params.alg = &PKCS_ECDSA_P256_SHA256;
         params.subject_alt_names = vec![rcgen::SanType::DnsName(domain.to_string())];
 
-        let key_pair = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
+        let key_pair = KeyPair::generate(&PKCS_ECDSA_P256_SHA256)
             .map_err(|e| CertError::GenerationError(format!("Failed to generate key: {}", e)))?;
 
-        let cert = rcgen::Certificate::params(params)
+        let key_pem = key_pair.serialize_pem();
+        params.key_pair = Some(key_pair);
+        let cert = rcgen::Certificate::from_params(params)
             .map_err(|e| CertError::GenerationError(format!("Failed to create cert: {}", e)))?;
 
         let cert_pem = cert
             .serialize_pem()
             .map_err(|e| CertError::GenerationError(format!("Failed to serialize cert: {}", e)))?;
-
-        let key_pem = key_pair.serialize_pem();
 
         let now = Utc::now();
 
@@ -461,20 +462,28 @@ impl Certificate {
     }
 
     /// Convert to rustls certificate
-    pub fn to_rustls_cert(&self) -> Result<(Vec<RustlsCertificate>, PrivateKey), CertError> {
+    pub fn to_rustls_cert(&self) -> Result<(Vec<CertificateDer<'static>>, PrivatePkcs8KeyDer<'static>), CertError> {
         // Parse certificate chain
-        let certs = rustls_pemfile::certs(&mut self.cert_pem.as_bytes())
-            .map_err(|e| CertError::ParseError(format!("Failed to parse cert: {}", e)))?
-            .into_iter()
-            .map(RustlsCertificate)
-            .collect();
+        let mut cert_bytes = self.cert_pem.as_bytes();
+        let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut cert_bytes)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| CertError::ParseError(format!("Failed to parse cert: {}", e)))?;
 
         // Parse private key
-        let key = rustls_pemfile::private_key(&mut self.key_pem.as_bytes())
+        let mut key_bytes = self.key_pem.as_bytes();
+        let key = rustls_pemfile::private_key(&mut key_bytes)
             .map_err(|e| CertError::ParseError(format!("Failed to parse key: {}", e)))?
             .ok_or_else(|| CertError::ParseError("No private key found".into()))?;
 
-        Ok((certs, key))
+        // Convert to PKCS8 format
+        let pkcs8_key = match key {
+            rustls::pki_types::PrivateKeyDer::Pkcs8(pkcs8) => pkcs8.secret_pkcs8_der().to_vec(),
+            rustls::pki_types::PrivateKeyDer::Sec1(sec1) => sec1.secret_sec1_der().to_vec(),
+            #[allow(unreachable_patterns)]
+            _ => return Err(CertError::ParseError("Unsupported key type".into())),
+        };
+
+        Ok((certs, PrivatePkcs8KeyDer::from(pkcs8_key)))
     }
 
     /// Get full chain PEM
@@ -559,6 +568,12 @@ pub enum RevocationReason {
 /// Certificate resolver for rustls SNI
 pub struct CertificateResolver {
     _manager: Arc<CertificateManager>,
+}
+
+impl std::fmt::Debug for CertificateResolver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CertificateResolver").finish()
+    }
 }
 
 impl CertificateResolver {

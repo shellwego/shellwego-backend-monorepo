@@ -358,7 +358,7 @@ impl CertificateService {
                     cert.id, cert.domain, days_until_expiry);
                 
                 match self.renew_certificate(&cert.id).await {
-                    Ok(()) => renewed.push(cert.id),
+                    Ok(renewed_cert) => renewed.push(renewed_cert.id),
                     Err(e) => {
                         error!("Failed to renew certificate {}: {}", cert.id, e);
                     }

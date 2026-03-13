@@ -8,6 +8,7 @@ use shellwego_agent::{
     vmm::VmmManager, wasm, AgentConfig,
 };
 use shellwego_network::CniNetwork;
+use shellwego_schema::WasmRuntimeConfig;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -20,7 +21,11 @@ async fn main() -> anyhow::Result<()> {
     let metrics = Arc::new(MetricsCollector::new(config.node_id.unwrap_or_default()));
     let vmm = VmmManager::new(&config, metrics.clone()).await?;
 
-    let _wasm_runtime = wasm::WasmRuntime::new(&wasm::WasmConfig { max_memory_mb: 512 }).await?;
+    let _wasm_runtime = wasm::WasmRuntime::new(&WasmRuntimeConfig { 
+        max_memory_mb: 512,
+        max_compute_units: 1.0,
+        max_instances: 100,
+    }).await?;
     let network = Arc::new(CniNetwork::new("sw0", "10.0.0.0/16").await?);
 
     let daemon = Daemon::new(config.clone(), capabilities, vmm.clone(), metrics.clone()).await?;

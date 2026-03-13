@@ -30,6 +30,7 @@ futures-util = "0.3"
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
+bytes = "1.5"
 
 # Image format handling
 tar = "0.4"

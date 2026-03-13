@@ -100,24 +100,26 @@ impl Default for BrandingConfig {
 
 impl InvoiceGenerator {
     /// Create a new invoice generator
-    /// 
+    ///
     /// Loads templates from the specified directory.
     /// Uses embedded templates if no directory is provided.
     #[instrument(skip(template_path))]
     pub fn new(template_path: &str) -> Result<Self, BillingError> {
         let mut templates = Tera::default();
-        
+
         // Register custom filters
         templates.register_filter("currency", currency_filter);
         templates.register_filter("date_format", date_format_filter);
         templates.register_filter("invoice_status", invoice_status_filter);
-        
+
         // Try to load templates from path, or use embedded defaults
         if !template_path.is_empty() && Path::new(template_path).exists() {
             let glob_pattern = format!("{}/**/*.html", template_path);
-            templates
-                .load_from_glob(&glob_pattern)
+            // Use Tera::new() which is the public API for loading from glob
+            let mut loaded = Tera::new(&glob_pattern)
                 .map_err(|e| BillingError::TemplateError(format!("Failed to load templates: {}", e)))?;
+            // Merge the loaded templates into our templates instance
+            templates.extend(&mut loaded);
             info!(path = %template_path, "Loaded invoice templates from directory");
         } else {
             // Register embedded default template
@@ -126,7 +128,7 @@ impl InvoiceGenerator {
                 .map_err(|e| BillingError::TemplateError(format!("Failed to register template: {}", e)))?;
             info!("Using embedded default invoice template");
         }
-        
+
         Ok(Self {
             templates,
             branding: BrandingConfig::default(),

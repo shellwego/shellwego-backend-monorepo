@@ -40,6 +40,6 @@ pub use error::{CoreError, CoreResult};
 pub use vmm::{VirtualizationMode, MicrovmConfig, MicrovmState, MicrovmSummary, DriveConfig, NetworkInterface, RateLimiterConfig, MicrovmMetrics, WasmConfig};
 pub use network::{NetworkConfig, NetworkSetup, NetworkError, Message, QuicConfig, AgentConnection, ResourceLimits, ChannelPriority, DiscoveryError, ServiceInstance, generate_mac, parse_mac};
 pub use api::{ListAppsQuery, ListNodesQuery, ScaleRequest, PaginatedResponse, ErrorResponse};
-pub use agent::{AgentConfig, AgentConfigJson, Capabilities, NodeCapacity, DesiredState, DesiredApp, DesiredVolume, VolumeMount};
+pub use agent::{AgentConfig, AgentConfigJson, Capabilities, NodeCapacity, DesiredState, DesiredApp, DesiredVolume, VolumeMount, WasmRuntimeConfig, WasmRuntimeStats, WasmExitStatus, AgentSnapshotInfo, AgentSnapshotType};
 pub use oci::{Manifest, ManifestIndex, Descriptor, ConfigDescriptor, LayerDescriptor, ManifestDescriptor, Platform, ImageConfig, ContainerConfig, RootFs, HistoryEntry, RegistryAuth, AuthToken, OciConfig};
 pub use billing::{Customer, Address, SubscriptionTier, CustomerStatus, PaymentMethod, Invoice, InvoiceStatus, LineItem, BillingPeriod, PaymentResult, UsageEvent, UsageSummary, BillingConfig, DunningConfig};

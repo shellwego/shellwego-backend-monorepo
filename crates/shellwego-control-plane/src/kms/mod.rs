@@ -369,24 +369,27 @@ impl KmsClient {
 pub enum KmsError {
     #[error("Secret not found: {0}")]
     NotFound(String),
-    
+
     #[error("Encryption failed: {0}")]
     EncryptionFailed(String),
-    
+
     #[error("Decryption failed: {0}")]
     DecryptionFailed(String),
-    
+
     #[error("Key rotation failed: {0}")]
     RotationFailed(String),
-    
+
     #[error("Health check failed: {0}")]
     HealthCheckFailed(String),
-    
+
     #[error("Backend error: {0}")]
     BackendError(String),
-    
+
     #[error("Base64 error: {0}")]
     Base64Error(#[from] base64::DecodeError),
+
+    #[error("UTF-8 error: {0}")]
+    Utf8Error(#[from] std::string::FromUtf8Error),
 }
 
 #[cfg(test)]

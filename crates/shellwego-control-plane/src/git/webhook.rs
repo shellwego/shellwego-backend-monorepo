@@ -466,18 +466,21 @@ impl WebhookRouter {
 pub enum WebhookError {
     #[error("Repository not found: {0}")]
     NotFound(String),
-    
+
     #[error("Invalid signature: {0}")]
     InvalidSignature(String),
-    
+
     #[error("Invalid payload: {0}")]
     InvalidPayload(String),
-    
+
     #[error("Unsupported event type: {0}")]
     UnsupportedEvent(String),
-    
+
     #[error("Processing error: {0}")]
     ProcessingError(String),
+
+    #[error("Build error: {0}")]
+    BuildError(#[from] crate::git::builder::BuildError),
 }
 
 #[cfg(test)]

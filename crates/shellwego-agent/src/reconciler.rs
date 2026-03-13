@@ -6,7 +6,8 @@
 use tokio::time::{interval, Duration};
 use tracing::{debug, error, info};
 
-use crate::daemon::{DesiredApp, StateClient};
+use shellwego_schema::DesiredApp;
+use crate::daemon::StateClient;
 use crate::vmm::{DriveConfig, MicrovmConfig, NetworkInterface, VmmManager};
 use shellwego_network::{CniNetwork, NetworkConfig};
 

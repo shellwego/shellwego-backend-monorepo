@@ -813,9 +813,10 @@ pub async fn create_organization(
     State(_state): State<Arc<AppState>>,
     Json(req): Json<CreateOrganizationRequest>,
 ) -> Result<(StatusCode, Json<Organization>), (StatusCode, Json<ErrorResponse>)> {
+    let name = req.name.clone();
     let org = Organization {
         id: Uuid::new_v4(),
-        name: req.name,
+        name,
         slug: req.name.to_lowercase().replace(' ', "-"),
         created_at: Utc::now(),
     };

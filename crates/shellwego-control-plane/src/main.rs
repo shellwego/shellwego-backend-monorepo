@@ -7,6 +7,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tracing::info;
+use tracing_subscriber::{filter::LevelFilter, fmt};
 
 // Module declarations
 mod api;
@@ -21,16 +22,13 @@ mod orm;
 
 use crate::config::Config;
 use crate::state::AppState;
-use crate::orm::Database;
+use crate::orm::{Database, DatabaseConfig as OrmDatabaseConfig};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Initialize tracing
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive(tracing::Level::INFO.into())
-        )
+    fmt()
+        .with_max_level(LevelFilter::INFO)
         .init();
 
     info!("Starting ShellWeGo Control Plane v{}", env!("CARGO_PKG_VERSION"));
@@ -39,8 +37,19 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::load()?;
     info!("Configuration loaded: serving on {}", config.bind_addr);
 
+    // Convert config::DatabaseConfig to orm::DatabaseConfig
+    let orm_db_config = OrmDatabaseConfig {
+        url: config.database.url.clone(),
+        max_connections: config.database.max_connections,
+        min_connections: config.database.min_connections,
+        connect_timeout_secs: config.database.connect_timeout_secs,
+        idle_timeout_secs: 600,
+        logging: config.database.logging,
+        auto_migrate: config.database.auto_migrate,
+    };
+
     // Initialize database
-    let database = Arc::new(Database::new(config.database.clone()).await?);
+    let database = Arc::new(Database::new(orm_db_config).await?);
     info!("Database connection established");
 
     // Run migrations if enabled

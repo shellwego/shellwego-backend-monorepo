@@ -142,16 +142,16 @@ impl OperatorManager {
             .get(instance_id)
             .copied()
             .ok_or_else(|| OperatorError::NotFound(instance_id.to_string()))?;
-        
+
         match engine {
             DatabaseEngine::Postgres => {
-                self.postgres_operator.get_status(instance_id).await?
+                Ok(self.postgres_operator.get_status(instance_id).await?)
             }
             DatabaseEngine::Mysql => {
-                self.mysql_operator.get_status(instance_id).await?
+                Ok(self.mysql_operator.get_status(instance_id).await?)
             }
             DatabaseEngine::Redis => {
-                self.redis_operator.get_status(instance_id).await?
+                Ok(self.redis_operator.get_status(instance_id).await?)
             }
             _ => {
                 Err(OperatorError::Unavailable(

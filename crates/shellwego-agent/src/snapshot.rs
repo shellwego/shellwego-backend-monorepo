@@ -322,14 +322,14 @@ impl SnapshotManager {
         let memory_result = vmm_manager
             .snapshot_vm_state(app_id, mem_path.clone(), snap_path.clone())
             .await;
-        if let Err(e) = &memory_result {
+        if let Err(e) = memory_result {
             error!("Failed to create memory snapshot: {}", e);
             // Try to resume VM on error
             if let Err(resume_err) = vmm_manager.resume(app_id).await {
                 error!("Failed to resume VM after snapshot failure: {}", resume_err);
             }
             should_resume = false;
-            return Err(e.clone());
+            return Err(e);
         }
 
         // 3. Create ZFS disk snapshot if available

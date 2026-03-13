@@ -67,9 +67,9 @@ async fn login(config: &mut CliConfig) -> anyhow::Result<()> {
         Ok(token) => {
             config.set_token(token)?;
             config.save()?;
-            
+
             // Fetch and display user info
-            let authed_client = ApiClient::new(&config.api_url, config.get_token().unwrap_or_default())?;
+            let authed_client = ApiClient::new(&config.api_url, &config.get_token().unwrap_or_default())?;
             let user = authed_client.get_user().await?;
             
             println!("{}", "Login successful!".green().bold());

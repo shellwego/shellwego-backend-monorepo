@@ -4,19 +4,14 @@
 
 use std::sync::Arc;
 use axum::{
-    routing::{get, post, put, patch, delete},
+    routing::{get, post},
     Router,
-    Json,
-    http::StatusCode,
-    extract::Path,
 };
 use tower_http::{
     cors::CorsLayer,
     trace::TraceLayer,
     compression::CompressionLayer,
-    request_id::RequestIdLayer,
 };
-use serde::{Deserialize, Serialize};
 
 use crate::state::AppState;
 
@@ -45,7 +40,6 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
-        .layer(RequestIdLayer::new())
         .with_state(state)
 }
 

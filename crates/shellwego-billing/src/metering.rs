@@ -161,19 +161,21 @@ impl MetricsStore {
                 .iter()
                 .flat_map(|entry| entry.value().clone())
                 .collect();
-            
+
             if events.is_empty() {
                 return Ok(());
             }
-            
+
+            let events_count = events.len();
+
             // Batch insert
             let mut tx = pool.begin().await
                 .map_err(|e| BillingError::MeteringError(format!("Transaction start failed: {}", e)))?;
-            
+
             for event in events {
                 let metadata_json = serde_json::to_value(&event.metadata)
                     .unwrap_or(serde_json::Value::Object(Default::default()));
-                
+
                 sqlx::query(r#"
                     INSERT INTO usage_events (customer_id, resource_type, quantity, timestamp, metadata)
                     VALUES ($1, $2, $3, $4, $5)
@@ -187,16 +189,16 @@ impl MetricsStore {
                 .await
                 .map_err(|e| BillingError::MeteringError(format!("Insert failed: {}", e)))?;
             }
-            
+
             tx.commit().await
                 .map_err(|e| BillingError::MeteringError(format!("Transaction commit failed: {}", e)))?;
-            
+
             // Clear buffer
             self.buffer.clear();
-            
-            info!(count = events.len(), "Flushed usage events to database");
+
+            info!(count = events_count, "Flushed usage events to database");
         }
-        
+
         Ok(())
     }
     
@@ -270,7 +272,7 @@ impl MetricsStore {
                         let key = entry.key();
                         key.starts_with(&format!("{}:{}", customer_id, resource_type))
                     })
-                    .flat_map(|entry| entry.value())
+                    .flat_map(|entry| entry.value().clone())
                     .filter(|event| event.timestamp >= current && event.timestamp < next)
                     .map(|event| event.quantity)
                     .sum();
@@ -562,8 +564,10 @@ impl RealtimeCounter {
     pub fn total_usage(&self) -> f64 {
         self.counters
             .iter()
-            .flat_map(|entry| entry.value().iter())
-            .map(|r| *r.value())
+            .flat_map(|entry| {
+                let values: Vec<f64> = entry.value().iter().map(|r| *r.value()).collect();
+                values
+            })
             .sum()
     }
     

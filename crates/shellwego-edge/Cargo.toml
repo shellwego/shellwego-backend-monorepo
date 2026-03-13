@@ -10,13 +10,15 @@ description = "Edge proxy, load balancer, and TLS termination"
 
 [dependencies]
 # HTTP server
-hyper = { workspace = true, features = ["full"] }
-hyper-util = "0.1"
+hyper = { version = "0.14", features = ["full", "backports"] }
 http-body-util = "0.1"
+http = "1.0"
+bytes = "1.5"
 
 # TLS
-rustls = "0.22"
+rustls = "0.23"
 rustls-pemfile = "2.0"
+tokio-rustls = "0.26"
 
 # ACME client
 rcgen = "0.12"

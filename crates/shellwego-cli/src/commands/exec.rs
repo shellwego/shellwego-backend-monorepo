@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use clap::Args;
 use colored::Colorize;
+use futures_util::SinkExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, stdin, stdout};
 use tokio::sync::Mutex;
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};

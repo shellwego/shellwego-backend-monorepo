@@ -4,15 +4,16 @@
 //! with live updates using ratatui.
 
 use crate::{client::ApiClient, config::CliConfig};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use crossterm::{
     event::{self, Event, KeyCode},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::prelude::*;
+use ratatui::widgets::{Block, Paragraph, Row, Table};
 use std::time::{Duration, Instant};
-use shellwego_schema::entities::{app::App, node::Node};
+use shellwego_schema::entities::{App, Node};
 
 #[derive(clap::Args)]
 pub struct TopArgs {
@@ -105,6 +106,7 @@ async fn run_loop<B: Backend>(
 
 mod ui {
     use super::*;
+    use colored::Colorize;
 
     pub fn render(f: &mut Frame, state: &DashboardState, args: &TopArgs) {
         let chunks = Layout::default()
@@ -114,7 +116,7 @@ mod ui {
                 Constraint::Min(10),
                 Constraint::Length(1),
             ])
-            .split(f.area());
+            .split(f.size());
 
         let status_text = if let Some(err) = &state.error {
             format!(" Error: {}", err).red()
@@ -159,7 +161,7 @@ mod ui {
                         a.name.clone(),
                         format!("{:?}", a.status),
                         a.image.chars().take(20).collect(),
-                        a.resources.memory.clone(),
+                        format!("{} MB", a.resources.memory_bytes / (1024 * 1024)),
                     ])
                 });
             let table = Table::new(rows, [
@@ -173,7 +175,7 @@ mod ui {
             f.render_widget(table, content_chunks[1]);
         }
 
-        let help = " [q] Quit | [r] Refresh | ".dimmed();
+        let help = " [q] Quit | [r] Refresh | ".dimmed().to_string();
         f.render_widget(Paragraph::new(help), chunks[2]);
     }
 }

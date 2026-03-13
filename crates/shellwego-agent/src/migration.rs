@@ -13,7 +13,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, info};
 use uuid::Uuid;
 
-use crate::snapshot::{SnapshotInfo, SnapshotManager};
+use crate::snapshot::{AgentSnapshotInfo, SnapshotManager};
 use crate::vmm::VmmManager;
 
 /// Migration coordinator that manages VM migration between nodes
@@ -200,14 +200,14 @@ impl MigrationManager {
     }
 
     /// Store snapshot locally for pickup (development/testing mode)
-    async fn store_for_pickup(&self, snapshot: &SnapshotInfo) -> anyhow::Result<u64> {
+    async fn store_for_pickup(&self, snapshot: &AgentSnapshotInfo) -> anyhow::Result<u64> {
         let path = std::path::Path::new(&snapshot.memory_path);
         let metadata = std::fs::metadata(path)?;
         Ok(metadata.len())
     }
 
     /// Receive snapshot from local storage (development/testing mode)
-    async fn receive_from_pickup(&self, snapshot_id: &str) -> anyhow::Result<SnapshotInfo> {
+    async fn receive_from_pickup(&self, snapshot_id: &str) -> anyhow::Result<AgentSnapshotInfo> {
         self.snapshot_manager
             .get_snapshot(snapshot_id)
             .await?
@@ -221,7 +221,7 @@ pub trait MigrationTransport {
     /// Transfer snapshot to target node
     async fn transfer_snapshot(
         &self,
-        snapshot: &SnapshotInfo,
+        snapshot: &AgentSnapshotInfo,
         target_node: &str,
     ) -> anyhow::Result<u64>;
 
@@ -230,7 +230,7 @@ pub trait MigrationTransport {
         &self,
         snapshot_id: &str,
         source_node: &str,
-    ) -> anyhow::Result<SnapshotInfo>;
+    ) -> anyhow::Result<AgentSnapshotInfo>;
 }
 
 /// Migration session state
@@ -361,7 +361,7 @@ impl rustls::client::ServerCertVerifier for SkipServerVerification {
 impl MigrationTransport for QuicMigrationTransport {
     async fn transfer_snapshot(
         &self,
-        snapshot: &SnapshotInfo,
+        snapshot: &AgentSnapshotInfo,
         target_node: &str,
     ) -> anyhow::Result<u64> {
         info!(
@@ -401,7 +401,7 @@ impl MigrationTransport for QuicMigrationTransport {
         &self,
         _snapshot_id: &str,
         _source_node: &str,
-    ) -> anyhow::Result<SnapshotInfo> {
+    ) -> anyhow::Result<AgentSnapshotInfo> {
         // QUIC is typically push-based for this use case.
         // The listener would be in the Daemon/Main handling incoming streams.
         // This method implies pulling, which we don't do in this architecture.

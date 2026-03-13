@@ -10,7 +10,7 @@ use crate::config::Config;
 use crate::orm::Database;
 use crate::services::{BackupService, CertificateService, HealthCheckService, RateLimiter};
 use crate::operators::{OperatorManager, OperatorConfig};
-use crate::git::{BuildQueue, BuildQueueConfig};
+use crate::git::builder::{BuildQueue, BuildQueueConfig};
 use crate::kms::{KmsClient, KmsConfig};
 
 // Re-export AgentConnection from schema for convenience
@@ -87,7 +87,7 @@ impl AppState {
     
     /// Register a new agent connection
     pub fn register_agent(&self, node_id: Uuid, hostname: String, region: String) {
-        let conn = AgentConnection::new(node_id, hostname, region);
+        let conn = AgentConnection::new(node_id, hostname.clone(), region);
         self.agents.insert(node_id, conn);
         info!("Registered agent: {} ({})", node_id, hostname);
     }

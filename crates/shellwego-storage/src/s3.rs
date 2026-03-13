@@ -231,9 +231,9 @@ impl StorageBackend for S3Backend {
                     volumes.push(VolumeInfo {
                         name: name.to_string(),
                         mountpoint: None,
-                        used_bytes: obj.size().unwrap_or(0) as u64,
+                        used_bytes: obj.size() as u64,
                         available_bytes: 0,
-                        referenced_bytes: obj.size().unwrap_or(0) as u64,
+                        referenced_bytes: obj.size() as u64,
                         compression_ratio: 1.0,
                         created: chrono::Utc::now(),
                         properties: std::collections::HashMap::new(),
@@ -262,9 +262,9 @@ impl StorageBackend for S3Backend {
         Ok(VolumeInfo {
             name: name.to_string(),
             mountpoint: None,
-            used_bytes: resp.content_length().unwrap_or(0) as u64,
+            used_bytes: resp.content_length() as u64,
             available_bytes: 0,
-            referenced_bytes: resp.content_length().unwrap_or(0) as u64,
+            referenced_bytes: resp.content_length() as u64,
             compression_ratio: 1.0,
             created: chrono::Utc::now(),
             properties: std::collections::HashMap::new(),

@@ -3,6 +3,7 @@
 //! Loads configuration from environment variables and config files.
 
 use serde::Deserialize;
+use std::path::Path;
 use tracing::info;
 
 /// Main configuration structure

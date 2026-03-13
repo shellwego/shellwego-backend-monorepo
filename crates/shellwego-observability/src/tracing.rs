@@ -12,14 +12,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use opentelemetry::propagation::{Extractor, Injector, TextMapPropagator};
-use opentelemetry::sdk::propagation::TraceContextPropagator;
-use opentelemetry::sdk::resource::{EnvResourceDetector, Resource, TelemetryResourceDetector};
-use opentelemetry::sdk::trace::{BatchConfig, BatchSpanProcessor, Config, RandomIdGenerator, Sampler, TracerProvider};
-use opentelemetry::trace::{SpanContext as OtelSpanContext, SpanId, Status, TraceContextExt, TraceFlags, TraceId, TraceState, Tracer, TracerProvider as _, SpanKind};
+use opentelemetry_sdk::propagation::TraceContextPropagator;
+use opentelemetry_sdk::resource::{EnvResourceDetector, Resource, TelemetryResourceDetector};
+use opentelemetry_sdk::trace::{BatchConfig, BatchSpanProcessor, Config, Sampler, TracerProvider};
+use opentelemetry::trace::{Span as _, SpanContext as OtelSpanContext, SpanId, Status, TraceContextExt, TraceFlags, TraceId, TraceState, Tracer, TracerProvider as _, SpanKind};
 use opentelemetry::{global, KeyValue, Value as OtelValue};
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_semantic_conventions::resource::{SERVICE_NAME, SERVICE_VERSION};
-use parking_lot::RwLock;
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::ObservabilityError;
@@ -143,7 +143,7 @@ impl From<BatchExportConfig> for BatchConfig {
         BatchConfig::default()
             .with_max_queue_size(config.max_queue_size)
             .with_scheduled_delay(Duration::from_millis(config.scheduled_delay_ms))
-            .with_export_timeout(Duration::from_millis(config.export_timeout_ms))
+            .with_max_export_timeout(Duration::from_millis(config.export_timeout_ms))
             .with_max_export_batch_size(config.max_export_batch_size)
     }
 }
@@ -153,7 +153,7 @@ pub struct TracingPipeline {
     /// Tracer provider
     tracer_provider: TracerProvider,
     /// Tracer instance
-    tracer: opentelemetry::sdk::trace::Tracer,
+    tracer: opentelemetry_sdk::trace::Tracer,
     /// Service name
     service_name: String,
 }
@@ -198,15 +198,14 @@ impl TracingPipeline {
             .map_err(|e| ObservabilityError::TracingError(format!("Failed to create exporter: {}", e)))?;
 
         // Create batch processor
-        let batch_processor = BatchSpanProcessor::builder(exporter, opentelemetry::sdk::runtime::Tokio)
+        let batch_processor = BatchSpanProcessor::builder(exporter, opentelemetry_sdk::runtime::Tokio)
             .with_batch_config(BatchConfig::from(config.batch_config.clone()))
             .build();
 
-        // Create tracer provider
+        // Create tracer provider with resource and span processor
         let tracer_provider = TracerProvider::builder()
-            .with_config(Config::default().with_sampler(config.sampling.to_sampler()))
-            .with_resource(resource)
             .with_span_processor(batch_processor)
+            .with_config(Config::default().with_sampler(config.sampling.to_sampler()).with_resource(resource))
             .build();
 
         // Get tracer
@@ -224,9 +223,7 @@ impl TracingPipeline {
 
     /// Create a new span
     pub fn start_span(&self, name: &str, parent: Option<SpanContext>) -> Span {
-        let mut builder = self.tracer.span_builder(name.to_string());
-
-        if let Some(ctx) = parent {
+        let parent_cx = if let Some(ctx) = parent {
             let span_context = OtelSpanContext::new(
                 TraceId::from_hex(&ctx.trace_id).unwrap_or(TraceId::INVALID),
                 SpanId::from_hex(&ctx.span_id).unwrap_or(SpanId::INVALID),
@@ -238,20 +235,25 @@ impl TracingPipeline {
                 false,
                 TraceState::default(),
             );
-            let parent_cx = opentelemetry::Context::new()
-                .with_remote_span_context(span_context);
-            builder = builder.with_parent_context(parent_cx);
-        }
-        
-        builder = builder.with_span_kind(SpanKind::Internal);
+            Some(opentelemetry::Context::new().with_remote_span_context(span_context))
+        } else {
+            None
+        };
 
-        let cx = opentelemetry::Context::current();
-        let span = self.tracer.build_with_context(builder, cx);
-        
+        let span = if let Some(cx) = parent_cx {
+            self.tracer.span_builder(name.to_string())
+                .with_kind(SpanKind::Internal)
+                .start_with_context(&self.tracer, &cx)
+        } else {
+            self.tracer.span_builder(name.to_string())
+                .with_kind(SpanKind::Internal)
+                .start(&self.tracer)
+        };
+
         let span_id = span.span_context().span_id().to_string();
-        
+
         Span {
-            inner: Some(span),
+            inner: Some(Arc::new(Mutex::new(span))),
             span_id,
         }
     }
@@ -319,23 +321,28 @@ impl TracingPipeline {
 
     /// Force flush all pending spans
     pub async fn force_flush(&self) -> Result<(), ObservabilityError> {
-        self.tracer_provider
-            .force_flush()
-            .map_err(|e| ObservabilityError::TracingError(format!("Force flush failed: {}", e)))?;
+        let results = self.tracer_provider.force_flush();
+        // Check if any flush operation failed
+        for result in results {
+            if let Err(e) = result {
+                return Err(ObservabilityError::TracingError(format!("Force flush failed: {}", e)));
+            }
+        }
         Ok(())
     }
 
     /// Shutdown tracing pipeline
     pub async fn shutdown(self) -> Result<(), ObservabilityError> {
         self.force_flush().await?;
-        self.tracer_provider
-            .shutdown()
-            .map_err(|e| ObservabilityError::TracingError(format!("Shutdown failed: {}", e)))?;
+        // In opentelemetry_sdk 0.21, the TracerProvider doesn't have a shutdown method.
+        // The provider is automatically shut down when dropped.
+        // We can drop the global tracer provider here.
+        global::shutdown_tracer_provider();
         Ok(())
     }
 
     /// Get the tracer instance
-    pub fn tracer(&self) -> &opentelemetry::sdk::trace::Tracer {
+    pub fn tracer(&self) -> &opentelemetry_sdk::trace::Tracer {
         &self.tracer
     }
 }
@@ -408,7 +415,7 @@ impl SpanContext {
 
 /// Active span handle
 pub struct Span {
-    inner: Option<opentelemetry::sdk::trace::Span>,
+    inner: Option<Arc<Mutex<opentelemetry_sdk::trace::Span>>>,
     span_id: String,
 }
 
@@ -430,7 +437,9 @@ impl Span {
     /// Add attribute to span
     pub fn set_attribute(&self, key: &str, value: AttributeValue) {
         if let Some(ref span) = self.inner {
-            span.set_attribute(KeyValue::new(key, value.into()));
+            let key_owned = key.to_string();
+            let mut guard = span.lock();
+            guard.set_attribute(KeyValue::new(key_owned, OtelValue::from(value)));
         }
     }
 
@@ -444,31 +453,34 @@ impl Span {
     /// Add event to span
     pub fn add_event(&self, name: &str, attributes: &HashMap<String, AttributeValue>) {
         if let Some(ref span) = self.inner {
+            let mut guard = span.lock();
             let attrs: Vec<KeyValue> = attributes
                 .iter()
                 .map(|(k, v)| KeyValue::new(k.clone(), OtelValue::from(v.clone())))
                 .collect();
-            span.add_event(name.to_string(), attrs);
+            guard.add_event(name.to_string(), attrs);
         }
     }
 
     /// Record error on span
     pub fn record_error(&self, error: &dyn std::error::Error) {
         if let Some(ref span) = self.inner {
-            span.record_error(error);
-            span.set_status(Status::error(error.to_string()));
+            let mut guard = span.lock();
+            guard.record_error(error);
+            guard.set_status(Status::error(error.to_string()));
         }
     }
 
     /// Set span status
     pub fn set_status(&self, status: SpanStatus) {
         if let Some(ref span) = self.inner {
+            let mut guard = span.lock();
             let otel_status = match status {
                 SpanStatus::Ok => Status::Ok,
                 SpanStatus::Error(msg) => Status::error(msg),
                 SpanStatus::Unset => Status::Unset,
             };
-            span.set_status(otel_status);
+            guard.set_status(otel_status);
         }
     }
 
@@ -480,14 +492,16 @@ impl Span {
     /// Update span name
     pub fn update_name(&self, name: &str) {
         if let Some(ref span) = self.inner {
-            span.update_name(name.to_string());
+            let mut guard = span.lock();
+            guard.update_name(name.to_string());
         }
     }
 
     /// End span
     pub fn end(self) {
         if let Some(span) = self.inner {
-            span.end();
+            let mut guard = span.lock();
+            guard.end();
         }
     }
 
@@ -500,7 +514,8 @@ impl Span {
     /// Get span context
     pub fn context(&self) -> Option<SpanContext> {
         if let Some(ref span) = self.inner {
-            let sc = span.span_context();
+            let guard = span.lock();
+            let sc = guard.span_context();
             Some(SpanContext {
                 trace_id: format!("{:032x}", sc.trace_id()),
                 span_id: format!("{:016x}", sc.span_id()),
@@ -514,7 +529,7 @@ impl Span {
 
     /// Check if span is recording
     pub fn is_recording(&self) -> bool {
-        self.inner.as_ref().map(|s| s.is_recording()).unwrap_or(false)
+        self.inner.as_ref().map(|span| span.lock().is_recording()).unwrap_or(false)
     }
 }
 

@@ -1,6 +1,7 @@
 //! Log streaming command
 
 use clap::Args;
+use colored::Colorize;
 
 use crate::{CliConfig, client::ApiClient};
 

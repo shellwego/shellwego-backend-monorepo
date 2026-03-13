@@ -28,10 +28,10 @@ opt-level = 0
 
 # Clippy configuration
 [workspace.lints.clippy]
-all = "warn"
-pedantic = "warn"
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
 nursery = "allow"
-cargo = "warn"
+cargo = { level = "warn", priority = -1 }
 
 # Allow some common patterns
 multiple_crate_versions = "allow"

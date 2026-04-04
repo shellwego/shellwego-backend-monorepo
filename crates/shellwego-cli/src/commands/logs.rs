@@ -3,7 +3,7 @@
 use clap::Args;
 use colored::Colorize;
 
-use crate::{CliConfig, client::ApiClient};
+use crate::CliConfig;
 
 #[derive(Args)]
 pub struct LogArgs {

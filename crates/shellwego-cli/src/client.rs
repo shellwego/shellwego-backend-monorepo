@@ -1,6 +1,6 @@
 //! HTTP API client with typed methods
 
-use reqwest::{Client, Response, StatusCode};
+use reqwest::{Client, Response};
 use serde::de::DeserializeOwned;
 use std::time::Duration;
 

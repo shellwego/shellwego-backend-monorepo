@@ -5,13 +5,13 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use hyper::client::conn::http1::{self, SendRequest};
+use hyper::client::conn::http1::SendRequest;
 use hyper::header::{HeaderName, HeaderValue, CONNECTION, UPGRADE};
-use hyper::{Body, Method, Request, Response, StatusCode, Version};
+use hyper::{Body, Request, Response, StatusCode, Version};
 use parking_lot::RwLock;
 use tokio::net::TcpStream;
 use tokio::time::timeout;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 use crate::{
     router::{LoadBalancerStrategy, Route, Upstream},

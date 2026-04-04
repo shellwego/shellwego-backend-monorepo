@@ -287,7 +287,7 @@ impl EbpfQos {
         };
 
         match config {
-            Some(config) => {
+            Some(_config) => {
                 #[cfg(feature = "ebpf")]
                 {
                     self.read_shaper_stats(&config.iface, config.direction).await
@@ -319,7 +319,7 @@ impl EbpfQos {
             }
         };
 
-        if let Some(config) = config {
+        if let Some(_config) = config {
             #[cfg(feature = "ebpf")]
             {
                 self.update_tc_rate(&config.iface, config.direction, new_rate_bps).await?;

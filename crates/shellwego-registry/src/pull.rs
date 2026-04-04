@@ -12,15 +12,14 @@ use bytes::Bytes;
 use futures_util::stream::StreamExt;
 use reqwest::Client;
 use sha2::{Sha256, Digest as Sha256Digest};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 // Import OCI types from schema
 use shellwego_schema::oci::{
     Manifest, RegistryAuth, AuthToken, ImageConfig,
-    ConfigDescriptor, LayerDescriptor,
 };
 
-use crate::{RegistryBackend, RegistryError};
+use crate::RegistryError;
 
 // Re-export types needed by pull module
 use crate::cache::LayerCache;

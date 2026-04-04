@@ -2,8 +2,8 @@
 
 use clap::{Args, Subcommand};
 use colored::Colorize;
-use comfy_table::{Table, modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL};
-use dialoguer::{Input, Select, Confirm};
+use comfy_table::Table;
+use dialoguer::{Input, Confirm};
 use shellwego_schema::entities::app::{CreateAppRequest, ResourceRequest, ResourceSpec, UpdateAppRequest, EnvVars, VolumeMounts};
 
 use crate::{CliConfig, OutputFormat, client::ApiClient, commands::format_output};
@@ -204,7 +204,7 @@ async fn update(client: ApiClient, id: uuid::Uuid) -> anyhow::Result<()> {
         env: None,
     };
     
-    let updated = client.update_app(id, &req).await?;
+    let _updated = client.update_app(id, &req).await?;
     println!("{} Updated app", "✓".green());
     
     Ok(())
@@ -242,19 +242,19 @@ async fn scale(client: ApiClient, id: uuid::Uuid, replicas: u32) -> anyhow::Resu
     Ok(())
 }
 
-async fn start(client: ApiClient, id: uuid::Uuid) -> anyhow::Result<()> {
+async fn start(_client: ApiClient, id: uuid::Uuid) -> anyhow::Result<()> {
     println!("Starting app {}...", id);
     // TODO: Implement in client
     Ok(())
 }
 
-async fn stop(client: ApiClient, id: uuid::Uuid) -> anyhow::Result<()> {
+async fn stop(_client: ApiClient, id: uuid::Uuid) -> anyhow::Result<()> {
     println!("Stopping app {}...", id);
     // TODO: Implement in client
     Ok(())
 }
 
-async fn restart(client: ApiClient, id: uuid::Uuid) -> anyhow::Result<()> {
+async fn restart(_client: ApiClient, id: uuid::Uuid) -> anyhow::Result<()> {
     println!("Restarting app {}...", id);
     // TODO: Implement in client
     Ok(())

@@ -7,14 +7,14 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, error, info, warn};
+use tracing::{info, warn};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::RegistryError;
 
 // Import OCI types from schema
-use shellwego_schema::oci::{Manifest, Descriptor, Platform};
+use shellwego_schema::oci::Manifest;
 
 /// Layer cache manager
 pub struct LayerCache {
@@ -397,7 +397,7 @@ impl LayerCache {
         &self,
         dataset: &str,
         layer_path: &Path,
-        is_first: bool,
+        _is_first: bool,
     ) -> Result<(), RegistryError> {
         // Get mountpoint
         let output = tokio::process::Command::new("zfs")

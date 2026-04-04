@@ -2,7 +2,7 @@
 
 use clap::{Args, Subcommand};
 
-use crate::{CliConfig, OutputFormat, client::ApiClient};
+use crate::{CliConfig, OutputFormat};
 
 #[derive(Args)]
 pub struct SecretArgs {
@@ -25,7 +25,7 @@ pub async fn handle(args: SecretArgs, config: &CliConfig, _format: OutputFormat)
     match args.command {
         SecretCommands::List => println!("Listing secrets..."),
         SecretCommands::Set { name, value } => {
-            let val = match value {
+            let _val = match value {
                 Some(v) => v,
                 None => {
                     println!("Enter value (will be hidden):");

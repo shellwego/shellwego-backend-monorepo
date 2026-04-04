@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{info, warn, error, debug};
+use tracing::{info, debug};
 
 pub mod postgres;
 pub mod mysql;

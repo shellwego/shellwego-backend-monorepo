@@ -3,21 +3,17 @@
 //! Traefik replacement written in Rust for lower latency.
 //! Handles HTTP/HTTPS routing, TLS termination, and load balancing.
 
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use bytes::Bytes;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use hyper::{Body, Method, Request, Response, StatusCode};
+use hyper::{Body, Request, Response, StatusCode};
 use tokio::net::TcpListener;
-use tokio::signal;
-use tokio::sync::{broadcast, mpsc, RwLock};
-use tokio_rustls::TlsAcceptor;
-use tracing::{debug, error, info, warn};
+use tokio::sync::{broadcast, RwLock};
+use tracing::{info, warn};
 
 pub mod proxy;
 pub mod router;
@@ -247,8 +243,8 @@ impl EdgeProxy {
 
                                     let stats_for_decrement = stats.clone();
                                     let service = service_fn(move |req: Request<Body>| {
-                                        let router = router.clone();
-                                        let proxy = proxy.clone();
+                                        let _router = router.clone();
+                                        let _proxy = proxy.clone();
                                         async move {
                                             // Redirect to HTTPS
                                             let host = req.headers()
@@ -409,7 +405,7 @@ impl EdgeProxy {
 
     /// Get routing statistics
     pub async fn stats(&self) -> ProxyStats {
-        let mut stats = self.stats.clone();
+        let stats = self.stats.clone();
         let uptime = stats.start_time.elapsed().as_secs();
 
         if uptime > 0 {

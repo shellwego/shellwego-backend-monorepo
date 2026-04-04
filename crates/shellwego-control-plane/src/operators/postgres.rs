@@ -9,7 +9,7 @@ use std::time::Duration;
 use chrono::Utc;
 use rand::Rng;
 use tokio::sync::RwLock;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 use super::{
     DatabaseOperator, DatabaseSpec, ConnectionInfo, InstanceStatus, BackupInfo, 
@@ -313,7 +313,7 @@ impl DatabaseOperator for PostgresOperator {
             instance_id, resources.cpu_cores, resources.memory_gb);
         
         // Check if instance exists
-        let instance = {
+        let _instance = {
             let instances = self.instances.read().await;
             instances.get(instance_id).cloned()
                 .ok_or_else(|| OperatorError::NotFound(instance_id.to_string()))?

@@ -10,7 +10,7 @@ use std::time::Duration;
 use chrono::Utc;
 use rand::Rng;
 use tokio::sync::RwLock;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info};
 
 use super::{
     DatabaseOperator, DatabaseSpec, ConnectionInfo, InstanceStatus, BackupInfo, 

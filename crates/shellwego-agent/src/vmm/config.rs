@@ -4,7 +4,3 @@
 //! These types are now defined centrally in shellwego-schema.
 
 // Re-export all config types from schema
-pub use shellwego_schema::{
-    DriveConfig, MicrovmConfig, MicrovmMetrics, MicrovmState, NetworkInterface, RateLimiterConfig,
-    WasmConfig,
-};

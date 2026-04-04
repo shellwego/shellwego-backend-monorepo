@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, RwLock};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use super::{FederationState, FederationConfig};
@@ -163,7 +163,7 @@ impl GossipProtocol {
     /// Handle incoming gossip message
     pub async fn handle_message(&self, msg: GossipMessage) -> Option<GossipMessage> {
         match msg {
-            GossipMessage::Ping { from, timestamp, version } => {
+            GossipMessage::Ping { from, timestamp: _, version } => {
                 self.record_peer_ping(&from, version).await;
                 
                 // Respond with pong
@@ -190,7 +190,7 @@ impl GossipProtocol {
                 // Would respond with local merkle tree
                 None
             }
-            GossipMessage::AntiEntropyResponse { from, merkle_tree } => {
+            GossipMessage::AntiEntropyResponse { from, merkle_tree: _ } => {
                 debug!("Received anti-entropy response from {}", from);
                 None
             }

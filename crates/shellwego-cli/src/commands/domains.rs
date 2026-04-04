@@ -2,7 +2,7 @@
 
 use clap::{Args, Subcommand};
 
-use crate::{CliConfig, OutputFormat, client::ApiClient};
+use crate::{CliConfig, OutputFormat};
 
 #[derive(Args)]
 pub struct DomainArgs {

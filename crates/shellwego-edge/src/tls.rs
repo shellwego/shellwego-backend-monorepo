@@ -11,12 +11,10 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use rustls::server::ResolvesServerCert;
-use rustls::ServerConfig;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
-use crate::EdgeError;
 
 /// Certificate manager
 pub struct CertificateManager {

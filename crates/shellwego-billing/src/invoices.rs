@@ -17,7 +17,7 @@ use tracing::{info, warn, instrument};
 use uuid::Uuid;
 
 // Import billing types from schema
-use shellwego_schema::billing::{Invoice, BillingPeriod, LineItem, UsageSummary, InvoiceStatus};
+use shellwego_schema::billing::{Invoice, BillingPeriod, UsageSummary};
 // Import Address for branding (reuse schema type)
 pub use shellwego_schema::billing::Address;
 
@@ -275,7 +275,7 @@ impl InvoiceGenerator {
             invoice.total
         );
         
-        let body = format!(
+        let _body = format!(
             r#"
 Dear {customer_name},
 

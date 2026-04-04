@@ -129,10 +129,7 @@ async fn run_interactive_session(
     mut ws_stream: futures_util::stream::SplitStream<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>>,
     tty: bool,
 ) -> anyhow::Result<()> {
-    use crossterm::{
-        event::{self, Event, KeyCode, KeyModifiers},
-        execute, terminal,
-    };
+    use crossterm::terminal;
     
     // Setup terminal for raw mode if TTY
     if tty {

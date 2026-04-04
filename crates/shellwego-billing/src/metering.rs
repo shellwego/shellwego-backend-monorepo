@@ -14,7 +14,7 @@ use chrono::{DateTime, Utc, Duration, Timelike, Datelike};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, postgres::PgPoolOptions, Row};
-use tracing::{info, warn, instrument};
+use tracing::{info, instrument};
 
 use crate::{BillingError, UsageEvent};
 

@@ -14,7 +14,7 @@ use uuid::Uuid;
 use chrono::{DateTime, Utc};
 
 use crate::state::AppState;
-use super::{ListResponse, ErrorResponse, ApiResponse};
+use super::ErrorResponse;
 
 // Import types from schema - single source of truth
 use shellwego_schema::entities::ResourceRequest;
@@ -109,7 +109,7 @@ pub async fn create_app(
 
 pub async fn get_app(
     State(_state): State<Arc<AppState>>,
-    Path(app_id): Path<Uuid>,
+    Path(_app_id): Path<Uuid>,
 ) -> Result<Json<App>, (StatusCode, Json<ErrorResponse>)> {
     Err((
         StatusCode::NOT_FOUND,
@@ -239,7 +239,7 @@ pub struct ListNodesQuery {
 
 pub async fn list_nodes(
     State(state): State<Arc<AppState>>,
-    Query(params): Query<ListNodesQuery>,
+    Query(_params): Query<ListNodesQuery>,
 ) -> Json<PaginatedResponse<Node>> {
     let agents = state.list_agents();
     let nodes: Vec<Node> = agents.into_iter().map(|a| Node {

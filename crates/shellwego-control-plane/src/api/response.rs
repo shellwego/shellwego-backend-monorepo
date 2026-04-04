@@ -6,10 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 // Re-export from schema - single source of truth
-pub use shellwego_schema::api::responses::{
-    ApiResponse, ErrorResponse, HealthResponse, ServiceStatus, ComponentHealth,
-};
-pub use shellwego_schema::api::pagination::{PaginatedResponse, PaginationParams, Cursor};
+pub use shellwego_schema::api::responses::ErrorResponse;
 
 /// Generic list response with pagination (local extension for page-based pagination)
 /// This complements the cursor-based PaginatedResponse from schema.

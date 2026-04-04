@@ -9,7 +9,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info};
 use uuid::Uuid;
 
 /// KMS configuration
@@ -129,7 +129,7 @@ impl KmsClient {
         // Check cache
         if self.config.cache_enabled {
             let cache = self.cache.read().await;
-            if let Some((cached, timestamp)) = cache.get(key) {
+            if let Some((_cached, timestamp)) = cache.get(key) {
                 let elapsed = (Utc::now() - timestamp).num_seconds() as u64;
                 if elapsed < self.config.cache_ttl_secs {
                     debug!("Returning cached encrypted value for key: {}", key);
@@ -307,7 +307,7 @@ impl KmsClient {
         debug!("Re-encrypting all secrets with new key version");
         
         let secrets = self.secrets.read().await;
-        for secret in secrets.values() {
+        for _secret in secrets.values() {
             // Decrypt with old key, encrypt with new key
             // In production, this would use version-specific keys
         }
@@ -351,7 +351,7 @@ impl KmsClient {
     pub async fn health_check(&self) -> Result<(), KmsError> {
         // Try encrypt/decrypt test
         let test_key = "__health_check__";
-        let encrypted = self.encrypt(test_key, "test").await?;
+        let _encrypted = self.encrypt(test_key, "test").await?;
         let decrypted = self.decrypt(test_key).await?;
         
         if decrypted != "test" {

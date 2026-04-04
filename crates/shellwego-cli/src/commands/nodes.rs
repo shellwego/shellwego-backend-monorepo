@@ -74,7 +74,7 @@ async fn list(client: ApiClient, format: OutputFormat) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn register(client: ApiClient, hostname: String, region: String) -> anyhow::Result<()> {
+async fn register(_client: ApiClient, hostname: String, region: String) -> anyhow::Result<()> {
     // TODO: Call register API, get join token
     println!("Registering node '{}' in region '{}'...", hostname, region);
     println!("{}", "Run the following on the new node:".bold());
@@ -82,19 +82,19 @@ async fn register(client: ApiClient, hostname: String, region: String) -> anyhow
     Ok(())
 }
 
-async fn get(client: ApiClient, id: uuid::Uuid, format: OutputFormat) -> anyhow::Result<()> {
+async fn get(_client: ApiClient, id: uuid::Uuid, _format: OutputFormat) -> anyhow::Result<()> {
     // TODO: Implement get node
     println!("Node details: {}", id);
     Ok(())
 }
 
-async fn drain(client: ApiClient, id: uuid::Uuid) -> anyhow::Result<()> {
+async fn drain(_client: ApiClient, id: uuid::Uuid) -> anyhow::Result<()> {
     println!("Draining node {}...", id);
     println!("{}", "Apps will be migrated to other nodes.".yellow());
     Ok(())
 }
 
-async fn delete(client: ApiClient, id: uuid::Uuid) -> anyhow::Result<()> {
+async fn delete(_client: ApiClient, id: uuid::Uuid) -> anyhow::Result<()> {
     println!("Deleting node {}...", id);
     println!("{}", "Ensure node is drained first!".red().bold());
     Ok(())

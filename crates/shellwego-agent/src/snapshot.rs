@@ -106,8 +106,8 @@ impl ZfsSnapshotManager {
             anyhow::bail!("Invalid snapshot path format: {}", snapshot_path);
         }
 
-        let source_dataset = parts[0];
-        let snap_name = parts[1];
+        let _source_dataset = parts[0];
+        let _snap_name = parts[1];
 
         // Create new dataset for the cloned app
         let target_dataset = format!("{}/shellwego/apps/{}", self.pool, new_app_id);
@@ -678,7 +678,7 @@ impl SnapshotManager {
 
         let mut to_delete = Vec::new();
 
-        for (app_id, snapshots) in by_app {
+        for (_app_id, snapshots) in by_app {
             // Sort by creation time (newest first)
             let mut sorted: Vec<_> = snapshots.into_iter().collect();
             sorted.sort_by(|a, b| b.created_at.cmp(&a.created_at));

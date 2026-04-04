@@ -241,7 +241,7 @@ impl Reconciler {
     }
 
     /// Check for image updates and rolling restart
-    pub async fn check_image_updates(&self, app: &DesiredApp) -> anyhow::Result<bool> {
+    pub async fn check_image_updates(&self, _app: &DesiredApp) -> anyhow::Result<bool> {
         // In a real registry, we'd query the manifest digest.
         // Here we check if the file modified time changed or if the name implies a tag change.
 
@@ -271,7 +271,7 @@ impl Reconciler {
     /// Sync network policies
     pub async fn reconcile_network_policies(&self, apps: &[DesiredApp]) -> anyhow::Result<()> {
         // We push this down to CNI/eBPF layer
-        for app in apps {
+        for _app in apps {
             // Example: Update bandwidth limits dynamically
             // self.network.update_policy(app.app_id, ...);
         }

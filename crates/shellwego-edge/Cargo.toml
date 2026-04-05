@@ -22,9 +22,20 @@ tokio-rustls = "0.26"
 
 # ACME client
 rcgen = "0.12"
+reqwest = { workspace = true, features = ["json", "rustls-tls"] }
+base64 = "0.22"
+ring = "0.17"
+p256 = { version = "0.13", features = ["ecdsa", "pem", "arithmetic"] }
+ecdsa = "0.16"
+rsa = "0.9"
+sha2 = "0.10"
+hex = "0.4"
+
+# WebSocket proxy
+tokio-tungstenite = "0.21"
 
 # Async runtime
-tokio = { workspace = true, features = ["net", "rt", "sync", "time", "signal", "macros"] }
+tokio = { workspace = true, features = ["net", "rt", "rt-multi-thread", "sync", "time", "signal", "macros", "io-util", "fs"] }
 
 # Routing
 regex = "1.10"
@@ -42,6 +53,7 @@ tracing = { workspace = true }
 
 # Additional dependencies used in code
 parking_lot = "0.12"
+futures-util = "0.3"
 uuid = { workspace = true }
 rand = "0.8"
 async-trait = { workspace = true }

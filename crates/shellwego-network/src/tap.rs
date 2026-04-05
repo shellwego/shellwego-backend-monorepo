@@ -183,3 +183,91 @@ impl Drop for TapDevice {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_create_ifreq_short_name() {
+        let ifr = TapDevice::create_ifreq("tap0", 0x0002);
+        // Verify the name was copied correctly
+        let name = unsafe {
+            std::ffi::CStr::from_ptr(ifr.ifr_name.as_ptr())
+                .to_string_lossy()
+                .to_string()
+        };
+        assert_eq!(name, "tap0");
+        assert_eq!(ifr.ifr_flags, 0x0002);
+    }
+
+    #[test]
+    fn test_create_ifreq_max_length() {
+        // IF_NAMESIZE is typically 16 on Linux; name is truncated to 15 chars + null
+        let long_name = "abcdefghijklmnop"; // 16 chars
+        let ifr = TapDevice::create_ifreq(long_name, 0x1000);
+        let name = unsafe {
+            std::ffi::CStr::from_ptr(ifr.ifr_name.as_ptr())
+                .to_string_lossy()
+                .to_string()
+        };
+        // Should be truncated to IF_NAMESIZE - 1 characters
+        assert_eq!(name.len(), libc::IF_NAMESIZE - 1);
+        assert_eq!(ifr.ifr_flags, 0x1000);
+    }
+
+    #[test]
+    fn test_create_ifreq_tap_flags() {
+        // IFF_TAP | IFF_NO_PI
+        let ifr = TapDevice::create_ifreq("testtap", 0x0002 | 0x1000);
+        assert_eq!(ifr.ifr_flags, 0x1002);
+    }
+
+    #[test]
+    fn test_create_ifreq_empty_name() {
+        let ifr = TapDevice::create_ifreq("", 0x0002);
+        let name = unsafe {
+            std::ffi::CStr::from_ptr(ifr.ifr_name.as_ptr())
+                .to_string_lossy()
+                .to_string()
+        };
+        assert_eq!(name, "");
+    }
+
+    #[test]
+    fn test_open_tun_without_permission() {
+        // /dev/net/tun requires CAP_NET_ADMIN or root.
+        // In a test environment this is expected to fail.
+        let result = TapDevice::open_tun();
+        // We don't assert Err because the test may run as root in CI.
+        // Just verify it doesn't panic.
+        let _ = result;
+    }
+
+    #[tokio::test]
+    async fn test_create_tap_without_permission() {
+        // Requires CAP_NET_ADMIN; expected to fail in test env.
+        let result = TapDevice::create("test-tap-unit").await;
+        let _ = result; // Doesn't panic
+    }
+
+    #[tokio::test]
+    async fn test_delete_tap_noop() {
+        // delete() is a best-effort cleanup; should always succeed.
+        let result = TapDevice::delete("nonexistent-tap").await;
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_tap_device_type_info() {
+        // Verify the type exists and has the expected layout
+        assert_eq!(
+            std::any::type_name::<TapDevice>(),
+            "shellwego_network::tap::TapDevice"
+        );
+    }
+}

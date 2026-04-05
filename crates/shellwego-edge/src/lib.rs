@@ -1,7 +1,8 @@
 //! Edge proxy and load balancer
 //!
 //! Traefik replacement written in Rust for lower latency.
-//! Handles HTTP/HTTPS routing, TLS termination, and load balancing.
+//! Handles HTTP/HTTPS routing, TLS termination, ACME certificate provisioning,
+//! WebSocket proxying, and load balancing.
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -21,7 +22,7 @@ pub mod tls;
 
 pub use proxy::{ConnectionPool, HttpProxy, ProxyMetrics, RequestContext};
 pub use router::{ConfigSource, Matcher, Middleware, RequestInfo, Route, Router, Upstream};
-pub use tls::{AcmeConfig, Certificate, CertificateManager};
+pub use tls::{AcmeConfig, Certificate, CertificateManager, CertificateResolver};
 
 /// Edge proxy server
 pub struct EdgeProxy {
@@ -29,6 +30,8 @@ pub struct EdgeProxy {
     router: Arc<RwLock<Router>>,
     /// TLS certificate manager
     tls_manager: Option<Arc<tls::CertificateManager>>,
+    /// Certificate resolver for SNI
+    cert_resolver: Option<Arc<tls::CertificateResolver>>,
     /// HTTP proxy handler
     proxy: proxy::HttpProxy,
     /// Configuration
@@ -153,8 +156,8 @@ impl EdgeProxy {
         }
         let router = Arc::new(RwLock::new(router));
 
-        // Initialize TLS manager if configured
-        let tls_manager = if let Some(ref tls_config) = config.tls {
+        // Initialize TLS manager and resolver if configured
+        let (tls_manager, cert_resolver) = if let Some(ref tls_config) = config.tls {
             if tls_config.cert_resolver == "acme" {
                 if let Some(ref acme) = tls_config.acme {
                     let cert_config = tls::CertConfig {
@@ -165,16 +168,30 @@ impl EdgeProxy {
                             challenge_type: acme.challenge_type.clone(),
                         }),
                     };
-                    Some(Arc::new(tls::CertificateManager::new(&cert_config).await?))
+                    let manager =
+                        Arc::new(tls::CertificateManager::new(&cert_config).await?);
+                    let resolver = Arc::new(tls::CertificateResolver::new(manager.clone()));
+
+                    // Start background renewal worker
+                    manager.clone().start_renewal_worker();
+
+                    (Some(manager), Some(resolver))
                 } else {
-                    None
+                    (None, None)
                 }
             } else {
-                // File-based TLS would be initialized here
-                None
+                // File-based TLS — create manager without ACME
+                let cert_config = tls::CertConfig {
+                    storage: tls::CertStorage::Memory,
+                    acme: None,
+                };
+                let manager = Arc::new(tls::CertificateManager::new(&cert_config).await?);
+                let resolver = Arc::new(tls::CertificateResolver::new(manager.clone()));
+
+                (Some(manager), Some(resolver))
             }
         } else {
-            None
+            (None, None)
         };
 
         // Create HTTP proxy
@@ -186,11 +203,16 @@ impl EdgeProxy {
         // Create shutdown channel
         let (shutdown_tx, _) = broadcast::channel::<()>(1);
 
-        info!("EdgeProxy initialized with {} routes", config.routes.len());
+        info!(
+            "EdgeProxy initialized with {} routes, TLS={}",
+            config.routes.len(),
+            tls_manager.is_some()
+        );
 
         Ok(Self {
             router,
             tls_manager,
+            cert_resolver,
             proxy,
             config,
             stats: ProxyStats::default(),
@@ -198,7 +220,7 @@ impl EdgeProxy {
         })
     }
 
-    /// Start listening on HTTP port (redirects to HTTPS)
+    /// Start listening on HTTP port (redirects to HTTPS + ACME challenge handler)
     pub async fn serve_http(&self, addr: &str) -> Result<ServerHandle, EdgeError> {
         let addr: SocketAddr = addr
             .parse()
@@ -210,6 +232,8 @@ impl EdgeProxy {
 
         let mut shutdown_rx = self.shutdown_tx.subscribe();
         let router = self.router.clone();
+        let tls_manager = self.tls_manager.clone();
+        let cert_resolver = self.cert_resolver.clone();
         let proxy = self.proxy.clone();
         let stats = Arc::new(self.stats.clone());
 
@@ -232,6 +256,8 @@ impl EdgeProxy {
                         match result {
                             Ok((stream, _peer_addr)) => {
                                 let router = router.clone();
+                                let tls_manager = tls_manager.clone();
+                                let cert_resolver = cert_resolver.clone();
                                 let proxy = proxy.clone();
                                 let stats = stats.clone();
 
@@ -239,13 +265,20 @@ impl EdgeProxy {
                                     stats.active_connections.fetch_add(1, Ordering::Relaxed);
                                     stats.total_requests.fetch_add(1, Ordering::Relaxed);
 
-                                    let io = stream;
-
                                     let stats_for_decrement = stats.clone();
                                     let service = service_fn(move |req: Request<Body>| {
-                                        let _router = router.clone();
-                                        let _proxy = proxy.clone();
+                                        let router = router.clone();
+                                        let tls_manager = tls_manager.clone();
+                                        let cert_resolver = cert_resolver.clone();
+                                        let proxy = proxy.clone();
                                         async move {
+                                            // Check if this is an ACME HTTP-01 challenge request
+                                            if let Some(tls_mgr) = tls_manager.as_ref() {
+                                                if let Some(key_auth) = handle_acme_challenge(&req, tls_mgr) {
+                                                    return Ok(key_auth);
+                                                }
+                                            }
+
                                             // Redirect to HTTPS
                                             let host = req.headers()
                                                 .get("host")
@@ -263,7 +296,7 @@ impl EdgeProxy {
                                     });
 
                                     let _ = http1::Builder::new()
-                                        .serve_connection(io, service)
+                                        .serve_connection(stream, service)
                                         .await;
 
                                     stats_for_decrement.active_connections.fetch_sub(1, Ordering::Relaxed);
@@ -281,14 +314,15 @@ impl EdgeProxy {
         Ok(handle)
     }
 
-    /// Start listening on HTTPS port
+    /// Start listening on HTTPS port with TLS termination.
+    ///
+    /// If a `CertificateResolver` is configured, incoming TCP connections are
+    /// wrapped via `tokio_rustls::TlsAcceptor` before being handed to the
+    /// HTTP service. The resolver performs SNI-based certificate selection.
     pub async fn serve_https(&self, addr: &str) -> Result<ServerHandle, EdgeError> {
         let addr: SocketAddr = addr
             .parse()
             .map_err(|e| EdgeError::ConfigError(format!("Invalid address: {}", e)))?;
-
-        // TLS acceptor would be created here if configured
-        // Currently placeholder for future implementation
 
         let listener = TcpListener::bind(addr)
             .await
@@ -297,9 +331,25 @@ impl EdgeProxy {
         let mut shutdown_rx = self.shutdown_tx.subscribe();
         let router = self.router.clone();
         let proxy = self.proxy.clone();
+        let tls_manager = self.tls_manager.clone();
+        let cert_resolver = self.cert_resolver.clone();
         let stats = Arc::new(self.stats.clone());
 
-        info!("HTTPS server listening on {}", addr);
+        // Build the TLS acceptor if we have a certificate resolver
+        let tls_acceptor = if let Some(resolver) = &self.cert_resolver {
+            let server_config = tls::build_rustls_server_config(resolver.clone());
+            Some(Arc::new(tokio_rustls::TlsAcceptor::from(
+                Arc::new(server_config),
+            )))
+        } else {
+            None
+        };
+
+        info!(
+            "HTTPS server listening on {} (TLS={})",
+            addr,
+            tls_acceptor.is_some()
+        );
 
         let handle = ServerHandle {
             shutdown_tx: self.shutdown_tx.clone(),
@@ -319,54 +369,60 @@ impl EdgeProxy {
                             Ok((stream, _peer_addr)) => {
                                 let router = router.clone();
                                 let proxy = proxy.clone();
+                                let tls_manager = tls_manager.clone();
+                                let cert_resolver = cert_resolver.clone();
+                                let tls_acceptor = tls_acceptor.clone();
                                 let stats = stats.clone();
 
                                 tokio::spawn(async move {
                                     stats.active_connections.fetch_add(1, Ordering::Relaxed);
                                     stats.total_requests.fetch_add(1, Ordering::Relaxed);
 
-                                    let io = stream;
-
                                     let stats_for_decrement = stats.clone();
-                                    let service = service_fn(move |req: Request<Body>| {
-                                        let router = router.clone();
-                                        let proxy = proxy.clone();
-                                        let stats = stats.clone();
-                                        async move {
-                                            let start = Instant::now();
 
-                                            // Get route for request
-                                            let router_guard = router.read().await;
-                                            let request_info = RequestInfo::from_request(&req);
+                                    if let Some(acceptor) = tls_acceptor.as_ref() {
+                                        // Wrap the TCP stream with TLS
+                                        match acceptor.accept(stream).await {
+                                            Ok(tls_stream) => {
+                                                // The CertificateResolver caches resolved certs
+                                                // internally via its sync cache, so no explicit
+                                                // warm_cache call is needed here.
 
-                                            match router_guard.match_request(&request_info) {
-                                                Some(route) => {
-                                                    let result = proxy.handle_request(req, route).await;
-
-                                                    // Update stats
-                                                    let latency = start.elapsed().as_micros() as u64;
-                                                    stats.avg_latency_us.store(latency, Ordering::Relaxed);
-
-                                                    if result.is_err() {
-                                                        stats.errors.fetch_add(1, Ordering::Relaxed);
+                                                let service = service_fn(move |req: Request<Body>| {
+                                                    let router = router.clone();
+                                                    let tls_manager = tls_manager.clone();
+                                                    let proxy = proxy.clone();
+                                                    let stats = stats.clone();
+                                                    async move {
+                                                        handle_https_request(req, router, tls_manager, proxy, stats).await
                                                     }
+                                                });
 
-                                                    result
-                                                }
-                                                None => {
-                                                    // No matching route
-                                                    Ok(Response::builder()
-                                                        .status(StatusCode::NOT_FOUND)
-                                                        .body(Body::from("Not Found"))
-                                                        .unwrap())
-                                                }
+                                                let _ = http1::Builder::new()
+                                                    .serve_connection(tls_stream, service)
+                                                    .await;
+                                            }
+                                            Err(e) => {
+                                                warn!("TLS handshake failed: {}", e);
+                                                stats.errors.fetch_add(1, Ordering::Relaxed);
                                             }
                                         }
-                                    });
+                                    } else {
+                                        // No TLS configured — serve plain HTTP (development mode)
+                                        let service = service_fn(move |req: Request<Body>| {
+                                            let router = router.clone();
+                                            let tls_manager = tls_manager.clone();
+                                            let proxy = proxy.clone();
+                                            let stats = stats.clone();
+                                            async move {
+                                                handle_https_request(req, router, tls_manager, proxy, stats).await
+                                            }
+                                        });
 
-                                    let _ = http1::Builder::new()
-                                        .serve_connection(io, service)
-                                        .await;
+                                        let _ = http1::Builder::new()
+                                            .serve_connection(stream, service)
+                                            .await;
+                                    }
 
                                     stats_for_decrement.active_connections.fetch_sub(1, Ordering::Relaxed);
                                 });
@@ -381,6 +437,50 @@ impl EdgeProxy {
         });
 
         Ok(handle)
+    }
+
+    /// Request a certificate for the given domain via ACME.
+    /// After obtaining the cert, warms the resolver cache.
+    pub async fn provision_certificate(&self, domain: &str) -> Result<(), EdgeError> {
+        let manager = self
+            .tls_manager
+            .as_ref()
+            .ok_or(EdgeError::TlsError("TLS not configured".into()))?;
+
+        manager.request_certificate(domain).await?;
+
+        // Warm the resolver cache
+        if let Some(resolver) = &self.cert_resolver {
+            resolver.warm_cache(domain).await;
+        }
+
+        info!("Certificate provisioned for {}", domain);
+        Ok(())
+    }
+
+    /// Import a pre-existing certificate for a domain.
+    pub async fn import_certificate(
+        &self,
+        domain: &str,
+        cert_pem: &str,
+        key_pem: &str,
+    ) -> Result<(), EdgeError> {
+        let manager = self
+            .tls_manager
+            .as_ref()
+            .ok_or(EdgeError::TlsError("TLS not configured".into()))?;
+
+        manager
+            .import_certificate(domain, cert_pem, key_pem)
+            .await?;
+
+        // Warm the resolver cache
+        if let Some(resolver) = &self.cert_resolver {
+            resolver.warm_cache(domain).await;
+        }
+
+        info!("Certificate imported for {}", domain);
+        Ok(())
     }
 
     /// Reload configuration without dropping connections
@@ -427,6 +527,84 @@ impl EdgeProxy {
         let mut router = self.router.write().await;
         router.remove_route(route_id)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Request handling
+// ---------------------------------------------------------------------------
+
+/// Handle an HTTPS request (or plain HTTP if TLS is not configured).
+async fn handle_https_request(
+    req: Request<Body>,
+    router: Arc<RwLock<Router>>,
+    tls_manager: Option<Arc<tls::CertificateManager>>,
+    proxy: HttpProxy,
+    stats: Arc<ProxyStats>,
+) -> Result<Response<Body>, EdgeError> {
+    let start = Instant::now();
+
+    // Check for ACME HTTP-01 challenge requests (also served on HTTPS port)
+    if let Some(ref manager) = tls_manager {
+        if let Some(response) = handle_acme_challenge(&req, manager) {
+            return Ok(response);
+        }
+    }
+
+    // Match route
+    let router_guard = router.read().await;
+    let request_info = RequestInfo::from_request(&req);
+
+    match router_guard.match_request(&request_info) {
+        Some(route) => {
+            let result = proxy.handle_request(req, route).await;
+
+            // Update stats
+            let latency = start.elapsed().as_micros() as u64;
+            stats.avg_latency_us.store(latency, Ordering::Relaxed);
+
+            if result.is_err() {
+                stats.errors.fetch_add(1, Ordering::Relaxed);
+            }
+
+            result
+        }
+        None => {
+            // No matching route
+            Ok(Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Body::from("Not Found"))
+                .unwrap())
+        }
+    }
+}
+
+/// Check if the request is an ACME HTTP-01 challenge and, if so, return
+/// the appropriate response with the key-authorization value.
+///
+/// The ACME challenge path is `/.well-known/acme-challenge/{token}`.
+fn handle_acme_challenge(
+    req: &Request<Body>,
+    tls_manager: &tls::CertificateManager,
+) -> Option<Response<Body>> {
+    let path = req.uri().path();
+
+    // Check for ACME challenge path
+    if let Some(token) = path.strip_prefix("/.well-known/acme-challenge/") {
+        let token = token.trim_matches('/');
+
+        if let Some(key_auth) = tls_manager.get_challenge_token(token) {
+            info!("Serving ACME challenge token: {}", token);
+            return Some(
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "text/plain")
+                    .body(Body::from(key_auth))
+                    .unwrap(),
+            );
+        }
+    }
+
+    None
 }
 
 impl Clone for ProxyStats {
@@ -481,5 +659,55 @@ mod tests {
 
         let stats = proxy.stats().await;
         assert_eq!(stats.total_requests.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn test_acme_challenge_path() {
+        // Test that the ACME challenge path is correctly detected
+        let req = Request::builder()
+            .uri("/.well-known/acme-challenge/test-token")
+            .body(Body::empty())
+            .unwrap();
+
+        let path = req.uri().path();
+        assert!(path.starts_with("/.well-known/acme-challenge/"));
+        let token = path.strip_prefix("/.well-known/acme-challenge/").unwrap();
+        assert_eq!(token, "test-token");
+    }
+
+    #[test]
+    fn test_acme_challenge_path_with_slash() {
+        let req = Request::builder()
+            .uri("/.well-known/acme-challenge/test-token/")
+            .body(Body::empty())
+            .unwrap();
+
+        let path = req.uri().path();
+        let token = path.strip_prefix("/.well-known/acme-challenge/").unwrap();
+        let token = token.trim_matches('/');
+        assert_eq!(token, "test-token");
+    }
+
+    #[tokio::test]
+    async fn test_edge_proxy_with_tls_config() {
+        let config = EdgeConfig {
+            tls: Some(TlsConfig {
+                cert_resolver: "acme".to_string(),
+                acme: Some(AcmeConfig {
+                    directory_url: "https://acme-v02.api.letsencrypt.org/directory".to_string(),
+                    contact_email: "admin@example.com".to_string(),
+                    challenge_type: "http01".to_string(),
+                }),
+                cert_file: None,
+                key_file: None,
+            }),
+            ..Default::default()
+        };
+
+        let proxy = EdgeProxy::new(config).await;
+        assert!(proxy.is_ok());
+        let proxy = proxy.unwrap();
+        assert!(proxy.tls_manager.is_some());
+        assert!(proxy.cert_resolver.is_some());
     }
 }

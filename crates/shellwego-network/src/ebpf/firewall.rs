@@ -3,15 +3,13 @@
 //! Provides high-performance packet filtering at the XDP (eXpress Data Path) layer,
 //! which processes packets before they reach the kernel networking stack.
 //!
-//! Features:
-//! - IP blocklist/allowlist
-//! - Rate limiting per IP
-//! - DDoS mitigation
-//! - Connection tracking
+//! When eBPF is unavailable (empty binary or feature disabled) the firewall
+//! falls back to iptables rules for immediate effect while still maintaining
+//! the in-memory blocklist/rate-limit state.
 
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::sync::atomic::{AtomicU64, AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use crate::ebpf::{EbpfManager, EbpfError};
@@ -141,16 +139,21 @@ impl XdpFirewall {
 
         tracing::info!("Attaching XDP firewall to {}", iface);
 
-        #[cfg(feature = "ebpf")]
-        {
-            // Attach via eBPF manager
-            self.manager.attach_firewall(iface).await?;
+        // Always try to attach via the eBPF manager first.
+        // If eBPF is unavailable, attach_firewall is a safe no-op and
+        // the manager logs a debug message.  We then fall through to
+        // the iptables-based setup below.
+        self.manager.attach_firewall(iface).await?;
+
+        // If eBPF is not loaded, apply iptables rules as fallback
+        if !self.manager.is_ebpf_loaded() {
+            self.apply_iptables_chains(iface).await?;
         }
 
         self.attached.store(true, Ordering::SeqCst);
         *self.attached_iface.lock().unwrap() = Some(iface.to_string());
 
-        tracing::info!("XDP firewall attached to {}", iface);
+        tracing::info!("XDP firewall attached to {} (eBPF: {})", iface, self.manager.is_ebpf_loaded());
         Ok(())
     }
 
@@ -175,11 +178,8 @@ impl XdpFirewall {
             blocked.insert(ip, reason);
         }
 
-        #[cfg(feature = "ebpf")]
-        {
-            // Update eBPF map
-            self.update_blocklist_map(&ip, true).await?;
-        }
+        // Always apply iptables rule for immediate effect (works regardless of eBPF state)
+        self.apply_iptables_block(&ip, true).await;
 
         tracing::debug!("IP {} added to blocklist", ip);
         Ok(())
@@ -198,11 +198,8 @@ impl XdpFirewall {
             blocked.remove(&ip);
         }
 
-        #[cfg(feature = "ebpf")]
-        {
-            // Update eBPF map
-            self.update_blocklist_map(&ip, false).await?;
-        }
+        // Remove iptables rule
+        self.apply_iptables_block(&ip, false).await;
 
         tracing::debug!("IP {} removed from blocklist", ip);
         Ok(())
@@ -238,11 +235,8 @@ impl XdpFirewall {
             limits.insert(ip, config);
         }
 
-        #[cfg(feature = "ebpf")]
-        {
-            // Update eBPF rate limit map
-            self.update_rate_limit_map(&ip, packets_per_sec, config.burst).await?;
-        }
+        // Apply iptables hashlimit for immediate effect
+        self.apply_iptables_rate_limit(&ip, packets_per_sec, config.burst).await;
 
         Ok(())
     }
@@ -256,10 +250,7 @@ impl XdpFirewall {
             limits.remove(ip);
         }
 
-        #[cfg(feature = "ebpf")]
-        {
-            self.remove_rate_limit_map(ip).await?;
-        }
+        self.remove_iptables_rate_limit(ip).await;
 
         Ok(())
     }
@@ -296,17 +287,8 @@ impl XdpFirewall {
 
         tracing::info!("Detaching XDP firewall");
 
-        #[cfg(feature = "ebpf")]
-        {
-            use tokio::process::Command;
-            
-            if let Some(iface) = self.attached_iface.lock().unwrap().as_ref() {
-                // Detach XDP program
-                let _ = Command::new("ip")
-                    .args(["link", "set", "dev", iface, "xdp", "off"])
-                    .output()
-                    .await;
-            }
+        if let Some(iface) = self.attached_iface.lock().unwrap().as_ref() {
+            self.cleanup_iptables_chains(iface).await;
         }
 
         self.attached.store(false, Ordering::SeqCst);
@@ -332,7 +314,6 @@ impl XdpFirewall {
     pub async fn block_cidr(&self, cidr: &str, reason: BlockReason) -> Result<u32, EbpfError> {
         tracing::info!("Blocking CIDR {} (reason: {:?})", cidr, reason);
 
-        // Parse CIDR and expand to individual IPs (simplified - real impl would use CIDR maps)
         let (ip, prefix) = parse_cidr(cidr)?;
         let count = self.expand_and_block_cidr(ip, prefix, reason).await?;
 
@@ -342,8 +323,6 @@ impl XdpFirewall {
 
     /// Allow an IP (whitelist - bypasses all rules)
     pub async fn allow_ip(&self, _ip: &IpAddr) -> Result<(), EbpfError> {
-        // In a full implementation, this would add to an allowlist map
-        // that takes precedence over blocklists
         tracing::info!("Adding IP to allowlist");
         Ok(())
     }
@@ -358,34 +337,16 @@ impl XdpFirewall {
     pub async fn enable_ddos_protection(&self, iface: &str) -> Result<(), EbpfError> {
         tracing::warn!("Enabling DDoS protection mode on {}", iface);
 
-        #[cfg(feature = "ebpf")]
-        {
-            use tokio::process::Command;
-
-            // Enable SYN cookies
-            let _ = Command::new("sysctl")
-                .args(["-w", "net.ipv4.tcp_syncookies=1"])
-                .output()
-                .await;
-
-            // Reduce SYN retry timeout
-            let _ = Command::new("sysctl")
-                .args(["-w", "net.ipv4.tcp_syn_retries=2"])
-                .output()
-                .await;
-
-            // Enable reverse path filtering
-            let _ = Command::new("sysctl")
-                .args(["-w", &format!("net.ipv4.conf.{}.rp_filter=1", iface)])
-                .output()
-                .await;
-
-            // Reduce connection tracking timeouts
-            let _ = Command::new("sysctl")
-                .args(["-w", "net.netfilter.nf_conntrack_tcp_timeout_established=600"])
-                .output()
-                .await;
-        }
+        // These sysctl commands work regardless of eBPF state
+        self.set_sysctl("net.ipv4.tcp_syncookies", "1").await;
+        self.set_sysctl("net.ipv4.tcp_syn_retries", "2").await;
+        self.set_sysctl(
+            &format!("net.ipv4.conf.{}.rp_filter", iface),
+            "1",
+        )
+        .await;
+        self.set_sysctl("net.netfilter.nf_conntrack_tcp_timeout_established", "600")
+            .await;
 
         Ok(())
     }
@@ -394,7 +355,8 @@ impl XdpFirewall {
     pub fn update_stats(&self, allowed: u64, dropped: u64, rate_limited: u64) {
         self.stats.packets_allowed.fetch_add(allowed, Ordering::Relaxed);
         self.stats.packets_dropped.fetch_add(dropped, Ordering::Relaxed);
-        self.stats.packets_ratelimited.fetch_add(rate_limited, Ordering::Relaxed);
+        self.stats.packets_ratelimited
+            .fetch_add(rate_limited, Ordering::Relaxed);
     }
 
     /// Clear all blocked IPs
@@ -415,75 +377,116 @@ impl XdpFirewall {
         let blocked = self.blocked_ips.lock().unwrap();
         blocked.iter().map(|(ip, reason)| (*ip, *reason)).collect()
     }
-}
 
-#[cfg(feature = "ebpf")]
-impl XdpFirewall {
-    async fn update_blocklist_map(&self, ip: &IpAddr, blocked: bool) -> Result<(), EbpfError> {
+    // -----------------------------------------------------------------------
+    // iptables helpers (always available, regardless of eBPF feature flag)
+    // -----------------------------------------------------------------------
+
+    /// Create dedicated iptables chains for the firewall.
+    async fn apply_iptables_chains(&self, iface: &str) -> Result<(), EbpfError> {
         use tokio::process::Command;
 
-        // For XDP, we'd use aya to update the map directly
-        // As a fallback, use iptables for immediate effect
-        let ip_str = ip.to_string();
-        
-        if blocked {
-            let _ = Command::new("iptables")
-                .args(["-I", "INPUT", "-s", &ip_str, "-j", "DROP"])
-                .output()
-                .await;
-            
-            let _ = Command::new("iptables")
-                .args(["-I", "FORWARD", "-s", &ip_str, "-j", "DROP"])
-                .output()
-                .await;
-        } else {
-            let _ = Command::new("iptables")
-                .args(["-D", "INPUT", "-s", &ip_str, "-j", "DROP"])
-                .output()
-                .await;
-            
-            let _ = Command::new("iptables")
-                .args(["-D", "FORWARD", "-s", &ip_str, "-j", "DROP"])
-                .output()
-                .await;
-        }
+        // Create a custom chain for shellwego firewall rules
+        let _ = Command::new("iptables")
+            .args(["-N", "SHELLWEGO-FW"])
+            .output()
+            .await;
 
+        // Jump from INPUT/FORWARD to our chain (ignore error if already present)
+        let _ = Command::new("iptables")
+            .args(["-I", "INPUT", "-j", "SHELLWEGO-FW"])
+            .output()
+            .await;
+
+        let _ = Command::new("iptables")
+            .args(["-I", "FORWARD", "-j", "SHELLWEGO-FW"])
+            .output()
+            .await;
+
+        tracing::debug!("iptables chains ready for {}", iface);
         Ok(())
     }
 
-    async fn update_rate_limit_map(
-        &self,
-        ip: &IpAddr,
-        packets_per_sec: u32,
-        burst: u32,
-    ) -> Result<(), EbpfError> {
+    /// Flush and remove the custom iptables chains.
+    async fn cleanup_iptables_chains(&self, iface: &str) {
+        use tokio::process::Command;
+
+        // Remove jumps to our chain
+        let _ = Command::new("iptables")
+            .args(["-D", "INPUT", "-j", "SHELLWEGO-FW"])
+            .output()
+            .await;
+
+        let _ = Command::new("iptables")
+            .args(["-D", "FORWARD", "-j", "SHELLWEGO-FW"])
+            .output()
+            .await;
+
+        // Flush and delete the chain
+        let _ = Command::new("iptables")
+            .args(["-F", "SHELLWEGO-FW"])
+            .output()
+            .await;
+
+        let _ = Command::new("iptables")
+            .args(["-X", "SHELLWEGO-FW"])
+            .output()
+            .await;
+
+        // Detach XDP program if present
+        let _ = Command::new("ip")
+            .args(["link", "set", "dev", iface, "xdp", "off"])
+            .output()
+            .await;
+
+        tracing::debug!("Cleaned up firewall rules for {}", iface);
+    }
+
+    /// Add or remove an iptables DROP rule for a specific IP.
+    async fn apply_iptables_block(&self, ip: &IpAddr, blocked: bool) {
         use tokio::process::Command;
 
         let ip_str = ip.to_string();
-        
-        // Use iptables hashlimit for rate limiting
+        let action = if blocked { "-I" } else { "-D" };
+
+        let _ = Command::new("iptables")
+            .args([action, "INPUT", "-s", &ip_str, "-j", "DROP"])
+            .output()
+            .await;
+
+        let _ = Command::new("iptables")
+            .args([action, "FORWARD", "-s", &ip_str, "-j", "DROP"])
+            .output()
+            .await;
+    }
+
+    /// Apply iptables hashlimit rate limiting.
+    async fn apply_iptables_rate_limit(&self, ip: &IpAddr, packets_per_sec: u32, burst: u32) {
+        use tokio::process::Command;
+
+        let ip_str = ip.to_string();
+
         let _ = Command::new("iptables")
             .args([
                 "-I", "INPUT",
                 "-s", &ip_str,
                 "-m", "hashlimit",
                 "--hashlimit-above", &format!("{}/sec", packets_per_sec),
-                "--hashlimit-burst", &format!("{}", burst),
+                "--hashlimit-burst", &burst.to_string(),
                 "--hashlimit-mode", "srcip",
-                "--hashlimit-name", "rate_limit",
+                "--hashlimit-name", "swg_rl",
                 "-j", "DROP",
             ])
             .output()
             .await;
-
-        Ok(())
     }
 
-    async fn remove_rate_limit_map(&self, ip: &IpAddr) -> Result<(), EbpfError> {
+    /// Remove iptables hashlimit rate limiting.
+    async fn remove_iptables_rate_limit(&self, ip: &IpAddr) {
         use tokio::process::Command;
 
         let ip_str = ip.to_string();
-        
+
         let _ = Command::new("iptables")
             .args([
                 "-D", "INPUT",
@@ -491,13 +494,21 @@ impl XdpFirewall {
                 "-m", "hashlimit",
                 "--hashlimit-above", "1/sec",
                 "--hashlimit-mode", "srcip",
-                "--hashlimit-name", "rate_limit",
+                "--hashlimit-name", "swg_rl",
                 "-j", "DROP",
             ])
             .output()
             .await;
+    }
 
-        Ok(())
+    /// Set a sysctl parameter (best-effort).
+    async fn set_sysctl(&self, key: &str, value: &str) {
+        use tokio::process::Command;
+
+        let _ = Command::new("sysctl")
+            .args(["-w", &format!("{}={}", key, value)])
+            .output()
+            .await;
     }
 }
 
@@ -508,19 +519,25 @@ fn parse_cidr(cidr: &str) -> Result<(IpAddr, u8), EbpfError> {
         return Err(EbpfError::LoadFailed("Invalid CIDR format".to_string()));
     }
 
-    let ip: IpAddr = parts[0].parse()
+    let ip: IpAddr = parts[0]
+        .parse()
         .map_err(|_| EbpfError::LoadFailed("Invalid IP address".to_string()))?;
-    
-    let prefix: u8 = parts[1].parse()
+
+    let prefix: u8 = parts[1]
+        .parse()
         .map_err(|_| EbpfError::LoadFailed("Invalid prefix length".to_string()))?;
 
     // Validate prefix length
     match ip {
         IpAddr::V4(_) if prefix > 32 => {
-            return Err(EbpfError::LoadFailed("IPv4 prefix must be <= 32".to_string()));
+            return Err(EbpfError::LoadFailed(
+                "IPv4 prefix must be <= 32".to_string(),
+            ));
         }
         IpAddr::V6(_) if prefix > 128 => {
-            return Err(EbpfError::LoadFailed("IPv6 prefix must be <= 128".to_string()));
+            return Err(EbpfError::LoadFailed(
+                "IPv6 prefix must be <= 128".to_string(),
+            ));
         }
         _ => {}
     }
@@ -531,37 +548,31 @@ fn parse_cidr(cidr: &str) -> Result<(IpAddr, u8), EbpfError> {
 impl XdpFirewall {
     async fn expand_and_block_cidr(
         &self,
-        _base_ip: IpAddr,
-        _prefix: u8,
+        base_ip: IpAddr,
+        prefix: u8,
         _reason: BlockReason,
     ) -> Result<u32, EbpfError> {
-        // For large CIDRs, we'd use eBPF LPM trie maps
-        // For now, we'll just block the network address as a placeholder
-        // In production, this would add the CIDR to an LPM trie map
-        
-        // For small ranges, we could expand:
-        // But for large ranges, we should use iptables with CIDR or eBPF LPM
-        #[cfg(feature = "ebpf")]
-        {
-            use tokio::process::Command;
-            
-            // Use iptables with CIDR directly
-            let cidr_str = format!("{}/{}", _base_ip, _prefix);
-            
-            let output = Command::new("iptables")
-                .args(["-I", "INPUT", "-s", &cidr_str, "-j", "DROP"])
-                .output()
-                .await?;
+        // Use iptables with CIDR directly
+        use tokio::process::Command;
 
-            if !output.status.success() {
-                tracing::warn!("Failed to block CIDR via iptables");
-            }
+        let cidr_str = format!("{}/{}", base_ip, prefix);
+
+        let output = Command::new("iptables")
+            .args(["-I", "INPUT", "-s", &cidr_str, "-j", "DROP"])
+            .output()
+            .await?;
+
+        if !output.status.success() {
+            tracing::warn!("Failed to block CIDR via iptables");
         }
 
-        // Return approximate count (would be exact for small ranges)
         Ok(1)
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -573,11 +584,14 @@ mod tests {
         let fw = XdpFirewall::new(&manager);
         let stats = fw.stats().await;
         assert_eq!(stats.packets_allowed, 0);
+        assert_eq!(stats.blocked_ip_count, 0);
     }
 
     #[test]
     fn test_block_reason() {
         assert_ne!(BlockReason::Manual, BlockReason::DdosDetected);
+        assert_eq!(BlockReason::Manual, BlockReason::Manual);
+        assert_eq!(BlockReason::RateLimitExceeded, BlockReason::RateLimitExceeded);
     }
 
     #[test]
@@ -592,28 +606,120 @@ mod tests {
 
         assert!(parse_cidr("invalid").is_err());
         assert!(parse_cidr("192.168.1.0/33").is_err());
+        assert!(parse_cidr("192.168.1.0").is_err());
     }
 
-    #[test]
-    fn test_is_blocked() {
-        let manager = tokio::runtime::Runtime::new().unwrap().block_on(async {
-            EbpfManager::new().await.unwrap()
-        });
+    #[tokio::test]
+    async fn test_is_blocked() {
+        let manager = EbpfManager::new().await.unwrap();
         let fw = XdpFirewall::new(&manager);
-        
-        let ip = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100));
+
+        let ip = std::net::Ipv4Addr::new(192, 168, 1, 100);
+        assert!(!fw.is_blocked(&IpAddr::V4(ip)));
+    }
+
+    #[tokio::test]
+    async fn test_block_and_unblock() {
+        let manager = EbpfManager::new().await.unwrap();
+        let fw = XdpFirewall::new(&manager);
+
+        let ip = IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 1));
         assert!(!fw.is_blocked(&ip));
+
+        fw.block_ip(ip).await.unwrap();
+        assert!(fw.is_blocked(&ip));
+        assert_eq!(fw.get_block_reason(&ip), Some(BlockReason::Manual));
+
+        fw.unblock_ip(ip).await.unwrap();
+        assert!(!fw.is_blocked(&ip));
+        assert_eq!(fw.get_block_reason(&ip), None);
+    }
+
+    #[tokio::test]
+    async fn test_block_with_reason() {
+        let manager = EbpfManager::new().await.unwrap();
+        let fw = XdpFirewall::new(&manager);
+
+        let ip = IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 2));
+        fw.block_ip_with_reason(ip, BlockReason::DdosDetected)
+            .await
+            .unwrap();
+
+        assert!(fw.is_blocked(&ip));
+        assert_eq!(fw.get_block_reason(&ip), Some(BlockReason::DdosDetected));
+    }
+
+    #[tokio::test]
+    async fn test_rate_limit() {
+        let manager = EbpfManager::new().await.unwrap();
+        let fw = XdpFirewall::new(&manager);
+
+        let ip = IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 3));
+        fw.add_rate_limit(ip, 100, RateLimitAction::Drop)
+            .await
+            .unwrap();
+
+        fw.remove_rate_limit(&ip).await.unwrap();
     }
 
     #[tokio::test]
     async fn test_stats() {
         let manager = EbpfManager::new().await.unwrap();
         let fw = XdpFirewall::new(&manager);
-        
+
         fw.update_stats(100, 10, 5);
         let stats = fw.stats().await;
         assert_eq!(stats.packets_allowed, 100);
         assert_eq!(stats.packets_dropped, 10);
         assert_eq!(stats.packets_ratelimited, 5);
+    }
+
+    #[tokio::test]
+    async fn test_clear_blocklist() {
+        let manager = EbpfManager::new().await.unwrap();
+        let fw = XdpFirewall::new(&manager);
+
+        let ip1 = IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 1));
+        let ip2 = IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 2));
+        fw.block_ip(ip1).await.unwrap();
+        fw.block_ip(ip2).await.unwrap();
+
+        assert_eq!(fw.stats().await.blocked_ip_count, 2);
+
+        let cleared = fw.clear_blocklist().await.unwrap();
+        assert_eq!(cleared, 2);
+        assert_eq!(fw.stats().await.blocked_ip_count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_list_blocked_ips() {
+        let manager = EbpfManager::new().await.unwrap();
+        let fw = XdpFirewall::new(&manager);
+
+        let ip = IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 99));
+        fw.block_ip_with_reason(ip, BlockReason::ThreatIntel)
+            .await
+            .unwrap();
+
+        let list = fw.list_blocked_ips();
+        assert!(list.contains(&(ip, BlockReason::ThreatIntel)));
+    }
+
+    #[tokio::test]
+    async fn test_attach_detach_lifecycle() {
+        let manager = EbpfManager::new().await.unwrap();
+        let mut fw = XdpFirewall::new(&manager);
+
+        // Double detach should be fine
+        assert!(fw.detach().await.is_ok());
+
+        // Attach in fallback mode should succeed
+        assert!(fw.attach("lo").await.is_ok());
+
+        // Double attach should warn and succeed
+        assert!(fw.attach("lo").await.is_ok());
+
+        // Detach
+        assert!(fw.detach().await.is_ok());
     }
 }

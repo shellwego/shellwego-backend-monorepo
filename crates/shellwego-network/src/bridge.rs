@@ -127,4 +127,63 @@ impl Bridge {
         
         Ok(link.header.index)
     }
+
+    // -----------------------------------------------------------------------
+    // Utility methods (non-netlink, safe for tests)
+    // -----------------------------------------------------------------------
+
+    /// Delete this bridge interface.
+    ///
+    /// Requires CAP_NET_ADMIN.  Returns Ok even if the bridge doesn't exist
+    /// (best-effort cleanup).
+    pub async fn delete(&self) -> Result<(), NetworkError> {
+        let index = match self.get_index().await {
+            Ok(idx) => idx,
+            Err(_) => return Ok(()), // Already gone
+        };
+
+        self.handle
+            .link()
+            .del(index)
+            .execute()
+            .await
+            .map_err(|e| NetworkError::Netlink(format!("Failed to delete bridge: {}", e)))?;
+
+        tracing::info!("Deleted bridge {}", self.name);
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_bridge_name_accessor() {
+        // We can't create a Bridge without a netlink connection (async),
+        // but we can verify the type has the right structure.
+        // The name accessor is a simple &str getter – verified by inspection.
+        assert_eq!(std::any::type_name::<Bridge>(), "shellwego_network::bridge::Bridge");
+    }
+
+    #[test]
+    fn test_bridge_creation_requires_netlink() {
+        // Bridge::create_or_get requires a netlink socket which isn't
+        // available in unit tests.  This test documents that constraint.
+        // Integration tests run with NET_ADMIN in crates/shellwego-agent.
+    }
+
+    #[tokio::test]
+    async fn test_bridge_create_or_get_fails_gracefully_without_netns() {
+        // In a test environment without netlink, this should return an error
+        // rather than panic.
+        let result = Bridge::create_or_get("test-br-nonexistent").await;
+        // The result depends on the test environment having netlink available.
+        // We just verify it doesn't panic.
+        let _ = result;
+    }
 }

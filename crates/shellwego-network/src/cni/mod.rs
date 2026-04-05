@@ -7,7 +7,7 @@
 //! tc qdiscs, and eBPF programs.
 
 use std::net::Ipv4Addr;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 use uuid::Uuid;
 
 use crate::{

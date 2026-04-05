@@ -17,6 +17,7 @@ use crate::OutputFormat;
 use comfy_table::{Table, modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL};
 
 /// Create styled table for terminal output
+#[allow(dead_code)]
 pub fn create_table() -> Table {
     let mut table = Table::new();
     table

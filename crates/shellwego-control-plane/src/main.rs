@@ -2,6 +2,11 @@
 //!
 //! This is a thin wrapper that delegates to the library crate.
 
+// Suppress warnings for scaffolding code not yet wired in.
+#![allow(dead_code)]
+#![allow(unused_imports)]
+#![allow(unused_variables)]
+
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tracing::info;

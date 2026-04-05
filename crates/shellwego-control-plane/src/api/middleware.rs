@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use crate::auth::CurrentUser;
 use crate::state::AppState;
-use super::handlers::ErrorResponse;
+use super::ErrorResponse;
 
 /// Request logging middleware
 pub async fn log_request(

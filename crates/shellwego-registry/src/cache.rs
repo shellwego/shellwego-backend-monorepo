@@ -19,6 +19,7 @@ use shellwego_schema::oci::Manifest;
 /// Layer cache manager
 pub struct LayerCache {
     /// ZFS pool name
+    #[allow(dead_code)]
     pool: String,
     /// Base dataset for images
     base_dataset: String,

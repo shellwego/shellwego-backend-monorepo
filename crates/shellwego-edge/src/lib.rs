@@ -25,6 +25,7 @@ pub use router::{ConfigSource, Matcher, Middleware, RequestInfo, Route, Router, 
 pub use tls::{AcmeConfig, Certificate, CertificateManager, CertificateResolver};
 
 /// Edge proxy server
+#[allow(dead_code)]
 pub struct EdgeProxy {
     /// Router for request matching
     router: Arc<RwLock<Router>>,
@@ -267,10 +268,10 @@ impl EdgeProxy {
 
                                     let stats_for_decrement = stats.clone();
                                     let service = service_fn(move |req: Request<Body>| {
-                                        let router = router.clone();
+                                        let _router = router.clone();
                                         let tls_manager = tls_manager.clone();
-                                        let cert_resolver = cert_resolver.clone();
-                                        let proxy = proxy.clone();
+                                        let _cert_resolver = cert_resolver.clone();
+                                        let _proxy = proxy.clone();
                                         async move {
                                             // Check if this is an ACME HTTP-01 challenge request
                                             if let Some(tls_mgr) = tls_manager.as_ref() {
@@ -370,7 +371,7 @@ impl EdgeProxy {
                                 let router = router.clone();
                                 let proxy = proxy.clone();
                                 let tls_manager = tls_manager.clone();
-                                let cert_resolver = cert_resolver.clone();
+                                let _cert_resolver = cert_resolver.clone();
                                 let tls_acceptor = tls_acceptor.clone();
                                 let stats = stats.clone();
 

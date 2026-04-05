@@ -66,6 +66,7 @@ sqlx = { workspace = true, features = ["any"] }
 # Authentication
 jsonwebtoken = "9"
 argon2 = "0.5"
+password-hash = "0.5"
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }

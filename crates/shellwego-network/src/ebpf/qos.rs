@@ -75,6 +75,7 @@ pub struct ShaperStats {
 /// eBPF QoS controller
 #[derive(Clone)]
 pub struct EbpfQos {
+    #[allow(dead_code)]
     manager: EbpfManager,
     /// Active shapers by handle
     shapers: Arc<std::sync::Mutex<HashMap<ShaperHandle, ShaperConfig>>>,
@@ -84,6 +85,7 @@ pub struct EbpfQos {
 
 /// Configuration for a traffic shaper
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct ShaperConfig {
     /// Interface name
     iface: String,

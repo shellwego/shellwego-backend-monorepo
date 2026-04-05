@@ -47,6 +47,7 @@ pub enum BlockReason {
 
 /// Rate limit configuration
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
 struct RateLimitConfig {
     /// Packets per second allowed
     packets_per_sec: u32,
@@ -560,7 +561,8 @@ impl XdpFirewall {
         let output = Command::new("iptables")
             .args(["-I", "INPUT", "-s", &cidr_str, "-j", "DROP"])
             .output()
-            .await?;
+            .await
+            .map_err(|e| EbpfError::LoadFailed(e.to_string()))?;
 
         if !output.status.success() {
             tracing::warn!("Failed to block CIDR via iptables");

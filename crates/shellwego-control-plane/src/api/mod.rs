@@ -7,7 +7,7 @@ use std::sync::Arc;
 use axum::{
     routing::{get, post},
     Router,
-    middleware,
+    middleware as axum_middleware,
 };
 use tower_http::{
     cors::CorsLayer,
@@ -38,8 +38,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .nest("/api/v1", v1_routes(state.clone()))
 
         // Middleware stack (outermost first in execution order)
-        .layer(middleware::from_fn(middleware::log_request))
-        .layer(middleware::from_fn_with_state(
+        .layer(axum_middleware::from_fn(middleware::log_request))
+        .layer(axum_middleware::from_fn_with_state(
             state.clone(),
             middleware::rate_limit_middleware,
         ))
@@ -179,7 +179,7 @@ fn v1_protected_routes() -> Router<Arc<AppState>> {
 /// API v1 routes — combines public and protected routes
 fn v1_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
     // Protected routes with auth middleware layer
-    let protected = v1_protected_routes().layer(middleware::from_fn_with_state(
+    let protected = v1_protected_routes().layer(axum_middleware::from_fn_with_state(
         state.clone(),
         middleware::auth_middleware,
     ));

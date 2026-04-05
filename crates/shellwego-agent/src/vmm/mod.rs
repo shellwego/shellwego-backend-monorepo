@@ -586,7 +586,7 @@ impl VmmManager {
         self.pause(app_id).await?;
 
         // Track if we need to resume on error
-        let mut should_resume = true;
+        let should_resume = true;
 
         // 2. Create memory/disk snapshot via Firecracker
         let snapshot_result = {
@@ -600,7 +600,6 @@ impl VmmManager {
                     )
                     .await
             } else {
-                should_resume = false;
                 anyhow::bail!("VM {} not found for snapshotting", app_id);
             }
         };

@@ -38,6 +38,9 @@ fn db_error(code: &str, err: &DatabaseError) -> (StatusCode, Json<ErrorResponse>
         DatabaseError::ConnectionError(msg) => (StatusCode::SERVICE_UNAVAILABLE, Json(ErrorResponse::new("DB_UNAVAILABLE", msg))),
         DatabaseError::QueryError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse::new("DB_ERROR", msg))),
         DatabaseError::MigrationError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse::new("DB_MIGRATION_ERROR", msg))),
+        DatabaseError::NotConnected => (StatusCode::SERVICE_UNAVAILABLE, Json(ErrorResponse::new("DB_UNAVAILABLE", "Database not connected"))),
+        DatabaseError::DuplicateKey => (StatusCode::CONFLICT, Json(ErrorResponse::new("DUPLICATE", "Duplicate key"))),
+        DatabaseError::Timeout => (StatusCode::GATEWAY_TIMEOUT, Json(ErrorResponse::new("TIMEOUT", "Database timeout"))),
     }
 }
 
@@ -193,7 +196,7 @@ pub async fn get_app(
     Path(app_id): Path<Uuid>,
 ) -> Result<Json<App>, (StatusCode, Json<ErrorResponse>)> {
     let app: Option<App> = state.db.find_by_id("apps", &app_id).await.map_err(internal_db_err)?;
-    app.ok_or_else(|| not_found_err("App"))
+    app.map(Json).ok_or_else(|| not_found_err("App"))
 }
 
 pub async fn delete_app(
@@ -218,7 +221,6 @@ pub async fn deploy_app(
         .ok_or_else(|| not_found_err("App"))?;
 
     let deployment_id = Uuid::new_v4();
-    let now = Utc::now();
 
     // Create a deployment record
     let deployment_entity = serde_json::json!({
@@ -227,7 +229,7 @@ pub async fn deploy_app(
         "build_id": null,
         "status": "pending",
         "strategy": "rolling",
-        "started_at": now.to_rfc3339(),
+        "started_at": Utc::now().to_rfc3339(),
         "finished_at": null,
         "previous_deployment": null,
     });
@@ -275,7 +277,7 @@ pub async fn scale_app(
 
     // Fetch the updated app
     let app: Option<App> = state.db.find_by_id("apps", &app_id).await.map_err(internal_db_err)?;
-    app.ok_or_else(|| {
+    app.map(Json).ok_or_else(|| {
         (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse::new("INTERNAL_ERROR", "Failed to retrieve updated app")))
     })
 }
@@ -396,7 +398,7 @@ pub struct Node {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct NodeCapacity {
     #[serde(default)]
     pub cpu_cores: f64,
@@ -532,7 +534,7 @@ pub async fn get_node(
 
     // Fall back to DB
     let node: Option<Node> = state.db.find_by_id("nodes", &node_id).await.map_err(internal_db_err)?;
-    node.ok_or_else(|| not_found_err("Node"))
+    node.map(Json).ok_or_else(|| not_found_err("Node"))
 }
 
 pub async fn deregister_node(
@@ -676,7 +678,7 @@ pub async fn get_volume(
     Path(volume_id): Path<Uuid>,
 ) -> Result<Json<Volume>, (StatusCode, Json<ErrorResponse>)> {
     let volume: Option<Volume> = state.db.find_by_id("volumes", &volume_id).await.map_err(internal_db_err)?;
-    volume.ok_or_else(|| not_found_err("Volume"))
+    volume.map(Json).ok_or_else(|| not_found_err("Volume"))
 }
 
 pub async fn delete_volume(
@@ -720,7 +722,7 @@ pub async fn attach_volume(
     state.db.update("volumes", &volume_id, &update_entity).await.map_err(internal_db_err)?;
 
     let volume: Option<Volume> = state.db.find_by_id("volumes", &volume_id).await.map_err(internal_db_err)?;
-    volume.ok_or_else(|| {
+    volume.map(Json).ok_or_else(|| {
         (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse::new("INTERNAL_ERROR", "Failed to retrieve updated volume")))
     })
 }
@@ -755,7 +757,7 @@ pub async fn detach_volume(
     state.db.update("volumes", &volume_id, &update_entity).await.map_err(internal_db_err)?;
 
     let volume: Option<Volume> = state.db.find_by_id("volumes", &volume_id).await.map_err(internal_db_err)?;
-    volume.ok_or_else(|| {
+    volume.map(Json).ok_or_else(|| {
         (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse::new("INTERNAL_ERROR", "Failed to retrieve updated volume")))
     })
 }
@@ -850,7 +852,7 @@ pub async fn get_domain(
     Path(domain_id): Path<Uuid>,
 ) -> Result<Json<Domain>, (StatusCode, Json<ErrorResponse>)> {
     let domain: Option<Domain> = state.db.find_by_id("domains", &domain_id).await.map_err(internal_db_err)?;
-    domain.ok_or_else(|| not_found_err("Domain"))
+    domain.map(Json).ok_or_else(|| not_found_err("Domain"))
 }
 
 pub async fn delete_domain(
@@ -978,7 +980,7 @@ pub async fn get_database(
     Path(db_id): Path<Uuid>,
 ) -> Result<Json<Database>, (StatusCode, Json<ErrorResponse>)> {
     let database: Option<Database> = state.db.find_by_id("managed_databases", &db_id).await.map_err(internal_db_err)?;
-    database.ok_or_else(|| not_found_err("Database"))
+    database.map(Json).ok_or_else(|| not_found_err("Database"))
 }
 
 pub async fn delete_database(
@@ -1110,7 +1112,7 @@ pub async fn get_secret(
     Path(secret_id): Path<Uuid>,
 ) -> Result<Json<Secret>, (StatusCode, Json<ErrorResponse>)> {
     let secret: Option<Secret> = state.db.find_by_id("secrets", &secret_id).await.map_err(internal_db_err)?;
-    secret.ok_or_else(|| not_found_err("Secret"))
+    secret.map(Json).ok_or_else(|| not_found_err("Secret"))
 }
 
 pub async fn delete_secret(
@@ -1160,7 +1162,7 @@ pub async fn rotate_secret(
     state.db.update("secrets", &secret_id, &update_entity).await.map_err(internal_db_err)?;
 
     let secret: Option<Secret> = state.db.find_by_id("secrets", &secret_id).await.map_err(internal_db_err)?;
-    secret.ok_or_else(|| {
+    secret.map(Json).ok_or_else(|| {
         (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse::new("INTERNAL_ERROR", "Failed to retrieve updated secret")))
     })
 }
@@ -1185,7 +1187,7 @@ pub async fn get_build(
     Path(build_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
     let build: Option<serde_json::Value> = state.db.find_by_id("builds", &build_id).await.map_err(internal_db_err)?;
-    build.ok_or_else(|| not_found_err("Build"))
+    build.map(Json).ok_or_else(|| not_found_err("Build"))
 }
 
 pub async fn get_build_logs(
@@ -1614,7 +1616,7 @@ pub async fn get_organization(
     Path(org_id): Path<Uuid>,
 ) -> Result<Json<Organization>, (StatusCode, Json<ErrorResponse>)> {
     let org: Option<Organization> = state.db.find_by_id("organizations", &org_id).await.map_err(internal_db_err)?;
-    org.ok_or_else(|| not_found_err("Organization"))
+    org.map(Json).ok_or_else(|| not_found_err("Organization"))
 }
 
 // ==================== Metrics ====================

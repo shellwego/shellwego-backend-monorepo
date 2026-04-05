@@ -329,6 +329,7 @@ pub enum ExecMessage {
 }
 
 /// Resize TTY message
+#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 pub struct ResizeMessage {
     /// Terminal width
@@ -338,6 +339,7 @@ pub struct ResizeMessage {
 }
 
 /// Signal message (for sending signals to process)
+#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 pub struct SignalMessage {
     /// Signal name (e.g., "SIGTERM", "SIGKILL")

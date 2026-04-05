@@ -111,7 +111,7 @@ impl AuthService {
 
         // Hash the password with argon2id
         let password_hash = password::hash_password(password)
-            .map_err(|e| AuthError::InternalError(e.to_string()))?;
+            .map_err(|e: password_hash::Error| AuthError::InternalError(e.to_string()))?;
 
         let user_id = Uuid::new_v4();
         let now = Utc::now();
@@ -176,7 +176,7 @@ impl AuthService {
             .clone();
 
         let valid = password::verify_password(password, &user.password_hash)
-            .map_err(|e| AuthError::InternalError(e.to_string()))?;
+            .map_err(|e: password_hash::Error| AuthError::InternalError(e.to_string()))?;
 
         if !valid {
             return Err(AuthError::InvalidCredentials);
@@ -254,7 +254,7 @@ impl AuthService {
                 0
             };
             let expiry = Instant::now() + std::time::Duration::from_secs(remaining);
-            self.token_blocklist.insert(jti, expiry);
+            self.token_blocklist.insert(jti.clone(), expiry);
             info!("Revoked token: {}", jti);
         }
 
@@ -266,7 +266,7 @@ impl AuthService {
         let claims = jwt::validate_token(&self.jwt_config, token_str, false)?;
 
         // Check if token is blocklisted
-        if let Some(jti) = &claims.jti {
+        if let Some(ref jti) = &claims.jti {
             if self.token_blocklist.contains_key(jti) {
                 return Err(AuthError::TokenRevoked);
             }

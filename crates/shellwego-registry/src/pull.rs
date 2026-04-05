@@ -9,7 +9,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use futures_util::stream::StreamExt;
 use reqwest::Client;
 use sha2::{Sha256, Digest as Sha256Digest};
 use tracing::{debug, info, warn};

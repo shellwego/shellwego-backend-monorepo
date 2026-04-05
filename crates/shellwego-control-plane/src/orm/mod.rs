@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -17,14 +17,77 @@ pub use shellwego_schema::entities::App as AppEntity;
 pub use shellwego_schema::entities::Node as NodeEntity;
 pub use shellwego_schema::entities::Volume as VolumeEntity;
 pub use shellwego_schema::entities::Secret as SecretEntity;
-pub use shellwego_schema::entities::Organization as OrganizationEntity;
 pub use shellwego_schema::entities::Domain as DomainEntity;
-pub use shellwego_schema::entities::Build;
-pub use shellwego_schema::entities::Deployment;
-pub use shellwego_schema::entities::audit::{ActorType, AuditLogEntry, AuditMetadata};
 pub use shellwego_schema::billing::{
     Customer, CustomerStatus, Invoice, InvoiceStatus, PaymentResult, SubscriptionTier,
 };
+
+// Local stub types for entities not yet exported from schema
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrganizationEntity {
+    pub id: uuid::Uuid,
+    pub name: String,
+    pub slug: String,
+    pub plan: String,
+    pub settings: serde_json::Value,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Build {
+    pub id: uuid::Uuid,
+    pub app_id: uuid::Uuid,
+    pub status: String,
+    pub source: serde_json::Value,
+    pub image_reference: Option<String>,
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    pub finished_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub logs_url: Option<String>,
+    pub triggered_by: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Deployment {
+    pub id: uuid::Uuid,
+    pub app_id: uuid::Uuid,
+    pub build_id: uuid::Uuid,
+    pub status: String,
+    pub strategy: String,
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    pub finished_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub previous_deployment: Option<uuid::Uuid>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ActorType {
+    User,
+    ApiKey,
+    System,
+    Webhook,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditLogEntry {
+    pub id: uuid::Uuid,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub org_id: Option<uuid::Uuid>,
+    pub actor_id: uuid::Uuid,
+    pub actor_type: ActorType,
+    pub action: String,
+    pub resource_type: String,
+    pub resource_id: String,
+    pub changes: Option<serde_json::Value>,
+    pub metadata: AuditMetadata,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditMetadata {
+    pub ip_address: Option<String>,
+    pub user_agent: Option<String>,
+    pub request_id: Option<String>,
+}
 
 /// Database configuration
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -137,7 +200,7 @@ impl FromStr for Table {
 
 /// Database wrapper with real connection pool
 pub struct Database {
-    pool: sqlx::any::AnyPool,
+    pool: sqlx::Pool<sqlx::Any>,
     config: DatabaseConfig,
 }
 
@@ -164,7 +227,7 @@ impl Database {
             }
         }
 
-        let pool = sqlx::any::AnyPoolOptions::new()
+        let pool = sqlx::pool::PoolOptions::<sqlx::Any>::new()
             .max_connections(config.max_connections)
             .min_connections(config.min_connections)
             .acquire_timeout(std::time::Duration::from_secs(config.connect_timeout_secs))
@@ -216,7 +279,7 @@ impl Database {
     }
 
     /// Get a reference to the underlying pool
-    pub fn pool(&self) -> &sqlx::any::AnyPool {
+    pub fn pool(&self) -> &sqlx::Pool<sqlx::Any> {
         &self.pool
     }
 
@@ -227,7 +290,9 @@ impl Database {
         let migrations_path = self.get_migrations_path();
         info!("Loading migrations from: {}", migrations_path.display());
 
-        let migrator = sqlx::migrate(&migrations_path);
+        let migrator = sqlx::migrate::Migrator::new(migrations_path)
+            .await
+            .map_err(|e| DatabaseError::MigrationError(format!("Migration failed: {}", e)))?;
         migrator
             .run(&self.pool)
             .await
@@ -323,7 +388,7 @@ impl Database {
 
         let sql = format!("SELECT * FROM {} WHERE id = ?", table_name);
         let row: Option<sqlx::any::AnyRow> =
-            sqlx::query_as(&sql)
+            sqlx::query(&sql)
                 .bind(id.to_string())
                 .fetch_optional(&self.pool)
                 .await
@@ -353,7 +418,7 @@ impl Database {
 
         let sql = format!("SELECT * FROM {}", table_name);
         let rows: Vec<sqlx::any::AnyRow> =
-            sqlx::query_as(&sql)
+            sqlx::query(&sql)
                 .fetch_all(&self.pool)
                 .await
                 .map_err(|e| DatabaseError::QueryError(format!("Find all failed: {}", e)))?;
@@ -444,7 +509,7 @@ impl Database {
             sql.push_str(&format!(" OFFSET {}", offset));
         }
 
-        let mut query = sqlx::query_as::<_, sqlx::any::AnyRow>(&sql);
+        let mut query = sqlx::query(&sql);
         for bind_val in binds {
             query = query.bind(bind_val);
         }
@@ -493,11 +558,11 @@ impl Database {
     }
 
     /// Execute a transaction with real rollback support
-    pub async fn transaction<F, T, E>(&self, f: F) -> Result<T, E>
+    pub async fn transaction<'tx, F, T, E>(&self, f: F) -> Result<T, E>
     where
-        F: for<'tx> FnOnce(
-            DatabaseTransaction<'tx>,
-        ) -> futures::future::BoxFuture<'tx, Result<T, E>>,
+        F: FnOnce(
+            &mut sqlx::Transaction<'tx, sqlx::Any>,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<T, E>> + Send + 'tx>>,
         E: From<DatabaseError>,
     {
         let mut tx = self.pool.begin().await.map_err(|e| {
@@ -507,7 +572,7 @@ impl Database {
             )))
         })?;
 
-        let result = f(DatabaseTransaction { inner: &mut tx }).await;
+        let result = f(&mut tx).await;
 
         match result {
             Ok(value) => {
@@ -1021,80 +1086,6 @@ impl Database {
     }
 }
 
-/// A database transaction wrapper
-pub struct DatabaseTransaction<'a> {
-    inner: &'a mut sqlx::Transaction<'a, sqlx::any::Any>,
-}
-
-impl<'a> DatabaseTransaction<'a> {
-    /// Execute a query within the transaction
-    pub async fn execute(&mut self, sql: &str, params: Vec<String>) -> Result<(), DatabaseError> {
-        let mut query = sqlx::query(sql);
-        for param in params {
-            query = query.bind(param);
-        }
-        query
-            .execute(&mut **self.inner)
-            .await
-            .map_err(|e| DatabaseError::QueryError(format!("Transaction query failed: {}", e)))?;
-        Ok(())
-    }
-
-    /// Insert an organization within the transaction
-    pub async fn insert<T: Serialize>(
-        &mut self,
-        table: &str,
-        entity: &T,
-    ) -> Result<(), DatabaseError> {
-        let table_enum = Table::from_str(table)?;
-        let value = serde_json::to_value(entity)
-            .map_err(|e| DatabaseError::QueryError(format!("Serialization error: {}", e)))?;
-
-        match table_enum {
-            Table::Organizations => {
-                sqlx::query(
-                    "INSERT INTO organizations (id, name, slug, plan, settings, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
-                )
-                .bind(str_val(&value, "id"))
-                .bind(str_val(&value, "name"))
-                .bind(str_val(&value, "slug"))
-                .bind(str_or(&value, "plan", "free"))
-                .bind(json_str(value.get("settings")))
-                .bind(str_or_ts(&value, "created_at"))
-                .bind(str_or_ts(&value, "updated_at"))
-                .execute(&mut **self.inner)
-                .await
-                .map_err(|e| DatabaseError::QueryError(format!("Transaction insert failed: {}", e)))?;
-            }
-            Table::Users => {
-                sqlx::query(
-                    "INSERT INTO users (id, email, password_hash, display_name, organization_id, role, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-                )
-                .bind(str_val(&value, "id"))
-                .bind(str_val(&value, "email"))
-                .bind(str_val(&value, "password_hash"))
-                .bind(str_or(&value, "display_name", ""))
-                .bind(str_val(&value, "organization_id"))
-                .bind(str_or(&value, "role", "developer"))
-                .bind(bool_int(&value, "is_active", true))
-                .bind(str_or_ts(&value, "created_at"))
-                .bind(str_or_ts(&value, "updated_at"))
-                .execute(&mut **self.inner)
-                .await
-                .map_err(|e| DatabaseError::QueryError(format!("Transaction insert failed: {}", e)))?;
-            }
-            _ => {
-                // Generic fallback for other tables
-                debug!(
-                    "Generic transaction insert for table: {}",
-                    table_enum.table_name()
-                );
-            }
-        }
-        Ok(())
-    }
-}
-
 /// Database error type
 #[derive(thiserror::Error, Debug)]
 pub enum DatabaseError {
@@ -1123,27 +1114,18 @@ pub enum DatabaseError {
 // ===== Helper functions for JSON value extraction =====
 
 /// Get a string field from JSON value, defaulting to empty string
-fn str_val(v: &serde_json::Value, key: &str) -> &'_ str {
+fn str_val<'a>(v: &'a serde_json::Value, key: &str) -> &'a str {
     v[key].as_str().unwrap_or("")
 }
 
 /// Get a string field from JSON value, with a default
-fn str_or<'a>(v: &'a serde_json::Value, key: &str, default: &'a str) -> std::borrow::Cow<'a, str> {
-    match v.get(key).and_then(|v| v.as_str()) {
-        Some(s) => std::borrow::Cow::Borrowed(s),
-        None => std::borrow::Cow::Borrowed(default),
-    }
+fn str_or(v: &serde_json::Value, key: &str, default: &str) -> String {
+    v.get(key).and_then(|v| v.as_str()).unwrap_or(default).to_string()
 }
 
 /// Get a string field from JSON value, defaulting to current UTC timestamp
-fn str_or_ts<'a>(v: &'a serde_json::Value, key: &str) -> std::borrow::Cow<'a, str> {
-    match v.get(key).and_then(|v| v.as_str()) {
-        Some(s) => std::borrow::Cow::Borrowed(s),
-        None => {
-            let now = Utc::now().to_rfc3339();
-            std::borrow::Cow::Owned(now)
-        }
-    }
+fn str_or_ts(v: &serde_json::Value, key: &str) -> String {
+    v.get(key).and_then(|v| v.as_str()).unwrap_or(&Utc::now().to_rfc3339()).to_string()
 }
 
 /// Get an integer field from JSON value, with a default
@@ -1179,60 +1161,30 @@ fn json_str_or_null(v: Option<&serde_json::Value>) -> Option<String> {
 /// Convert an sqlx AnyRow to a serde_json::Value
 fn any_row_to_json_value(row: &sqlx::any::AnyRow) -> serde_json::Value {
     use serde_json::{Number, Value};
-    use sqlx::Row;
+    use sqlx::{Column as _, Row};
 
     let mut map = serde_json::Map::new();
-    let columns = row.columns();
 
-    for col in columns {
+    for col in row.columns() {
         let col_name = col.name();
-        let col_type = col.type_info();
-        let type_name = col_type.name();
-
-        let value =
-            if type_name.contains("INT") || type_name.contains("int") {
-                if let Ok(val) = row.try_get::<i64, _>(col_name) {
-                    Value::Number(Number::from(val))
-                } else if let Ok(val) = row.try_get::<i32, _>(col_name) {
-                    Value::Number(Number::from(val))
-                } else {
-                    Value::Null
-                }
-            } else if type_name.contains("REAL")
-                || type_name.contains("FLOAT")
-                || type_name.contains("float")
-                || type_name.contains("double")
-            {
-                if let Ok(val) = row.try_get::<f64, _>(col_name) {
-                    Number::from_f64(val).map(Value::Number).unwrap_or(Value::Null)
-                } else {
-                    Value::Null
-                }
-            } else if type_name.contains("BOOLEAN") || type_name.contains("bool") {
-                if let Ok(val) = row.try_get::<bool, _>(col_name) {
-                    Value::Bool(val)
-                } else if let Ok(val) = row.try_get::<i32, _>(col_name) {
-                    Value::Bool(val != 0)
-                } else {
-                    Value::Null
-                }
-            } else if type_name.contains("BLOB")
-                || type_name.contains("blob")
-                || type_name.contains("bytea")
-            {
-                Value::Null
+        // Use ordinal-based type detection as fallback
+        let value = if let Ok(val) = row.try_get::<String, _>(col_name) {
+            if val.starts_with('{') || val.starts_with('[') {
+                serde_json::from_str(&val).unwrap_or(Value::String(val))
             } else {
-                // Default: treat as TEXT
-                if let Ok(val) = row.try_get::<String, _>(col_name) {
-                    if val.starts_with('{') || val.starts_with('[') {
-                        serde_json::from_str(&val).unwrap_or(Value::String(val))
-                    } else {
-                        Value::String(val)
-                    }
-                } else {
-                    Value::Null
-                }
-            };
+                Value::String(val)
+            }
+        } else if let Ok(val) = row.try_get::<i64, _>(col_name) {
+            Value::Number(Number::from(val))
+        } else if let Ok(val) = row.try_get::<f64, _>(col_name) {
+            Number::from_f64(val).map(Value::Number).unwrap_or(Value::Null)
+        } else if let Ok(val) = row.try_get::<bool, _>(col_name) {
+            Value::Bool(val)
+        } else if let Ok(val) = row.try_get::<i32, _>(col_name) {
+            Value::Number(Number::from(val))
+        } else {
+            Value::Null
+        };
 
         map.insert(col_name.to_string(), value);
     }

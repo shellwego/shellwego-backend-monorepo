@@ -20,6 +20,7 @@ pub struct ApiClient {
     token: String,
 }
 
+#[allow(dead_code)]
 impl ApiClient {
     pub fn new(base_url: &str, token: &str) -> anyhow::Result<Self> {
         let client = Client::builder()

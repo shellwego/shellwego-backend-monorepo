@@ -164,18 +164,22 @@ impl WasmInstance {
         });
 
         match tokio::time::timeout(timeout, result).await {
-            Ok(Ok(_)) => Ok(WasmExitStatus {
+            Ok(Ok(Ok(_))) => Ok(WasmExitStatus {
                 success: true,
                 code: 0,
             }),
-            Ok(Err(WasmError::ExecutionError(msg))) if msg.starts_with("EXIT:") => {
+            Ok(Ok(Err(WasmError::ExecutionError(msg)))) if msg.starts_with("EXIT:") => {
                 let code: i32 = msg[5..].parse().unwrap_or(1);
                 Ok(WasmExitStatus {
                     success: code == 0,
                     code,
                 })
             }
-            Ok(Err(e)) => Err(e),
+            Ok(Ok(Err(e))) => Err(e),
+            Ok(Err(e)) => Err(WasmError::ExecutionError(format!(
+                "WASM task panicked or was cancelled: {}",
+                e
+            ))),
             Err(_) => Err(WasmError::ResourceLimit(format!(
                 "WASM execution timed out after {:?}",
                 timeout
@@ -185,7 +189,7 @@ impl WasmInstance {
 
     /// Retrieve stdout content from the in-memory write pipe
     pub async fn get_stdout(&self) -> Vec<u8> {
-        let stdout = &self._stdout;
+        let stdout = self._stdout.clone();
         match stdout.try_into_inner() {
             Ok(cursor) => cursor.into_inner(),
             Err(_) => {
@@ -198,7 +202,7 @@ impl WasmInstance {
 
     /// Retrieve stderr content from the in-memory write pipe
     pub async fn get_stderr(&self) -> Vec<u8> {
-        let stderr = &self._stderr;
+        let stderr = self._stderr.clone();
         match stderr.try_into_inner() {
             Ok(cursor) => cursor.into_inner(),
             Err(_) => Vec::new(),

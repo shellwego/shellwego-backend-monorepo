@@ -9,7 +9,15 @@
 //! modules via `pub(crate)` visibility.  This `lib.rs` simply makes the
 //! public API available to downstream crates (e.g. integration tests).
 
+// Suppress warnings for scaffolding/scaffolded code that is not yet wired into
+// actual functionality.  These modules contain structs, methods, enums and
+// fields that are defined for future use but not currently referenced.
+#![allow(dead_code)]
+#![allow(unused_imports)]
+#![allow(unused_variables)]
+
 pub mod api;
+pub mod auth;
 pub mod config;
 pub mod federation;
 pub mod git;

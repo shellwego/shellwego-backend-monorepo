@@ -15,7 +15,7 @@ use p256::ecdsa::{SigningKey, VerifyingKey};
 use p256::pkcs8::EncodePrivateKey;
 use rand::rngs::OsRng;
 use reqwest::header::{CONTENT_TYPE, LOCATION};
-use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::server::ResolvesServerCert;
 use rustls::sign::CertifiedKey;
 use serde::{Deserialize, Serialize};
@@ -272,7 +272,7 @@ impl CertificateManager {
 
         // 1. Create an ACME client with a fresh ECDSA P-256 account key
         let account_key = SigningKey::random(&mut OsRng);
-        let acme = AcmeClient::new(acme_config, account_key).await?;
+        let mut acme = AcmeClient::new(acme_config, account_key).await?;
 
         // 2. Register account (or find existing)
         let account_url = acme.register_account().await?;
@@ -335,6 +335,7 @@ impl CertificateManager {
         let key_pem = acme.private_key_pem();
 
         // 11. Clean up challenge token
+        let _ = finalize_url;
         {
             let mut tokens = self
                 .challenge_tokens
@@ -503,11 +504,10 @@ impl CertificateManager {
 
         match cert.to_rustls_cert() {
             Ok((cert_chain, key)) => {
-                let certified_key = CertifiedKey::new(cert_chain, Arc::new(
-                    rustls::crypto::ring::sign::any_supported_type(&key)
-                        .ok()?
-                        .into(),
-                ));
+                let certified_key = CertifiedKey::new(cert_chain,
+                    rustls::crypto::ring::sign::any_supported_type(&PrivateKeyDer::Pkcs8(key.clone_key()))
+                        .ok()?,
+                );
                 Some(Arc::new(certified_key))
             }
             Err(e) => {
@@ -582,6 +582,7 @@ struct AcmeClient {
 }
 
 /// ACME directory endpoints
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 struct AcmeDirectory {
     #[serde(rename = "newNonce")]
@@ -595,6 +596,7 @@ struct AcmeDirectory {
 }
 
 /// ACME order response
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AcmeOrder {
@@ -608,6 +610,7 @@ struct AcmeOrder {
 }
 
 /// ACME identifier
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 struct AcmeIdentifier {
     #[serde(rename = "type")]
@@ -616,6 +619,7 @@ struct AcmeIdentifier {
 }
 
 /// ACME authorization
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 struct AcmeAuthorization {
     url: String,
@@ -625,6 +629,7 @@ struct AcmeAuthorization {
 }
 
 /// ACME challenge
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 struct AcmeChallenge {
     #[serde(rename = "type")]
@@ -636,6 +641,7 @@ struct AcmeChallenge {
 }
 
 /// ACME problem detail
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 struct AcmeProblem {
     #[serde(rename = "type")]
@@ -692,19 +698,21 @@ impl AcmeClient {
             .post_jose(&self.directory.new_account, &payload, None)
             .await?;
 
-        let account_url = response
+        let account_url = if let Some(loc) = response
             .headers()
             .get(LOCATION)
             .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string())
-            .or_else(|| {
-                // Some servers return the URL in the body
-                response
-                    .json::<serde_json::Value>()
-                    .ok()
-                    .and_then(|v| v.get("url").and_then(|u| u.as_str()).map(String::from))
-            })
-            .ok_or_else(|| CertError::AcmeError("No account URL in registration response".into()))?;
+        {
+            Some(loc.to_string())
+        } else {
+            // Some servers return the URL in the body
+            response
+                .json::<serde_json::Value>()
+                .await
+                .ok()
+                .and_then(|v| v.get("url").and_then(|u| u.as_str()).map(String::from))
+        }
+        .ok_or_else(|| CertError::AcmeError("No account URL in registration response".into()))?;
 
         self.account_url = Some(account_url.clone());
         info!("ACME account registered: {}", account_url);
@@ -799,10 +807,7 @@ impl AcmeClient {
             match order.status.as_str() {
                 "ready" => return Ok(order.finalize),
                 "valid" => {
-                    // Already finalized? Return certificate URL directly.
-                    if let Some(cert_url) = &order.certificate {
-                        return self.download_certificate(cert_url, order.finalize).await;
-                    }
+                    // Already finalized — return the finalize URL
                     return Ok(order.finalize);
                 }
                 "invalid" => {
@@ -915,7 +920,7 @@ impl AcmeClient {
     async fn download_certificate(
         &self,
         cert_url: &str,
-        finalize_url: String,
+        _finalize_url: String,
     ) -> Result<(String, String), CertError> {
         let response = self
             .http
@@ -1158,8 +1163,8 @@ impl AcmeClient {
 fn build_jwk(verifying_key: &VerifyingKey) -> serde_json::Value {
     // p256::VerifyingKey encodes the point as uncompressed SEC1 (0x04 || x || y), 65 bytes
     let point_bytes = verifying_key.to_encoded_point(false);
-    let x_bytes = &point_bytes.x();
-    let y_bytes = &point_bytes.y();
+    let x_bytes = point_bytes.x().unwrap();
+    let y_bytes = point_bytes.y().unwrap();
 
     serde_json::json!({
         "kty": "EC",
@@ -1220,8 +1225,8 @@ fn generate_ecdsa_csr(signing_key: &SigningKey, domain: &str) -> Result<Vec<u8>,
     let spki = der_sequence(&[
         // AlgorithmIdentifier: id-ecPublicKey with P-256 curve
         der_sequence(&[
-            der_oid(&[1, 2, 840, 10045, 2, 1]), // id-ecPublicKey
-            der_oid(&[1, 2, 840, 10045, 3, 1, 7]), // prime256v1
+            der_oid(&[0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x02, 0x01]), // id-ecPublicKey
+            der_oid(&[0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07]), // prime256v1
         ]),
         // BIT STRING: 0 (unused bits) || uncompressed point
         der_bit_string(point_bytes.as_bytes()),
@@ -1232,7 +1237,7 @@ fn generate_ecdsa_csr(signing_key: &SigningKey, domain: &str) -> Result<Vec<u8>,
     let cn_set = der_set(&[
         // AttributeTypeAndValue: OID 2.5.4.3 (CN) + UTF8String value
         der_sequence(&[
-            der_oid(&[2, 5, 4, 3]), // commonName
+            der_oid(&[0x55, 0x04, 0x03]), // commonName
             der_utf8_string(cn_value),
         ]),
     ]);
@@ -1254,7 +1259,7 @@ fn generate_ecdsa_csr(signing_key: &SigningKey, domain: &str) -> Result<Vec<u8>,
         req_info,
         // signatureAlgorithm: ecdsa-with-SHA256
         der_sequence(&[
-            der_oid(&[1, 2, 840, 10045, 4, 3, 2]), // ecdsa-with-SHA256
+            der_oid(&[0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x02]), // ecdsa-with-SHA256
         ]),
         der_bit_string(sig_der.as_bytes()),
     ]);
@@ -1323,7 +1328,7 @@ fn der_bit_string(bytes: &[u8]) -> Vec<u8> {
 /// Split a PEM certificate chain into the leaf cert and the remaining chain.
 /// Returns (leaf_pem, chain_pem).
 fn split_cert_chain(full_pem: &str) -> (String, String) {
-    let certs: Vec<&str> = full_pem
+    let certs: Vec<String> = full_pem
         .split("-----END CERTIFICATE-----")
         .filter_map(|block| {
             let block = block.trim();
@@ -1575,8 +1580,8 @@ impl CertificateResolver {
     /// Build the `CertifiedKey` from a `Certificate` object.
     fn build_certified_key(cert: &Certificate) -> Option<Arc<CertifiedKey>> {
         let (cert_chain, key) = cert.to_rustls_cert().ok()?;
-        let signing_key = rustls::crypto::ring::sign::any_supported_type(&key).ok()?;
-        Some(Arc::new(CertifiedKey::new(cert_chain, Arc::new(signing_key.into()))))
+        let signing_key = rustls::crypto::ring::sign::any_supported_type(&PrivateKeyDer::Pkcs8(key.clone_key())).ok()?;
+        Some(Arc::new(CertifiedKey::new(cert_chain, signing_key)))
     }
 
     /// Generate a temporary self-signed cert for the given SNI name.
@@ -1595,8 +1600,7 @@ impl ResolvesServerCert for CertificateResolver {
         client_hello: rustls::server::ClientHello,
     ) -> Option<Arc<rustls::sign::CertifiedKey>> {
         // Get SNI from client hello
-        let domain = client_hello.server_name()?;
-        let domain_str = domain.to_str().ok()?;
+        let domain_str = client_hello.server_name()?;
 
         debug!("Resolving certificate for SNI: {}", domain_str);
 
@@ -1608,7 +1612,7 @@ impl ResolvesServerCert for CertificateResolver {
 
         // Slow path: check the async cache via try_read (non-blocking)
         // If the RwLock is not contended, we get the cert synchronously
-        if let Some(cache) = self.manager.cache.try_read() {
+        if let Ok(cache) = self.manager.cache.try_read() {
             if let Some(cert) = cache.get(domain_str) {
                 if !cert.is_expired() {
                     if let Some(certified_key) = Self::build_certified_key(cert) {

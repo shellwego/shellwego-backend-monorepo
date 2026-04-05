@@ -1200,7 +1200,7 @@ impl BillingSystem {
     /// When a PostgreSQL pool is available, looks up the active pricing plan
     /// from the `pricing_plans` table. Falls back to hardcoded tiered pricing
     /// when no pool or no matching plan exists.
-    async fn get_pricing(&self, resource_type: &str, quantity: f64) -> (f64, String) {
+    async fn get_pricing(&self, resource_type: &str, _quantity: f64) -> (f64, String) {
         // Try database-backed pricing first
         if let Some(pool) = &self.pool {
             if let Ok(row) = sqlx::query(r#"
@@ -1403,7 +1403,7 @@ impl BillingSystem {
             .bind(invoice.due_date)
             .bind(invoice.created_at)
             .bind(invoice.paid_at)
-            .bind::<Option<String>, _>(None) // transaction_id set on payment
+            .bind(None::<String>) // transaction_id set on payment
             .execute(pool)
             .await?;
         } else {
@@ -1933,7 +1933,7 @@ impl BillingSystem {
         let match_len = v1_bytes.len().min(computed_bytes.len());
         let mut diff = v1_bytes.len() ^ computed_bytes.len();
         for i in 0..match_len {
-            diff |= v1_bytes[i] ^ computed_bytes[i];
+            diff |= (v1_bytes[i] ^ computed_bytes[i]) as usize;
         }
         let verified = diff == 0;
 
@@ -1982,7 +1982,7 @@ impl BillingSystem {
         let match_len = sig_bytes.len().min(computed_bytes.len());
         let mut diff = sig_bytes.len() ^ computed_bytes.len();
         for i in 0..match_len {
-            diff |= sig_bytes[i] ^ computed_bytes[i];
+            diff |= (sig_bytes[i] ^ computed_bytes[i]) as usize;
         }
         let verified = diff == 0;
 

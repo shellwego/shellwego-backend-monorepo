@@ -119,7 +119,8 @@ impl InvoiceGenerator {
             let mut loaded = Tera::new(&glob_pattern)
                 .map_err(|e| BillingError::TemplateError(format!("Failed to load templates: {}", e)))?;
             // Merge the loaded templates into our templates instance
-            templates.extend(&mut loaded);
+            templates.extend(&mut loaded)
+                .map_err(|e| BillingError::TemplateError(format!("Failed to merge templates: {}", e)))?;
             info!(path = %template_path, "Loaded invoice templates from directory");
         } else {
             // Register embedded default template

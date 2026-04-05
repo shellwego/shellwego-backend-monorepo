@@ -24,6 +24,7 @@ static mut GLOBAL_REGISTRY: Option<Arc<MetricsRegistry>> = None;
 /// Get the global metrics registry (lazily initialized)
 pub fn global_registry() -> Option<Arc<MetricsRegistry>> {
     // SAFETY: Only called after initialization
+    #[allow(static_mut_refs)]
     unsafe { GLOBAL_REGISTRY.clone() }
 }
 
@@ -31,6 +32,7 @@ pub fn global_registry() -> Option<Arc<MetricsRegistry>> {
 pub fn init_global_registry() -> Arc<MetricsRegistry> {
     let registry = Arc::new(MetricsRegistry::new());
     // SAFETY: Called once during startup
+    #[allow(static_mut_refs)]
     unsafe {
         GLOBAL_REGISTRY = Some(registry.clone());
     }

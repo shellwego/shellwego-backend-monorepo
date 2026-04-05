@@ -31,7 +31,8 @@ impl WasmtimeRuntime {
         wasm_config.parallel_compilation(true); // Faster compilation
 
         // Memory limits
-        wasm_config.max_wasm_memory(2u64 * 1024 * 1024 * 1024); // 2GB max linear memory
+        // TODO: wasmtime API changed — `max_wasm_memory` removed; re-add if reintroduced
+        // wasm_config.max_wasm_memory(2u64 * 1024 * 1024 * 1024); // 2GB max linear memory
         wasm_config.static_memory_maximum_size(512u64 * 1024 * 1024); // 512MB max static memory
 
         // Wasmtime features
@@ -43,7 +44,8 @@ impl WasmtimeRuntime {
         wasm_config.wasm_reference_types(false); // No reference types
 
         // Epoch configuration for async interruption
-        wasm_config.epoch_deadline_boost(1_000_000_000); // 1 second between checks
+        // TODO: wasmtime API changed — `epoch_deadline_boost` removed; re-add if reintroduced
+        // wasm_config.epoch_deadline_boost(1_000_000_000); // 1 second between checks
 
         let engine = Engine::new(&wasm_config)
             .map_err(|e| WasmError::InstantiateError(format!("Failed to create engine: {}", e)))?;

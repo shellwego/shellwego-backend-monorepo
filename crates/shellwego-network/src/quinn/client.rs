@@ -37,7 +37,7 @@ impl QuinnClient {
         let native_certs = rustls_native_certs::load_native_certs()
             .context("Failed to load native certificates")?;
 
-        let (added, ignored) = root_store.add_parsable_certificates(&native_certs);
+        let (added, ignored) = root_store.add_parsable_certificates(native_certs);
         tracing::debug!(
             "Loaded {} native root certs ({} ignored)",
             added,

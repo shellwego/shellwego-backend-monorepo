@@ -180,6 +180,7 @@ fn check_fd_limits() -> Result<()> {
 }
 
 /// Check if PVM is available on this system
+#[allow(dead_code)]
 pub fn is_pvm_available(binary_path: &Path) -> bool {
     if !binary_path.exists() {
         debug!("PVM binary not found at {:?}", binary_path);
@@ -236,6 +237,7 @@ pub fn adjust_config_for_pvm(config: &mut super::MicrovmConfig) {
 ///
 /// PVM has slightly higher memory overhead than KVM due to
 /// software virtualization. This function estimates the overhead.
+#[allow(dead_code)]
 pub fn estimate_pvm_memory_overhead(configured_memory_mb: u64) -> u64 {
     // PVM overhead is approximately 15% vs KVM's 12%
     // Plus a fixed base overhead of ~3MB per VM
@@ -247,6 +249,7 @@ pub fn estimate_pvm_memory_overhead(configured_memory_mb: u64) -> u64 {
 /// Validate PVM configuration
 ///
 /// Checks if the configuration is valid for PVM mode.
+#[allow(dead_code)]
 pub fn validate_pvm_config(config: &super::MicrovmConfig) -> Result<()> {
     // Memory must be at least 64MB
     if config.memory_mb < 64 {

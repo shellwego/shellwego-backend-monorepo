@@ -66,6 +66,7 @@ impl CliConfig {
     }
     
     /// Get path to config file
+    #[allow(dead_code)]
     pub fn path() -> anyhow::Result<PathBuf> {
         let proj_dirs = directories::ProjectDirs::from("com", "shellwego", "cli")
             .ok_or_else(|| anyhow::anyhow!("Could not determine config directory"))?;

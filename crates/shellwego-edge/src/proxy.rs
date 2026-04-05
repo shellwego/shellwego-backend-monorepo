@@ -35,6 +35,7 @@ const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
 /// Maximum idle connections per upstream
 const MAX_IDLE_CONNECTIONS: usize = 100;
 /// Maximum WebSocket frame size (1 MiB)
+#[allow(dead_code)]
 const MAX_WS_FRAME_SIZE: usize = 1024 * 1024;
 
 /// HTTP proxy handler
@@ -192,7 +193,7 @@ impl HttpProxy {
         // Copy headers with modifications
         for (name, value) in request.headers() {
             // Skip hop-by-hop headers
-            if !is_hop_by_hop_header(name) {
+            if !is_hop_by_hop_header(name.as_str()) {
                 upstream_req = upstream_req.header(name, value);
             }
         }
@@ -512,8 +513,8 @@ impl HttpProxy {
         // Forward upgrade headers from the backend's WebSocket response
         for (name, value) in ws_response.headers() {
             // Skip hop-by-hop headers that we've already set
-            if !is_hop_by_hop_header(name) {
-                response_builder = response_builder.header(name, value);
+            if !is_hop_by_hop_header(name.as_str()) {
+                response_builder = response_builder.header(name.as_str(), value.as_bytes());
             }
         }
 
@@ -733,7 +734,7 @@ async fn client_to_backend(
     backend_ws: &mut WebSocketStream<TcpStream>,
     _metrics: &ProxyMetrics,
 ) {
-    let (mut client_read, _client_write) = client_ws.split();
+    let (_client_write, mut client_read) = client_ws.split();
     let (mut backend_write, _backend_read) = backend_ws.split();
 
     loop {
@@ -815,8 +816,8 @@ pub async fn handle_websocket_upgrade(
     let mut response_builder = Response::builder().status(StatusCode::SWITCHING_PROTOCOLS);
 
     for (name, value) in ws_response.headers() {
-        if !is_hop_by_hop_header(name) {
-            response_builder = response_builder.header(name, value);
+        if !is_hop_by_hop_header(name.as_str()) {
+            response_builder = response_builder.header(name.as_str(), value.as_bytes());
         }
     }
 
@@ -1026,9 +1027,9 @@ impl RequestContext {
 // ---------------------------------------------------------------------------
 
 /// Check if header is hop-by-hop (should not be forwarded)
-fn is_hop_by_hop_header(name: &HeaderName) -> bool {
+fn is_hop_by_hop_header(name: &str) -> bool {
     matches!(
-        name.as_str(),
+        name,
         "connection"
             | "keep-alive"
             | "proxy-authenticate"

@@ -29,7 +29,7 @@ pub struct MetricsStore {
     /// In-memory buffer for high-throughput ingestion
     buffer: Arc<DashMap<String, Vec<BufferedEvent>>>,
     /// Buffer flush interval in seconds
-    flush_interval_secs: u64,
+    _flush_interval_secs: u64,
     /// Maximum buffer size before forced flush
     max_buffer_size: usize,
 }
@@ -78,7 +78,7 @@ impl MetricsStore {
         Ok(Self {
             pool,
             buffer,
-            flush_interval_secs: 60,
+            _flush_interval_secs: 60,
             max_buffer_size: 10000,
         })
     }

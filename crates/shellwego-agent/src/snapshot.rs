@@ -37,6 +37,7 @@ struct SnapshotMetadata {
 
 /// ZFS integration for disk snapshots
 #[derive(Clone)]
+#[allow(dead_code)]
 struct ZfsSnapshotManager {
     pool: String,
     base_dataset: String,
@@ -316,7 +317,7 @@ impl SnapshotManager {
         })?;
 
         // Track if we need to resume on error
-        let mut should_resume = true;
+        let should_resume = true;
 
         // 2. Take memory snapshot
         let memory_result = vmm_manager
@@ -328,7 +329,6 @@ impl SnapshotManager {
             if let Err(resume_err) = vmm_manager.resume(app_id).await {
                 error!("Failed to resume VM after snapshot failure: {}", resume_err);
             }
-            should_resume = false;
             return Err(e);
         }
 
@@ -902,6 +902,7 @@ impl SnapshotManager {
     /// Uses file sizes, modification times, and samples of file content
     /// for a fast integrity check. In production, the `sha2` crate would
     /// provide cryptographically secure checksums.
+    #[allow(dead_code)]
     async fn compute_checksum(files: &[&Path]) -> anyhow::Result<String> {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
@@ -946,10 +947,10 @@ impl SnapshotManager {
         #[cfg(target_os = "linux")]
         {
             // Use statvfs via std::fs on Linux
-            let path_str = self.snapshot_dir.to_string_lossy();
+            let path_str = self.snapshot_dir.to_string_lossy().into_owned();
             match tokio::task::spawn_blocking(move || {
                 let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
-                let path_c = std::ffi::CString::new(path_str.as_ref())?;
+                let path_c = std::ffi::CString::new(path_str.as_str())?;
                 let result = unsafe { libc::statvfs(path_c.as_ptr(), &mut stat) };
                 if result == 0 {
                     Ok(stat.f_bavail as u64 * stat.f_bsize as u64)

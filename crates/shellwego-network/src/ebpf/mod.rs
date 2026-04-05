@@ -13,9 +13,8 @@ use aya::{
 #[cfg(feature = "ebpf")]
 use aya_log::EbpfLogger;
 use std::sync::atomic::{AtomicBool, Ordering};
-#[cfg(feature = "ebpf")]
 use std::sync::Arc;
-#[cfg(feature = "ebpf")]
+#[allow(unused_imports)]
 use tokio::sync::Mutex;
 use thiserror::Error;
 
@@ -165,7 +164,7 @@ impl EbpfManager {
     ///
     /// When eBPF is unavailable this is a safe no-op.  Callers that need
     /// tc-based fallback should use `qos::EbpfQos` instead.
-    pub async fn apply_qos(&self, iface: &str, limit_mbps: u32) -> Result<(), EbpfError> {
+    pub async fn apply_qos(&self, iface: &str, _limit_mbps: u32) -> Result<(), EbpfError> {
         if !self.ebpf_loaded.load(Ordering::SeqCst) {
             tracing::debug!(
                 "eBPF not loaded – skipping TC QoS attach for {} (fallback mode)",

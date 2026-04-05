@@ -14,6 +14,7 @@ use uuid::Uuid;
 use chrono::{DateTime, Utc};
 
 use crate::state::AppState;
+use crate::auth::{AuthError, CurrentUser};
 use super::ErrorResponse;
 
 // Import types from schema - single source of truth
@@ -742,33 +743,109 @@ pub struct TokenResponse {
     pub token_type: String,
 }
 
-/// Create token request
+/// Register request
 #[derive(Debug, Serialize, Deserialize)]
-pub struct CreateTokenRequest {
+pub struct RegisterRequest {
+    pub username: String,
+    pub email: String,
+    pub password: String,
+}
+
+/// Login request (reuses the CreateTokenRequest shape)
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LoginRequest {
     pub username: String,
     pub password: String,
 }
 
+/// User info response
+#[derive(Debug, Serialize, Deserialize)]
+pub struct UserInfo {
+    pub id: Uuid,
+    pub username: String,
+    pub email: String,
+    pub role: String,
+    pub permissions: Vec<String>,
+    pub organization_id: Option<Uuid>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// POST /v1/auth/register — register a new user
+pub async fn register(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<RegisterRequest>,
+) -> Result<(StatusCode, Json<TokenResponse>), (StatusCode, Json<ErrorResponse>)> {
+    // Input validation
+    if req.username.len() < 3 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse::validation("Username must be at least 3 characters")),
+        ));
+    }
+    if req.password.len() < 8 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse::validation("Password must be at least 8 characters")),
+        ));
+    }
+    if !req.email.contains('@') || !req.email.contains('.') {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse::validation("Invalid email address")),
+        ));
+    }
+
+    let result = state
+        .auth_service
+        .register(&req.username, &req.email, &req.password)
+        .await
+        .map_err(|e| auth_error_to_response(&e))?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(TokenResponse {
+            token: result.access_token,
+            refresh_token: result.refresh_token,
+            expires_in: result.expires_in,
+            token_type: "Bearer".to_string(),
+        }),
+    ))
+}
+
+/// POST /v1/auth/token — login (kept as create_token for route compatibility)
 pub async fn create_token(
     State(state): State<Arc<AppState>>,
-    Json(_req): Json<CreateTokenRequest>,
+    Json(req): Json<LoginRequest>,
 ) -> Result<Json<TokenResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let result = state
+        .auth_service
+        .login(&req.username, &req.password)
+        .await
+        .map_err(|e| auth_error_to_response(&e))?;
+
     Ok(Json(TokenResponse {
-        token: Uuid::new_v4().to_string(),
-        refresh_token: Uuid::new_v4().to_string(),
-        expires_in: state.config.jwt.expiry_secs,
+        token: result.access_token,
+        refresh_token: result.refresh_token,
+        expires_in: result.expires_in,
         token_type: "Bearer".to_string(),
     }))
 }
 
+/// POST /v1/auth/refresh — exchange refresh token for new access token
 pub async fn refresh_token(
     State(state): State<Arc<AppState>>,
-    Json(_body): Json<RefreshTokenRequest>,
+    Json(body): Json<RefreshTokenRequest>,
 ) -> Result<Json<TokenResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let result = state
+        .auth_service
+        .refresh_token(&body.refresh_token)
+        .await
+        .map_err(|e| auth_error_to_response(&e))?;
+
     Ok(Json(TokenResponse {
-        token: Uuid::new_v4().to_string(),
-        refresh_token: Uuid::new_v4().to_string(),
-        expires_in: state.config.jwt.expiry_secs,
+        token: result.access_token,
+        refresh_token: result.refresh_token,
+        expires_in: result.expires_in,
         token_type: "Bearer".to_string(),
     }))
 }
@@ -778,12 +855,100 @@ pub struct RefreshTokenRequest {
     pub refresh_token: String,
 }
 
+/// POST /v1/auth/logout — revoke the current token
 pub async fn logout(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    if let Some(auth_header) = headers.get("Authorization") {
+        if let Ok(auth_str) = auth_header.to_str() {
+            if let Some(token) = auth_str.strip_prefix("Bearer ") {
+                // Best-effort revocation
+                let _ = state.auth_service.revoke_token(token).await;
+            }
+        }
+    }
+
     Ok(Json(serde_json::json!({
         "status": "logged_out"
     })))
+}
+
+/// GET /v1/auth/me — get current user info (protected)
+pub async fn get_me(
+    State(state): State<Arc<AppState>>,
+    current_user: axum::Extension<CurrentUser>,
+) -> Result<Json<UserInfo>, (StatusCode, Json<ErrorResponse>)> {
+    let user = state
+        .auth_service
+        .get_user(&current_user.user_id)
+        .await
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse::not_found("User")),
+            )
+        })?;
+
+    Ok(Json(UserInfo {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        role: user.role.to_string(),
+        permissions: user.permissions,
+        organization_id: user.organization_id,
+        created_at: user.created_at,
+    }))
+}
+
+/// Convert AuthError to HTTP response
+fn auth_error_to_response(err: &AuthError) -> (StatusCode, Json<ErrorResponse>) {
+    match err {
+        AuthError::InvalidCredentials => (
+            StatusCode::UNAUTHORIZED,
+            Json(ErrorResponse::new(
+                "INVALID_CREDENTIALS",
+                "Invalid username or password",
+            )),
+        ),
+        AuthError::UserAlreadyExists(username) => (
+            StatusCode::CONFLICT,
+            Json(ErrorResponse::new(
+                "USER_EXISTS",
+                &format!("User '{}' already exists", username),
+            )),
+        ),
+        AuthError::UserNotFound => (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse::new("USER_NOT_FOUND", "User not found")),
+        ),
+        AuthError::TokenExpired => (
+            StatusCode::UNAUTHORIZED,
+            Json(ErrorResponse::new("TOKEN_EXPIRED", "Token has expired")),
+        ),
+        AuthError::InvalidToken(msg) => (
+            StatusCode::UNAUTHORIZED,
+            Json(ErrorResponse::new("INVALID_TOKEN", msg)),
+        ),
+        AuthError::TokenRevoked => (
+            StatusCode::UNAUTHORIZED,
+            Json(ErrorResponse::new("TOKEN_REVOKED", "Token has been revoked")),
+        ),
+        AuthError::InsufficientPermissions { required, have } => (
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse::new(
+                "FORBIDDEN",
+                &format!(
+                    "Insufficient permissions: required '{}', have '{}'",
+                    required, have
+                ),
+            )),
+        ),
+        AuthError::InternalError(msg) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse::new("INTERNAL_ERROR", msg)),
+        ),
+    }
 }
 
 // ==================== Organizations ====================
@@ -848,4 +1013,28 @@ pub async fn get_metrics(
         },
         "version": env!("CARGO_PKG_VERSION")
     }))
+}
+
+// ==================== Audit Logs ====================
+
+/// Audit log response type
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AuditLogResponse {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub action: String,
+    pub resource_type: String,
+    pub resource_id: String,
+    pub ip_address: Option<String>,
+    pub timestamp: DateTime<Utc>,
+    pub details: Option<serde_json::Value>,
+}
+
+/// GET /v1/audit-logs — list audit logs (protected)
+pub async fn list_audit_logs(
+    State(_state): State<Arc<AppState>>,
+) -> Json<PaginatedResponse<AuditLogResponse>> {
+    // Audit logs will be persisted to DB in a future phase.
+    // Currently returns empty — the structure is ready for Phase 4 integration.
+    Json(PaginatedResponse::empty())
 }

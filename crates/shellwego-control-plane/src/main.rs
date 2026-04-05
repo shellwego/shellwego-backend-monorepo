@@ -19,6 +19,7 @@ mod git;
 mod kms;
 mod federation;
 mod orm;
+mod auth;
 
 use crate::config::Config;
 use crate::state::AppState;

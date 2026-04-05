@@ -142,23 +142,23 @@ impl EncryptionProvider {
     }
 
     fn unwrap_dek(&self, encrypted_dek: &[u8], iv: &[u8]) -> Result<Vec<u8>, EncryptionError> {
-        if encrypted_dek.len() < TAG_SIZE + IV_SIZE {
+        if encrypted_dek.len() < HMAC_SIZE + DEK_SIZE {
             return Err(EncryptionError::InvalidKey);
         }
 
-        let (ciphertext, expected_tag) = encrypted_dek.split_at(encrypted_dek.len() - TAG_SIZE);
-        let ciphertext = ciphertext.to_vec();
+        let (ciphertext_with_gcm_tag, expected_hmac_bytes) = encrypted_dek.split_at(encrypted_dek.len() - HMAC_SIZE);
+        let ciphertext_with_gcm_tag = ciphertext_with_gcm_tag.to_vec();
 
-        let actual_tag = self.compute_hmac(&ciphertext);
-        let expected_hmac: [u8; HMAC_SIZE] = expected_tag
+        let actual_hmac = self.compute_hmac(&ciphertext_with_gcm_tag);
+        let expected_hmac: [u8; HMAC_SIZE] = expected_hmac_bytes
             .try_into()
             .map_err(|_| EncryptionError::InvalidKey)?;
 
-        if actual_tag.as_slice() != expected_hmac.as_slice() {
+        if actual_hmac.as_slice() != expected_hmac.as_slice() {
             return Err(EncryptionError::AuthFailed);
         }
 
-        self.decrypt_block(&ciphertext, &self.master_key, iv)
+        self.decrypt_block(&ciphertext_with_gcm_tag, &self.master_key, iv)
     }
 
     fn generate_iv(&self) -> Vec<u8> {
@@ -197,10 +197,14 @@ impl DataKey {
     }
 
     pub fn to_base64(&self) -> String {
+        let master_key_id_bytes = self.master_key_id.as_bytes();
+        let mki_len_bytes = (master_key_id_bytes.len() as u32).to_be_bytes();
         let iv_len_bytes = (self.iv.len() as u32).to_be_bytes();
         let ciphertext_len_bytes = (self.ciphertext.len() as u32).to_be_bytes();
 
-        let mut combined = Vec::with_capacity(8 + self.iv.len() + self.ciphertext.len());
+        let mut combined = Vec::with_capacity(12 + master_key_id_bytes.len() + self.iv.len() + self.ciphertext.len());
+        combined.extend_from_slice(&mki_len_bytes);
+        combined.extend_from_slice(master_key_id_bytes);
         combined.extend_from_slice(&iv_len_bytes);
         combined.extend_from_slice(&self.iv);
         combined.extend_from_slice(&ciphertext_len_bytes);
@@ -214,29 +218,38 @@ impl DataKey {
             .decode(s)
             .map_err(|_| EncryptionError::InvalidKey)?;
 
-        if combined.len() < 8 {
+        if combined.len() < 4 {
             return Err(EncryptionError::InvalidKey);
         }
 
-        let iv_len = u32::from_be_bytes(combined[0..4].try_into().unwrap()) as usize;
-        if combined.len() < 8 + iv_len {
+        let mki_len = u32::from_be_bytes(combined[0..4].try_into().unwrap()) as usize;
+        if combined.len() < 4 + mki_len + 8 {
+            return Err(EncryptionError::InvalidKey);
+        }
+
+        let master_key_id = String::from_utf8(combined[4..4 + mki_len].to_vec())
+            .map_err(|_| EncryptionError::InvalidKey)?;
+        let rest = &combined[4 + mki_len..];
+
+        let iv_len = u32::from_be_bytes(rest[0..4].try_into().unwrap()) as usize;
+        if rest.len() < 8 + iv_len {
             return Err(EncryptionError::InvalidKey);
         }
 
         let ciphertext_len =
-            u32::from_be_bytes(combined[4 + iv_len..8 + iv_len].try_into().unwrap()) as usize;
+            u32::from_be_bytes(rest[4 + iv_len..8 + iv_len].try_into().unwrap()) as usize;
 
-        if combined.len() != 8 + iv_len + ciphertext_len {
+        if rest.len() != 8 + iv_len + ciphertext_len {
             return Err(EncryptionError::InvalidKey);
         }
 
-        let iv = combined[4..4 + iv_len].to_vec();
-        let ciphertext = combined[8 + iv_len..].to_vec();
+        let iv = rest[4..4 + iv_len].to_vec();
+        let ciphertext = rest[8 + iv_len..].to_vec();
 
         Ok(DataKey {
             ciphertext,
             iv,
-            master_key_id: "local".to_string(),
+            master_key_id,
         })
     }
 }
@@ -300,8 +313,8 @@ mod tests {
         assert_eq!(restored.master_key_id, original.master_key_id);
     }
 
-    #[test]
-    fn test_tampered_data_detection() {
+    #[tokio::test]
+    async fn test_tampered_data_detection() {
         let config = EncryptionConfig {
             master_key: hex::encode(vec![0u8; 32]),
             algorithm: None,
@@ -313,7 +326,7 @@ mod tests {
         let mut tampered = dek.ciphertext.clone();
         tampered[0] ^= 0xff;
 
-        let result = provider.decrypt_dek(&tampered, &dek.iv);
+        let result = provider.decrypt_dek(&tampered, &dek.iv).await;
         assert!(result.is_err());
     }
 }

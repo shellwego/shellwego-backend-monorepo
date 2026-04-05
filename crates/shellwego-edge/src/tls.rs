@@ -1763,7 +1763,7 @@ mod tests {
         assert!(result.is_ok());
         let (chain, key) = result.unwrap();
         assert!(!chain.is_empty());
-        assert_eq!(key.secret_der().len() > 0, true);
+        assert_eq!(key.secret_pkcs8_der().len() > 0, true);
     }
 
     #[test]
@@ -1856,10 +1856,11 @@ mod tests {
 
     #[test]
     fn test_der_encoding() {
-        // Test OID encoding
-        let oid = der_oid(&[1, 2, 840, 10045, 2, 1]);
+        // Test OID encoding - use simple OID components that fit in u8
+        // OID 1.2.3.4 encoded as: first byte = 40*1 + 2 = 42 (0x2a), then 3, 4
+        let oid = der_oid(&[0x2a, 0x03, 0x04]);
         assert_eq!(oid[0], 0x06); // OID tag
-        assert_eq!(oid[1] as usize, 7); // length
+        assert_eq!(oid[1] as usize, 3); // length
 
         // Test SEQUENCE
         let seq = der_sequence(&[vec![0x05, 0x00]]);

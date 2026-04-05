@@ -23,7 +23,7 @@ fn default_os() -> String {
 ///
 /// The configuration blob contains metadata about the image and
 /// the runtime configuration for containers created from it.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(JsonSchema, ToSchema))]
 pub struct ImageConfig {
     /// ISO 8601 timestamp when image was created
@@ -55,19 +55,31 @@ pub struct ImageConfig {
     pub history: Vec<HistoryEntry>,
 }
 
+impl Default for ImageConfig {
+    fn default() -> Self {
+        Self {
+            created: None,
+            author: None,
+            architecture: default_architecture(),
+            os: default_os(),
+            config: ContainerConfig::default(),
+            rootfs: None,
+            history: Vec::new(),
+        }
+    }
+}
+
 impl ImageConfig {
     /// Create a new image config
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Create with architecture and OS
-    pub fn with_platform(architecture: impl Into<String>, os: impl Into<String>) -> Self {
-        Self {
-            architecture: architecture.into(),
-            os: os.into(),
-            ..Self::default()
-        }
+    /// Set architecture and OS (builder pattern)
+    pub fn with_platform(mut self, architecture: impl Into<String>, os: impl Into<String>) -> Self {
+        self.architecture = architecture.into();
+        self.os = os.into();
+        self
     }
 
     /// Set environment variables

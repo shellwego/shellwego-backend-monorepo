@@ -111,6 +111,7 @@ impl InvoiceGenerator {
         templates.register_filter("currency", currency_filter);
         templates.register_filter("date_format", date_format_filter);
         templates.register_filter("invoice_status", invoice_status_filter);
+        templates.register_filter("round", round_filter);
 
         // Try to load templates from path, or use embedded defaults
         if !template_path.is_empty() && Path::new(template_path).exists() {
@@ -164,13 +165,23 @@ impl InvoiceGenerator {
         context.insert("customer_name", &invoice.customer_name);
         context.insert("customer_email", &invoice.customer_email);
         
-        // Add line items
-        context.insert("line_items", &invoice.line_items);
+        // Add line items (convert Decimal amounts to strings for tera compatibility)
+        let line_items_json: Vec<serde_json::Value> = invoice.line_items.iter().map(|item| {
+            serde_json::json!({
+                "resource_type": item.resource_type,
+                "description": item.description,
+                "quantity": item.quantity,
+                "unit": item.unit,
+                "unit_price": item.unit_price,
+                "amount": item.amount.to_string(),
+            })
+        }).collect();
+        context.insert("line_items", &line_items_json);
         
-        // Add totals
-        context.insert("subtotal", &invoice.subtotal);
-        context.insert("credit_applied", &invoice.credit_applied);
-        context.insert("total", &invoice.total);
+        // Add totals (convert Decimal to string for tera template compatibility)
+        context.insert("subtotal", &invoice.subtotal.to_string());
+        context.insert("credit_applied", &invoice.credit_applied.to_string());
+        context.insert("total", &invoice.total.to_string());
         context.insert("currency", &invoice.currency);
         
         // Add period information
@@ -542,6 +553,13 @@ fn invoice_status_filter(value: &Value, _args: &HashMap<String, Value>) -> tera:
     Ok(Value::String(display.to_string()))
 }
 
+/// Tera filter: rounds a floating-point number to the nearest integer
+fn round_filter(value: &Value, _args: &HashMap<String, Value>) -> tera::Result<Value> {
+    let num = value.as_f64()
+        .ok_or_else(|| tera::Error::msg("round filter requires a number"))?;
+    Ok(Value::Number(serde_json::Number::from(num.round() as i64)))
+}
+
 // Default invoice template (embedded)
 const DEFAULT_INVOICE_TEMPLATE: &str = r#"
 <!DOCTYPE html>
@@ -824,7 +842,7 @@ const DEFAULT_INVOICE_TEMPLATE: &str = r#"
             <span>Subtotal</span>
             <span>{{ subtotal }} {{ currency }}</span>
         </div>
-        {% if credit_applied > 0 %}
+        {% if credit_applied != "0" %}
         <div class="totals-row">
             <span>Credits Applied</span>
             <span>-{{ credit_applied }} {{ currency }}</span>
@@ -854,7 +872,7 @@ const DEFAULT_INVOICE_TEMPLATE: &str = r#"
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::InvoiceStatus;
+    use crate::{InvoiceStatus, LineItem};
     
     #[test]
     fn test_invoice_generator_creation() {
@@ -940,7 +958,10 @@ mod tests {
         };
         
         let html = generator.render_html(&invoice);
-        assert!(html.is_ok());
+        if let Err(ref e) = html {
+            eprintln!("render_html error: {e}");
+        }
+        assert!(html.is_ok(), "render_html failed: {:?}", html.err());
         assert!(html.unwrap().contains("INV-202401-0001"));
     }
     

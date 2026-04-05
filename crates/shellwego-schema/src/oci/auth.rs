@@ -286,10 +286,13 @@ impl OciConfig {
 
     /// Get the registry URL (with protocol)
     pub fn registry_url(&self) -> String {
-        if self.registry.contains(':') && !self.registry.contains('.') {
+        if self.insecure {
+            format!("http://{}", self.registry)
+        } else if self.registry.starts_with(':') {
+            // Bare port, e.g. ":5000" → "https://:5000:443"
             format!("https://{}:443", self.registry)
         } else {
-            format!("{}://{}", if self.insecure { "http" } else { "https" }, self.registry)
+            format!("https://{}", self.registry)
         }
     }
 

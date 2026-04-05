@@ -1093,10 +1093,10 @@ mod tests {
 
     #[test]
     fn test_hop_by_hop_headers() {
-        assert!(is_hop_by_hop_header(&"connection".parse().unwrap()));
-        assert!(is_hop_by_hop_header(&"transfer-encoding".parse().unwrap()));
-        assert!(!is_hop_by_hop_header(&"content-type".parse().unwrap()));
-        assert!(!is_hop_by_hop_header(&"authorization".parse().unwrap()));
+        assert!(is_hop_by_hop_header("connection"));
+        assert!(is_hop_by_hop_header("transfer-encoding"));
+        assert!(!is_hop_by_hop_header("content-type"));
+        assert!(!is_hop_by_hop_header("authorization"));
     }
 
     #[test]

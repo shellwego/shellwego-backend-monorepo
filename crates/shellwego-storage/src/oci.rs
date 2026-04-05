@@ -310,12 +310,22 @@ impl OciClient {
     }
 
     fn parse_reference(&self, image_ref: &str) -> Result<(String, String), OciError> {
-        let mut parts: Vec<&str> = image_ref.splitn(2, ':').collect();
+        // Strip registry prefix if present
+        let (stripped_ref, had_registry) = if let Some(rest) = image_ref.strip_prefix(&self.config.registry) {
+            (rest.strip_prefix('/').unwrap_or(rest), true)
+        } else {
+            (image_ref, false)
+        };
+
+        let mut parts: Vec<&str> = stripped_ref.splitn(2, ':').collect();
 
         if parts.len() == 2 && !parts[1].contains('/') {
             let tag = parts.pop().unwrap();
             let name = parts.pop().unwrap();
-            let repository = if name.contains('/') {
+            let repository = if had_registry && name.contains('/') {
+                // Already stripped registry, use as-is
+                name.to_string()
+            } else if name.contains('/') {
                 name.to_string()
             } else {
                 format!("library/{}", name)
@@ -331,7 +341,9 @@ impl OciClient {
 
         let name = parts[0];
 
-        let repository = if name.contains('/') {
+        let repository = if had_registry && name.contains('/') {
+            name.to_string()
+        } else if name.contains('/') {
             name.to_string()
         } else {
             format!("library/{}", name)

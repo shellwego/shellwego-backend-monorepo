@@ -56,6 +56,9 @@ rand = "0.8"
 # Base64 for KMS
 base64 = "0.21"
 
+# Database
+sqlx = { workspace = true, features = ["any"] }
+
 # Authentication
 jsonwebtoken = "9"
 argon2 = "0.5"
@@ -63,6 +66,7 @@ argon2 = "0.5"
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }
 http-body-util = "0.1"
+sqlx = { workspace = true, features = ["any"] }
 
 [lints]
 workspace = true

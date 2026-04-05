@@ -435,6 +435,8 @@ impl WebhookRouter {
     fn extract_repo_key(&self, url: &str) -> String {
         // Extract owner/repo from various URL formats
         let url = url.trim_end_matches(".git");
+        // Normalize SSH URL separators (git@host:user/repo -> git@host/user/repo)
+        let url = url.replace(':', "/");
         
         if let Some(pos) = url.rfind('/') {
             if let Some(prev_pos) = url[..pos].rfind('/') {

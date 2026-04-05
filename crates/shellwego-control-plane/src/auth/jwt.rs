@@ -51,6 +51,8 @@ pub struct RefreshClaims {
     pub exp: i64,
     /// Issuer
     pub iss: String,
+    /// Audience
+    pub aud: String,
     /// JWT ID
     pub jti: Option<String>,
     /// Token type
@@ -105,6 +107,7 @@ pub fn create_refresh_token(
         iat: now.timestamp(),
         exp,
         iss: config.issuer.clone(),
+        aud: "shellwego-api".to_string(),
         jti: Some(Uuid::new_v4().to_string()),
         token_type: "refresh".to_string(),
     };
@@ -126,6 +129,7 @@ pub fn validate_token(
 ) -> Result<AccessClaims, AuthError> {
     let key = DecodingKey::from_secret(config.secret.as_bytes());
     let mut validation = Validation::default();
+    validation.leeway = 0;
     validation.set_issuer(&[&config.issuer]);
     validation.set_audience(&["shellwego-api"]);
 
@@ -143,13 +147,47 @@ pub fn validate_token(
 
             Ok(claims)
         }
-        Err(e) => match e.kind() {
-            jsonwebtoken::errors::ErrorKind::ExpiredSignature => Err(AuthError::TokenExpired),
-            _ => Err(AuthError::InvalidToken(format!(
-                "Invalid token: {}",
-                e
-            ))),
-        },
+        Err(e) => {
+            // If access token decode failed but allow_refresh is true,
+            // try decoding as RefreshClaims (which has fewer fields)
+            if allow_refresh {
+                match decode::<RefreshClaims>(token_str, &key, &validation) {
+                    Ok(data) => {
+                        let rc = data.claims;
+                        Ok(AccessClaims {
+                            sub: rc.sub,
+                            username: rc.username,
+                            iat: rc.iat,
+                            exp: rc.exp,
+                            iss: rc.iss,
+                            aud: rc.aud,
+                            jti: rc.jti,
+                            role: String::new(),
+                            permissions: Vec::new(),
+                            org_id: None,
+                            token_type: rc.token_type,
+                        })
+                    }
+                    Err(refresh_err) => match refresh_err.kind() {
+                        jsonwebtoken::errors::ErrorKind::ExpiredSignature => {
+                            Err(AuthError::TokenExpired)
+                        }
+                        _ => Err(AuthError::InvalidToken(format!(
+                            "Invalid token: {}",
+                            e
+                        ))),
+                    },
+                }
+            } else {
+                match e.kind() {
+                    jsonwebtoken::errors::ErrorKind::ExpiredSignature => Err(AuthError::TokenExpired),
+                    _ => Err(AuthError::InvalidToken(format!(
+                        "Invalid token: {}",
+                        e
+                    ))),
+                }
+            }
+        }
     }
 }
 

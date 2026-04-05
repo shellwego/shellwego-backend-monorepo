@@ -61,7 +61,7 @@ rand = "0.8"
 base64 = "0.21"
 
 # Database
-sqlx = { workspace = true, features = ["any"] }
+sqlx = { workspace = true, features = ["any", "runtime-tokio-rustls", "sqlite"] }
 
 # Authentication
 jsonwebtoken = "9"
@@ -71,7 +71,7 @@ password-hash = "0.5"
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }
 http-body-util = "0.1"
-sqlx = { workspace = true, features = ["any"] }
+sqlx = { workspace = true, features = ["any", "runtime-tokio-rustls", "sqlite"] }
 
 [lints]
 workspace = true

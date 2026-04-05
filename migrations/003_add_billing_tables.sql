@@ -1,101 +1,101 @@
 -- 003_add_billing_tables.sql
 -- Billing tables for Phase 5: real payment processing and database persistence.
--- Uses PostgreSQL syntax with TIMESTAMPTZ, JSONB, and proper constraints.
+-- Compatible with BOTH SQLite and PostgreSQL (uses TEXT/INTEGER/REAL types).
 
 -- ============================================================
 -- billing_customers: persistent customer records
 -- ============================================================
 CREATE TABLE IF NOT EXISTS billing_customers (
-    id              VARCHAR(255) PRIMARY KEY,
-    name            VARCHAR(255) NOT NULL,
-    email           VARCHAR(512) NOT NULL,
-    address_json    JSONB DEFAULT NULL,
-    tier            VARCHAR(64)  NOT NULL DEFAULT 'Free',
-    credits         BIGINT       NOT NULL DEFAULT 0,
-    currency        VARCHAR(3)   NOT NULL DEFAULT 'USD',
-    tax_id          VARCHAR(128) DEFAULT NULL,
-    status          VARCHAR(32)  NOT NULL DEFAULT 'Active',
-    payment_methods_json JSONB DEFAULT '[]'::jsonb,
-    created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    id              TEXT PRIMARY KEY,
+    name            TEXT NOT NULL,
+    email           TEXT NOT NULL,
+    address_json    TEXT DEFAULT NULL,
+    tier            TEXT NOT NULL DEFAULT 'Free',
+    credits         INTEGER NOT NULL DEFAULT 0,
+    currency        TEXT NOT NULL DEFAULT 'USD',
+    tax_id          TEXT DEFAULT NULL,
+    status          TEXT NOT NULL DEFAULT 'Active',
+    payment_methods_json TEXT DEFAULT '[]',
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- ============================================================
--- invoices: invoice records with line items stored as JSONB
+-- invoices: invoice records with line items stored as JSON
 -- ============================================================
 CREATE TABLE IF NOT EXISTS invoices (
-    id                  VARCHAR(255) PRIMARY KEY,
-    invoice_number      VARCHAR(64)  NOT NULL UNIQUE,
-    customer_id         VARCHAR(255) NOT NULL,
-    customer_name       VARCHAR(512) NOT NULL,
-    customer_email      VARCHAR(512) NOT NULL,
-    period_start        TIMESTAMPTZ  NOT NULL,
-    period_end          TIMESTAMPTZ  NOT NULL,
-    line_items_json     JSONB         NOT NULL DEFAULT '[]'::jsonb,
-    subtotal            NUMERIC(20, 6) NOT NULL DEFAULT 0,
-    credit_applied      NUMERIC(20, 6) NOT NULL DEFAULT 0,
-    total               NUMERIC(20, 6) NOT NULL DEFAULT 0,
-    currency            VARCHAR(3)   NOT NULL DEFAULT 'USD',
-    status              VARCHAR(32)  NOT NULL DEFAULT 'Draft',
-    due_date            TIMESTAMPTZ  NOT NULL,
-    created_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    paid_at             TIMESTAMPTZ  DEFAULT NULL,
-    transaction_id      VARCHAR(255) DEFAULT NULL
+    id                  TEXT PRIMARY KEY,
+    invoice_number      TEXT NOT NULL UNIQUE,
+    customer_id         TEXT NOT NULL,
+    customer_name       TEXT NOT NULL,
+    customer_email      TEXT NOT NULL,
+    period_start        TEXT NOT NULL,
+    period_end          TEXT NOT NULL,
+    line_items_json     TEXT NOT NULL DEFAULT '[]',
+    subtotal            REAL NOT NULL DEFAULT 0,
+    credit_applied      REAL NOT NULL DEFAULT 0,
+    total               REAL NOT NULL DEFAULT 0,
+    currency            TEXT NOT NULL DEFAULT 'USD',
+    status              TEXT NOT NULL DEFAULT 'Draft',
+    due_date            TEXT NOT NULL,
+    created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    paid_at             TEXT DEFAULT NULL,
+    transaction_id      TEXT DEFAULT NULL
 );
 
 -- ============================================================
 -- payments: payment attempt records with retry tracking
 -- ============================================================
 CREATE TABLE IF NOT EXISTS payments (
-    id                      VARCHAR(255) PRIMARY KEY,
-    invoice_id              VARCHAR(255) DEFAULT NULL,
-    customer_id             VARCHAR(255) NOT NULL,
-    amount_cents            BIGINT       NOT NULL DEFAULT 0,
-    currency                VARCHAR(3)   NOT NULL DEFAULT 'USD',
-    method_type             VARCHAR(64)  NOT NULL DEFAULT 'card',
-    provider                VARCHAR(64)  NOT NULL DEFAULT 'stripe',
-    status                  VARCHAR(32)  NOT NULL DEFAULT 'pending',
-    transaction_id          VARCHAR(255) DEFAULT NULL,
-    provider_response_json  JSONB DEFAULT NULL,
-    retry_count             INTEGER      NOT NULL DEFAULT 0,
-    next_retry_at           TIMESTAMPTZ  DEFAULT NULL,
-    created_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    updated_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    id                      TEXT PRIMARY KEY,
+    invoice_id              TEXT DEFAULT NULL,
+    customer_id             TEXT NOT NULL,
+    amount_cents            INTEGER NOT NULL DEFAULT 0,
+    currency                TEXT NOT NULL DEFAULT 'USD',
+    method_type             TEXT NOT NULL DEFAULT 'card',
+    provider                TEXT NOT NULL DEFAULT 'stripe',
+    status                  TEXT NOT NULL DEFAULT 'pending',
+    transaction_id          TEXT DEFAULT NULL,
+    provider_response_json  TEXT DEFAULT NULL,
+    retry_count             INTEGER NOT NULL DEFAULT 0,
+    next_retry_at           TEXT DEFAULT NULL,
+    created_at              TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at              TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- ============================================================
 -- pricing_plans: database-backed pricing configuration
 -- ============================================================
 CREATE TABLE IF NOT EXISTS pricing_plans (
-    id              VARCHAR(255) PRIMARY KEY,
-    name            VARCHAR(255) NOT NULL,
-    resource_type   VARCHAR(128) NOT NULL,
-    price_cents     BIGINT       NOT NULL DEFAULT 0,
-    currency        VARCHAR(3)   NOT NULL DEFAULT 'USD',
+    id              TEXT PRIMARY KEY,
+    name            TEXT NOT NULL,
+    resource_type   TEXT NOT NULL,
+    price_cents     INTEGER NOT NULL DEFAULT 0,
+    currency        TEXT NOT NULL DEFAULT 'USD',
     description     TEXT DEFAULT '',
-    tier_multiplier DOUBLE PRECISION DEFAULT 1.0,
-    is_active       BOOLEAN      NOT NULL DEFAULT TRUE,
-    created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    tier_multiplier REAL DEFAULT 1.0,
+    is_active       INTEGER NOT NULL DEFAULT 1,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- ============================================================
 -- subscriptions: customer subscription records
 -- ============================================================
 CREATE TABLE IF NOT EXISTS subscriptions (
-    id                      VARCHAR(255) PRIMARY KEY,
-    customer_id             VARCHAR(255) NOT NULL,
-    plan_id                 VARCHAR(255) DEFAULT NULL,
-    status                  VARCHAR(32)  NOT NULL DEFAULT 'active',
-    current_period_start    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    current_period_end      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    provider_subscription_id VARCHAR(255) DEFAULT NULL,
-    created_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    updated_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    id                      TEXT PRIMARY KEY,
+    customer_id             TEXT NOT NULL,
+    plan_id                 TEXT DEFAULT NULL,
+    status                  TEXT NOT NULL DEFAULT 'active',
+    current_period_start    TEXT NOT NULL DEFAULT (datetime('now')),
+    current_period_end      TEXT NOT NULL DEFAULT (datetime('now')),
+    provider_subscription_id TEXT DEFAULT NULL,
+    created_at              TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at              TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- ============================================================
--- Indexes
+-- Indexes (plain indexes for SQLite compatibility)
 -- ============================================================
 CREATE INDEX IF NOT EXISTS idx_billing_customers_email    ON billing_customers(email);
 CREATE INDEX IF NOT EXISTS idx_billing_customers_status   ON billing_customers(status);
@@ -109,9 +109,6 @@ CREATE INDEX IF NOT EXISTS idx_invoices_due_date          ON invoices(due_date);
 CREATE INDEX IF NOT EXISTS idx_payments_invoice_id        ON payments(invoice_id);
 CREATE INDEX IF NOT EXISTS idx_payments_customer_id       ON payments(customer_id);
 CREATE INDEX IF NOT EXISTS idx_payments_status            ON payments(status);
-CREATE INDEX IF NOT EXISTS idx_payments_next_retry_at     ON payments(next_retry_at) WHERE status = 'failed' AND next_retry_at IS NOT NULL;
-
-CREATE INDEX IF NOT EXISTS idx_pricing_plans_resource_type ON pricing_plans(resource_type) WHERE is_active = TRUE;
 
 CREATE INDEX IF NOT EXISTS idx_subscriptions_customer_id   ON subscriptions(customer_id);
 CREATE INDEX IF NOT EXISTS idx_subscriptions_status        ON subscriptions(status);

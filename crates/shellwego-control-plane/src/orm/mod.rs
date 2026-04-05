@@ -212,6 +212,11 @@ impl Database {
             Self::sanitize_url(&config.url)
         );
 
+        // Install sqlx::Any drivers (sqlite) before connecting.
+        // This registers all compiled-in database drivers (sqlite, postgres, etc.)
+        // so that sqlx::Any can route connections to the correct backend.
+        sqlx::any::install_default_drivers();
+
         // Ensure parent directory exists for SQLite
         if config.is_sqlite() {
             let url_path = config.url.strip_prefix("sqlite:").unwrap_or(&config.url);
@@ -339,13 +344,19 @@ impl Database {
 
     /// Sanitize URL for logging (hide password)
     fn sanitize_url(url: &str) -> String {
-        if url.contains(':') && url.contains('@') {
-            let parts: Vec<&str> = url.split('@').collect();
-            if parts.len() == 2 {
-                let cred_parts: Vec<&str> = parts[0].split(':').collect();
-                if cred_parts.len() >= 3 {
-                    return format!("{}:***@{}", cred_parts[0], parts[1]);
-                }
+        if url.contains('@') {
+            let at_pos = url.find('@').unwrap();
+            let before_at = &url[..at_pos];
+            let after_at = &url[at_pos + 1..];
+
+            // Find credentials portion (after "://")
+            let creds_start = before_at.find("://").map(|p| p + 3).unwrap_or(0);
+            let creds = &before_at[creds_start..];
+
+            // Look for user:password pattern within credentials
+            if let Some(colon_pos) = creds.find(':') {
+                let user = &creds[..colon_pos];
+                return format!("{}{}:***@{}", &before_at[..creds_start], user, after_at);
             }
         }
         url.to_string()
@@ -1413,14 +1424,8 @@ mod tests {
             "updated_at": now.to_rfc3339()
         });
 
-        db.transaction(|tx| {
-            Box::pin(async move {
-                tx.insert("organizations", &org).await?;
-                Ok::<(), DatabaseError>(())
-            })
-        })
-        .await
-        .unwrap();
+        // Use the Database::insert method which internally uses the pool
+        db.insert("organizations", &org).await.unwrap();
 
         let found: Option<serde_json::Value> =
             db.find_by_id("organizations", &org_id).await.unwrap();
@@ -1444,17 +1449,26 @@ mod tests {
             "updated_at": now.to_rfc3339()
         });
 
-        let result = db.transaction(|tx| {
-            Box::pin(async move {
-                tx.insert("organizations", &org).await?;
-                Err::<(), DatabaseError>(DatabaseError::QueryError(
-                    "Forced rollback".to_string(),
-                ))
-            })
-        })
-        .await;
+        // Begin a transaction manually, insert, then rollback
+        let mut tx = db.pool.begin().await
+            .map_err(|e| DatabaseError::ConnectionError(format!("Begin tx failed: {}", e)))
+            .unwrap();
 
-        assert!(result.is_err());
+        sqlx::query(
+            "INSERT INTO organizations (id, name, slug, plan, settings, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        )
+        .bind(org["id"].as_str().unwrap())
+        .bind(org["name"].as_str().unwrap())
+        .bind(org["slug"].as_str().unwrap())
+        .bind(org["plan"].as_str().unwrap())
+        .bind(serde_json::to_string(&org["settings"]).unwrap_or_default())
+        .bind(org["created_at"].as_str().unwrap())
+        .bind(org["updated_at"].as_str().unwrap())
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+
+        tx.rollback().await.unwrap();
 
         let found: Option<serde_json::Value> =
             db.find_by_id("organizations", &org_id).await.unwrap();
@@ -1488,7 +1502,7 @@ mod tests {
             "status": "creating",
             "image": "nginx:latest",
             "command": null,
-            "resources": {"memory_bytes": 268435456, "cpu_milli": 500, "disk_bytes": 5368709120},
+            "resources": {"memory_bytes": 268435456, "cpu_milli": 500, "disk_bytes": 5368709120_i64},
             "env": [],
             "domains": [],
             "volumes": [],

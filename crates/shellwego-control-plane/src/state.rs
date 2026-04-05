@@ -12,6 +12,7 @@ use crate::services::{BackupService, CertificateService, HealthCheckService, Rat
 use crate::operators::{OperatorManager, OperatorConfig};
 use crate::git::builder::{BuildQueue, BuildQueueConfig};
 use crate::kms::{KmsClient, KmsConfig};
+use crate::auth::AuthService;
 
 // Re-export AgentConnection from schema for convenience
 pub use shellwego_schema::network::AgentConnection;
@@ -38,6 +39,8 @@ pub struct AppState {
     pub build_queue: Arc<BuildQueue>,
     /// KMS client
     pub kms_client: Arc<KmsClient>,
+    /// Authentication service
+    pub auth_service: Arc<AuthService>,
 }
 
 impl AppState {
@@ -69,6 +72,9 @@ impl AppState {
         let kms_config = KmsConfig::default();
         let kms_client = Arc::new(KmsClient::from_config(kms_config).await?);
         
+        // Initialize authentication service
+        let auth_service = Arc::new(AuthService::new(config.jwt.clone()));
+        
         info!("All services initialized successfully");
 
         Ok(Arc::new(Self {
@@ -82,6 +88,7 @@ impl AppState {
             operator_manager,
             build_queue,
             kms_client,
+            auth_service,
         }))
     }
     

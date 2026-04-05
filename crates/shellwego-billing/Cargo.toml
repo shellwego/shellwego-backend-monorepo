@@ -20,6 +20,7 @@ sqlx = { workspace = true, features = ["postgres", "runtime-tokio-rustls"] }
 
 # Payment providers
 async-stripe = { version = "0.34", features = ["runtime-tokio-hyper"], optional = true }
+reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features = false }
 
 # PDF generation
 headless_chrome = { version = "1.0", optional = true }
@@ -44,6 +45,12 @@ chrono = { workspace = true, features = ["serde"] }
 
 # UUID for identifiers
 uuid = { workspace = true, features = ["v4", "serde"] }
+
+# Webhook signature verification
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+base64 = "0.21"
 
 # Concurrency
 dashmap = { workspace = true }

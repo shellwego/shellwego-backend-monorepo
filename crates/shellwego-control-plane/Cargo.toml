@@ -8,6 +8,10 @@ repository.workspace = true
 rust-version.workspace = true
 description = "Control plane: REST API, scheduler, and cluster state management"
 
+[lib]
+name = "shellwego_control_plane"
+path = "src/lib.rs"
+
 [[bin]]
 name = "shellwego-control-plane"
 path = "src/main.rs"
@@ -56,9 +60,17 @@ rand = "0.8"
 # Base64 for KMS
 base64 = "0.21"
 
+# Database
+sqlx = { workspace = true, features = ["any"] }
+
+# Authentication
+jsonwebtoken = "9"
+argon2 = "0.5"
+
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }
 http-body-util = "0.1"
+sqlx = { workspace = true, features = ["any"] }
 
 [lints]
 workspace = true

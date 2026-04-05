@@ -1,0 +1,80 @@
+[package]
+name = "shellwego-integration-tests"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Integration and E2E tests for the ShellWeGo platform"
+
+# This is a test-only crate — it is never published.
+publish = false
+
+[features]
+default = []
+# Gate all integration tests behind this feature so `cargo test` alone
+# does not attempt to spin up the full Axum application.
+integration-tests = []
+
+[[test]]
+name = "test_auth_flow"
+required-features = ["integration-tests"]
+
+[[test]]
+name = "test_crud_apps"
+required-features = ["integration-tests"]
+
+[[test]]
+name = "test_crud_nodes"
+required-features = ["integration-tests"]
+
+[[test]]
+name = "test_secrets_flow"
+required-features = ["integration-tests"]
+
+[[test]]
+name = "test_billing_flow"
+required-features = ["integration-tests"]
+
+[[test]]
+name = "test_deploy_flow"
+required-features = ["integration-tests"]
+
+[dependencies]
+# Workspace crates
+shellwego-control-plane = { path = "../shellwego-control-plane" }
+shellwego-schema = { path = "../shellwego-schema" }
+shellwego-billing = { path = "../shellwego-billing" }
+
+# Async runtime
+tokio = { workspace = true }
+
+# Axum / Tower — for tower::ServiceExt in tests
+axum = { workspace = true }
+tower = { workspace = true, features = ["util"] }
+http-body-util = { workspace = true }
+hyper = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Data types
+uuid = { workspace = true }
+chrono = { workspace = true }
+
+# Billing
+rust_decimal = "1.33"
+
+# Base64 (for mock vault)
+base64 = "0.22"
+
+# Tracing (suppress warnings in test output)
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+# Nothing beyond what's in [dependencies]; the crate is test-only.
+
+[lints]
+workspace = true

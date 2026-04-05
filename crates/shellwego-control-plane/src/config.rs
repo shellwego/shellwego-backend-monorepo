@@ -86,7 +86,7 @@ pub struct JwtConfig {
 }
 
 fn default_jwt_issuer() -> String { "shellwego".to_string() }
-fn default_jwt_expiry() -> u64 { 3600 } // 1 hour
+fn default_jwt_expiry() -> u64 { 900 } // 15 minutes
 fn default_refresh_expiry() -> u64 { 604800 } // 7 days
 
 /// Federation configuration
@@ -285,7 +285,7 @@ mod tests {
         let config = Config::default();
         assert_eq!(config.bind_addr, "0.0.0.0:8080");
         assert_eq!(config.database.max_connections, 10);
-        assert_eq!(config.jwt.expiry_secs, 3600);
+        assert_eq!(config.jwt.expiry_secs, 900);
     }
 
     #[test]

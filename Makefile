@@ -1,81 +1,85 @@
-.PHONY: all build test lint fmt clean dev
+.PHONY: all build test lint fmt clean dev test-integration test-e2e
 
 # Default target
 all: build
 
 # Build all crates
 build:
-	cargo build --release
+        cargo build --release
 
 # Build with all features
 build-all:
-	cargo build --release --all-features
+        cargo build --release --all-features
 
 # Run tests
 test:
-	cargo test --all
+        cargo test --all
 
 # Run integration tests (requires KVM)
 test-integration:
-	cargo test --features integration-tests -- --test-threads=1
+        cargo test -p shellwego-integration-tests --features integration-tests -- --test-threads=1
+
+# Run E2E test (requires running control plane)
+test-e2e:
+        bash tests/e2e/deploy_test.sh
 
 # Lint
 lint:
-	cargo clippy --all -- -D warnings
+        cargo clippy --all -- -D warnings
 
 # Format
 fmt:
-	cargo fmt --all
+        cargo fmt --all
 
 # Clean
 clean:
-	cargo clean
+        cargo clean
 
 # Development environment
 dev:
-	docker-compose up -d
+        docker-compose up -d
 
 # Stop dev environment
 dev-stop:
-	docker-compose down
+        docker-compose down
 
 # Run control plane locally
 run-control-plane:
-	cargo run --bin shellwego-control-plane
+        cargo run --bin shellwego-control-plane
 
 # Run agent locally (requires root for KVM)
 run-agent:
-	sudo cargo run --bin shellwego-agent
+        sudo cargo run --bin shellwego-agent
 
 # Generate documentation
 docs:
-	cargo doc --all --no-deps --open
+        cargo doc --all --no-deps --open
 
 # Install CLI locally
 install-cli:
-	cargo install --path crates/shellwego-cli
+        cargo install --path crates/shellwego-cli
 
 # Database migrations
 migrate:
-	sqlx migrate run --source crates/shellwego-control-plane/migrations
+        sqlx migrate run --source crates/shellwego-control-plane/migrations
 
 # Create new migration
 migrate-new:
-	sqlx migrate add -s crates/shellwego-control-plane/migrations $(name)
+        sqlx migrate add -s crates/shellwego-control-plane/migrations $(name)
 
 # Security audit
 audit:
-	cargo audit
+        cargo audit
 
 # Update dependencies
 update:
-	cargo update
+        cargo update
 
 # Check for outdated dependencies
 outdated:
-	cargo outdated
+        cargo outdated
 
 # Release build for all targets
 release:
-	cargo build --release --target x86_64-unknown-linux-musl
-	cargo build --release --target aarch64-unknown-linux-musl
+        cargo build --release --target x86_64-unknown-linux-musl
+        cargo build --release --target aarch64-unknown-linux-musl

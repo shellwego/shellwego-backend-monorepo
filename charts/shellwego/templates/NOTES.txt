@@ -1,0 +1,63 @@
+Thank you for installing {{ .Chart.Name }}!
+
+Your ShellWeGo Sovereign Cloud Platform is being deployed.
+
+== Accessing the Control Plane ==
+
+{{- if .Values.ingress.enabled }}
+
+1. Get the ingress IP/hostname:
+   export INGRESS_HOST=$(kubectl get ingress {{ include "shellwego.fullname" . }} \
+     -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || \
+     kubectl get ingress {{ include "shellwego.fullname" . }} \
+     -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
+
+2. Access the API at:
+   http{{ if .Values.ingress.tls }}s{{ end }}://{{ (index .Values.ingress.hosts 0).host }}:{{ .Values.service.port }}
+
+{{- if .Values.ingress.tls }}
+   TLS is enabled. Certificates are managed via:
+   {{- range .Values.ingress.tls }}
+   - Secret: {{ .secretName }}
+   {{- end }}
+{{- end }}
+
+{{- else }}
+
+1. Forward the service port locally:
+   kubectl port-forward svc/{{ include "shellwego.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }} &
+
+2. Access the API at:
+   http://localhost:{{ .Values.service.port }}
+
+{{- end }}
+
+== Platform Configuration ==
+
+  Domain:    {{ .Values.config.domain }}
+  Region:    {{ .Values.config.defaultRegion }}
+  Log Level: {{ .Values.config.logLevel }}
+
+{{- if .Values.postgresql.enabled }}
+
+== PostgreSQL ==
+
+The embedded PostgreSQL instance is running. To connect:
+
+  kubectl port-forward svc/{{ .Release.Name }}-postgresql 5432:5432 &
+
+  psql -h localhost -U {{ index .Values.postgresql.auth "username" }} -d {{ index .Values.postgresql.auth "database" }}
+
+{{- end }}
+
+== Next Steps ==
+
+  1. Install the ShellWeGo CLI:
+     cargo install --path crates/shellwego-cli
+
+  2. Configure the CLI to point to your control plane:
+     shellwego config set api-url http://localhost:{{ .Values.service.port }}
+
+  3. Create your admin account and get started!
+
+Documentation: https://github.com/shellwego/shellwego

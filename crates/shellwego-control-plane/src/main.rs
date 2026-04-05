@@ -1,8 +1,6 @@
-//! ShellWeGo Control Plane
+//! ShellWeGo Control Plane — binary entry-point
 //!
-//! The central orchestration service for the ShellWeGo platform.
-//! Provides REST API, scheduling, cluster state management, and
-//! coordination of worker nodes.
+//! This is a thin wrapper that delegates to the library crate.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -19,6 +17,7 @@ mod git;
 mod kms;
 mod federation;
 mod orm;
+mod auth;
 
 use crate::config::Config;
 use crate::state::AppState;

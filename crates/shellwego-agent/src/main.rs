@@ -21,10 +21,11 @@ async fn main() -> anyhow::Result<()> {
     let metrics = Arc::new(MetricsCollector::new(config.node_id.unwrap_or_default()));
     let vmm = VmmManager::new(&config, metrics.clone()).await?;
 
-    let _wasm_runtime = wasm::WasmRuntime::new(&WasmRuntimeConfig { 
+    let _wasm_runtime = wasm::WasmRuntime::new(&WasmRuntimeConfig {
         max_memory_mb: 512,
         max_compute_units: 1.0,
         max_instances: 100,
+        cache_dir: None,
     }).await?;
     let network = Arc::new(CniNetwork::new("sw0", "10.0.0.0/16").await?);
 

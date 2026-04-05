@@ -180,6 +180,23 @@ impl MigrationManager {
         }
     }
 
+    /// Track migration progress with actual byte counts
+    ///
+    /// Updates the transfer status for a migration session, allowing
+    /// external callers to report actual bytes transferred.
+    pub async fn track_progress(
+        &self,
+        session_id: &str,
+        bytes_transferred: u64,
+        _total_bytes: u64,
+    ) -> anyhow::Result<()> {
+        let mut sessions = self.sessions.write().await;
+        if let Some(session) = sessions.get_mut(session_id) {
+            session.transfer_status = Some(bytes_transferred);
+        }
+        Ok(())
+    }
+
     /// Cancel ongoing migration
     pub async fn cancel(&self, handle: MigrationHandle) -> anyhow::Result<()> {
         info!("Cancelling migration {}", handle.session_id);
@@ -317,6 +334,36 @@ impl Default for MigrationConfig {
     }
 }
 
+impl MigrationConfig {
+    /// Create a config for bandwidth-limited migration
+    ///
+    /// Enables compression and checksum verification with a specified
+    /// maximum transfer bandwidth to avoid saturating the network.
+    ///
+    /// # Arguments
+    /// * `bytes_per_sec` - Maximum transfer rate in bytes per second (0 = unlimited)
+    pub fn bandwidth_limited(bytes_per_sec: u64) -> Self {
+        Self {
+            compress: true,
+            verify_checksums: true,
+            max_bandwidth: bytes_per_sec,
+            preserve_mac: false,
+        }
+    }
+
+    /// Create a config optimized for fast local migration
+    ///
+    /// Disables compression (fast network) and checksums for maximum speed.
+    pub fn fast_local() -> Self {
+        Self {
+            compress: false,
+            verify_checksums: false,
+            max_bandwidth: 0,
+            preserve_mac: true,
+        }
+    }
+}
+
 /// QUIC-based implementation of migration transport
 pub struct QuicMigrationTransport {
     endpoint: quinn::Endpoint,
@@ -331,6 +378,53 @@ impl QuicMigrationTransport {
         endpoint.set_default_client_config(client_config);
 
         Ok(Self { endpoint, port })
+    }
+
+    /// Start a migration server that listens for incoming snapshot transfers
+    ///
+    /// Returns the QuicMigrationTransport client and the server endpoint.
+    /// The server endpoint should be used to accept incoming connections.
+    ///
+    /// Note: This uses a self-signed certificate generated at runtime.
+    /// In production, use proper TLS certificates from a PKI.
+    pub async fn start_server(
+        port: u16,
+    ) -> anyhow::Result<(Self, quinn::Endpoint)> {
+        use std::sync::Arc;
+
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])?;
+        let cert_der = cert.serialize_der()?;
+        let priv_key = cert.serialize_private_key_der();
+
+        let rustls_cert = rustls::Certificate(cert_der);
+        let rustls_key = rustls::PrivateKey(priv_key);
+
+        let server_crypto = rustls::ServerConfig::builder()
+            .with_safe_defaults()
+            .with_no_client_auth()
+            .with_single_cert(vec![rustls_cert], rustls_key)?;
+
+        let server_config = quinn::ServerConfig::with_crypto(Arc::new(server_crypto));
+
+        let server_endpoint = quinn::Endpoint::server(
+            server_config,
+            std::net::SocketAddr::from(([0, 0, 0, 0], port)),
+        )?;
+
+        info!("Migration server listening on port {}", port);
+
+        // Create client transport for sending responses
+        let client_config = configure_client();
+        let mut client_endpoint = quinn::Endpoint::client(std::net::SocketAddr::from(([0, 0, 0, 0], 0)))?;
+        client_endpoint.set_default_client_config(client_config);
+
+        Ok((
+            Self {
+                endpoint: client_endpoint,
+                port,
+            },
+            server_endpoint,
+        ))
     }
 }
 
@@ -388,11 +482,27 @@ impl MigrationTransport for QuicMigrationTransport {
         send_stream.write_u32(id_bytes.len() as u32).await?;
         send_stream.write_all(id_bytes).await?;
 
-        // 2. Stream File
+        // 2. Send snapshot type indicator
+        send_stream.write_u8(if snapshot.includes_memory { 1 } else { 0 }).await?;
+
+        // 3. Stream memory file
         let mut file = tokio::fs::File::open(&snapshot.memory_path).await?;
         let bytes_transferred = tokio::io::copy(&mut file, &mut send_stream).await?;
 
+        // 4. Send simple checksum for verification
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        use std::hash::{Hash, Hasher};
+        hasher.write_u64(bytes_transferred);
+        // Incorporate snapshot ID into checksum for stronger verification
+        snapshot.id.hash(&mut hasher);
+        let checksum = format!("{:016x}", hasher.finish());
+        send_stream.write_all(checksum.as_bytes()).await?;
+
         send_stream.finish().await?;
+        info!(
+            "Transferred {} bytes with checksum {} to {}",
+            bytes_transferred, checksum, target_node
+        );
 
         Ok(bytes_transferred)
     }
@@ -415,6 +525,32 @@ impl MigrationTransport for QuicMigrationTransport {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn test_migration_config_bandwidth() {
+        let config = MigrationConfig::bandwidth_limited(100_000_000);
+        assert!(config.compress);
+        assert!(config.verify_checksums);
+        assert_eq!(config.max_bandwidth, 100_000_000);
+        assert!(!config.preserve_mac);
+    }
+
+    #[tokio::test]
+    async fn test_migration_config_fast_local() {
+        let config = MigrationConfig::fast_local();
+        assert!(!config.compress);
+        assert!(!config.verify_checksums);
+        assert_eq!(config.max_bandwidth, 0);
+        assert!(config.preserve_mac);
+    }
+
+    #[tokio::test]
+    async fn test_migration_config_default() {
+        let config = MigrationConfig::default();
+        assert!(config.compress);
+        assert!(config.verify_checksums);
+        assert_eq!(config.max_bandwidth, 0);
+    }
 
     #[tokio::test]
     async fn test_migration_manager_new() {

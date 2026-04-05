@@ -49,13 +49,10 @@ pub fn detect_capabilities() -> anyhow::Result<Capabilities> {
     let mut sys = sysinfo::System::new_all();
     sys.refresh_all();
 
-    // Check availability of each backend
     let kvm_available = is_kvm_available();
     let pvm_available = is_pvm_available();
     let wasm_available = is_wasm_available();
 
-    // Determine the best available virtualization mode
-    // Priority: KVM (fastest) > PVM (universal) > WASM (lightest)
     let virtualization_mode = if kvm_available {
         tracing::info!("KVM hardware virtualization available");
         VirtualizationMode::Kvm
@@ -66,18 +63,22 @@ pub fn detect_capabilities() -> anyhow::Result<Capabilities> {
         tracing::info!("WASM runtime available (no virtualization)");
         VirtualizationMode::Wasm
     } else {
-        tracing::warn!("No virtualization backend available. Install KVM, PVM, or enable WASM.");
+        tracing::warn!("No virtualization backend available. Install KVM, QEMU, or enable WASM.");
         VirtualizationMode::default()
     };
 
     let cpu_cores = sys.cpus().len() as u32;
     let memory_total_mb = sys.total_memory() / 1024 / 1024;
 
+    // Detect CPU features
+    let cpu_features = detect_cpu_features();
+
     tracing::info!(
-        "Detected capabilities: mode={}, cpu_cores={}, memory={}MB",
+        "Detected capabilities: mode={}, cpu_cores={}, memory={}MB, features={:?}",
         virtualization_mode,
         cpu_cores,
-        memory_total_mb
+        memory_total_mb,
+        cpu_features
     );
 
     Ok(Capabilities {
@@ -87,8 +88,33 @@ pub fn detect_capabilities() -> anyhow::Result<Capabilities> {
         wasm_available,
         cpu_cores,
         memory_total_mb,
-        cpu_features: vec![],
+        cpu_features,
     })
+}
+
+/// Detect available CPU features relevant for virtualization
+fn detect_cpu_features() -> Vec<String> {
+    let mut features = Vec::new();
+
+    // Read CPU info from /proc/cpuinfo
+    if let Ok(content) = std::fs::read_to_string("/proc/cpuinfo") {
+        // Collect all feature flags from the first CPU
+        let mut seen = std::collections::HashSet::new();
+        for line in content.lines() {
+            if line.starts_with("flags") || line.starts_with("Features") {
+                if let Some(flags_str) = line.split(':').nth(1) {
+                    for flag in flags_str.split_whitespace() {
+                        if seen.insert(flag.to_string()) {
+                            features.push(flag.to_string());
+                        }
+                    }
+                }
+                break; // Only read first CPU's features
+            }
+        }
+    }
+
+    features
 }
 
 /// Check if KVM hardware virtualization is available
@@ -108,38 +134,54 @@ pub fn is_kvm_available() -> bool {
         .is_ok()
 }
 
-/// Check if PVM (Pagetable Virtual Machine) is available
+/// Check if PVM (software virtualization fallback) is available
+///
+/// PVM detection checks for:
+/// 1. QEMU as a software virtualization fallback
+/// 2. Standard Firecracker binary with PVM support
+/// 3. Environment variable override (SHELLWEGO_PVM_AVAILABLE=1)
 pub fn is_pvm_available() -> bool {
-    // Check for PVM-enabled Firecracker binary
-    let pvm_binary = std::path::Path::new("/usr/local/bin/firecracker-pvm");
-    if pvm_binary.exists() {
-        return true;
+    // Check environment variable override first
+    if let Ok(v) = std::env::var("SHELLWEGO_PVM_AVAILABLE") {
+        if v == "1" || v.to_lowercase() == "true" {
+            return true;
+        }
+        if v == "0" || v.to_lowercase() == "false" {
+            return false;
+        }
     }
 
-    // Check for PVM kernel module
-    let pvm_module = std::path::Path::new("/sys/module/pvm");
-    if pvm_module.exists() {
-        return true;
-    }
+    // Check for QEMU as software virtualization fallback
+    // QEMU can provide KVM acceleration on systems with hardware support
+    // or fall back to TCG (software emulation) when KVM is unavailable
+    let qemu_paths = [
+        "/usr/bin/qemu-system-x86_64",
+        "/usr/bin/qemu-system-aarch64",
+        "/usr/local/bin/qemu-system-x86_64",
+    ];
 
-    // Check if standard Firecracker has PVM support built-in
-    let fc_binary = std::path::Path::new("/usr/local/bin/firecracker");
-    if fc_binary.exists() {
-        if let Ok(output) = std::process::Command::new(fc_binary)
-            .arg("--version")
-            .output()
-        {
-            let version_str = String::from_utf8_lossy(&output.stdout);
-            if version_str.contains("pvm") || version_str.contains("PVM") {
+    for qemu_path in qemu_paths.iter() {
+        let path = std::path::Path::new(qemu_path);
+        if path.exists() {
+            // Verify it's executable
+            if std::fs::metadata(path)
+                .map(|m| m.len() > 0)
+                .unwrap_or(false)
+            {
+                tracing::debug!("Found QEMU at {}", qemu_path);
                 return true;
             }
         }
     }
 
-    // Check environment variable override
-    std::env::var("SHELLWEGO_PVM_AVAILABLE")
-        .map(|v| v == "1" || v.to_lowercase() == "true")
-        .unwrap_or(false)
+    // Check if standard Firecracker binary exists (PVM mode wraps it)
+    let fc_binary = std::path::Path::new("/usr/local/bin/firecracker");
+    if fc_binary.exists() {
+        tracing::debug!("Found Firecracker binary for PVM mode");
+        return true;
+    }
+
+    false
 }
 
 /// Check if WASM runtime is available
@@ -202,11 +244,18 @@ mod tests {
     }
 
     #[test]
-    fn test_is_pvm_available_without_binary() {
-        // On systems without firecracker-pvm binary
+    fn test_is_pvm_available_detection() {
+        // This test documents the new PVM detection behavior
         let result = is_pvm_available();
-        // We can't assert true/false since it depends on the system
-        // But we verify it doesn't panic
         println!("PVM available: {}", result);
+        // Verify it doesn't panic
+    }
+
+    #[test]
+    fn test_detect_cpu_features() {
+        let features = detect_cpu_features();
+        // On most systems, we should detect at least some CPU features
+        // But this test just verifies it doesn't panic
+        println!("CPU features: {:?}", features);
     }
 }

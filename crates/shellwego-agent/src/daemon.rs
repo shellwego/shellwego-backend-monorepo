@@ -53,6 +53,13 @@ impl Daemon {
             .connect(&self.config.control_plane_url)
             .await?;
 
+        let stats = self.metrics.get_snapshot();
+
+        // Calculate available resources for new VMs
+        // Reserve 20% of memory for the host system
+        let available_memory_mb = (stats.memory_available / 1024 / 1024) * 80 / 100;
+        let available_cpu_cores = stats.cpu_cores * 80 / 100;
+
         let msg = Message::Register {
             hostname: gethostname::gethostname().to_string_lossy().to_string(),
             capabilities: vec![
@@ -60,11 +67,22 @@ impl Daemon {
                 format!("pvm={}", self.capabilities.pvm_available),
                 format!("wasm={}", self.capabilities.wasm_available),
                 format!("cores={}", self.capabilities.cpu_cores),
+                format!("memory_mb={}", self.capabilities.memory_total_mb),
+                format!("available_memory_mb={}", available_memory_mb),
+                format!("available_cpu_cores={}", available_cpu_cores),
+                format!("mode={}", self.capabilities.virtualization_mode),
             ],
         };
 
         self.quic.lock().await.send(msg).await?;
-        info!("Registration sent via QUIC");
+        info!(
+            "Registration sent via QUIC (hostname={}, mode={}, cores={}, memory={}MB, available={}MB)",
+            gethostname::gethostname().to_string_lossy(),
+            self.capabilities.virtualization_mode,
+            self.capabilities.cpu_cores,
+            self.capabilities.memory_total_mb,
+            available_memory_mb
+        );
 
         Ok(())
     }
@@ -81,11 +99,16 @@ impl Daemon {
             let msg = Message::Heartbeat {
                 node_id: node_id.unwrap_or_default(),
                 cpu_usage: stats.cpu_usage_percent as f64,
-                memory_usage: (stats.memory_used as f64 / stats.memory_total as f64) * 100.0,
+                memory_usage: if stats.memory_total > 0 {
+                    (stats.memory_used as f64 / stats.memory_total as f64) * 100.0
+                } else {
+                    0.0
+                },
             };
 
             if let Err(e) = self.quic.lock().await.send(msg).await {
                 error!("Heartbeat lost: {}. Reconnecting...", e);
+                // Exponential backoff for reconnection
                 let _ = self
                     .quic
                     .lock()

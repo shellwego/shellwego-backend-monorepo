@@ -7,6 +7,7 @@ use hyper::service::service_fn;
 use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use sysinfo::{Disks, System};
 use tokio::net::TcpListener;
@@ -17,6 +18,8 @@ pub struct MetricsCollector {
     node_id: uuid::Uuid,
     system: Arc<Mutex<System>>,
     disks: Arc<Mutex<Disks>>,
+    /// Running microVM count, updated by VmmManager
+    microvm_count: AtomicU32,
 }
 
 impl MetricsCollector {
@@ -30,7 +33,14 @@ impl MetricsCollector {
             node_id,
             system: Arc::new(Mutex::new(system)),
             disks: Arc::new(Mutex::new(disks)),
+            microvm_count: AtomicU32::new(0),
         }
+    }
+
+    /// Update the running microVM count (called by VmmManager)
+    pub fn set_microvm_count(&self, count: u32) {
+        self.microvm_count.store(count, Ordering::Relaxed);
+        tracing::debug!("Updating microVM count to {}", count);
     }
 
     /// Record microVM spawn duration
@@ -75,7 +85,7 @@ impl MetricsCollector {
             cpu_usage_percent: cpu_usage,
             disk_total,
             disk_used,
-            microvm_count: 0, // Needs VMM integration to get this accurate
+            microvm_count: self.microvm_count.load(Ordering::Relaxed),
         }
     }
 

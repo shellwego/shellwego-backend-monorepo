@@ -6,9 +6,10 @@
 
 use anyhow::Context;
 use shellwego_firecracker::models::{
-    BootSource, CacheType, CpuTemplate, Drive, FirecrackerMetrics, InstanceState, IoEngine,
-    MachineConfiguration, Metrics, NetworkInterface, SnapshotCreateParams, SnapshotLoadParams,
-    SnapshotType,
+    Balloon, BootSource, CacheType, CpuConfig, CpuTemplate, Drive, EntropyDevice,
+    FirecrackerMetrics, InstanceState, IoEngine, LogLevel, Logger, MachineConfiguration,
+    Metrics, MmdsConfig, MmdsContentsObject, MmdsVersion, NetworkInterface,
+    SnapshotCreateParams, SnapshotLoadParams, SnapshotType, Vsock,
 };
 use shellwego_firecracker::vmm::client::FirecrackerClient;
 use std::path::{Path, PathBuf};
@@ -175,6 +176,31 @@ impl FirecrackerDriver {
                 .with_context(|| {
                     format!("Failed to configure network interface {}", net.iface_id)
                 })?;
+        }
+
+        // Entropy device for cryptographic randomness in the guest
+        client
+            .put_entropy(EntropyDevice { rate_limiter: None })
+            .await
+            .with_context(|| "Failed to configure entropy device")?;
+
+        // Vsock for host-guest communication (if configured)
+        if !config.vsock_path.is_empty() {
+            let vsock_socket = format!(
+                "{}/vsock.sock",
+                std::path::Path::new(&config.vsock_path)
+                    .parent()
+                    .unwrap_or(std::path::Path::new("/var/run/shellwego"))
+                    .display()
+            );
+            client
+                .put_vsock(Vsock {
+                    vsock_id: Some("vsock0".to_string()),
+                    guest_cid: 3,
+                    uds_path: vsock_socket,
+                })
+                .await
+                .with_context(|| "Failed to configure vsock")?;
         }
 
         Ok(())
@@ -407,6 +433,252 @@ impl FirecrackerDriver {
     pub async fn remove_network_interface(&self, _iface_id: &str) -> anyhow::Result<()> {
         anyhow::bail!("Network hotplug not implemented");
     }
+
+    /// Configure VM logging to a file for debug output
+    pub async fn configure_logger(&self, log_path: &Path) -> anyhow::Result<()> {
+        let client = self.client()?;
+        client
+            .put_logger(Logger {
+                log_path: Some(log_path.to_string_lossy().to_string()),
+                level: Some(LogLevel::Warning),
+                show_level: Some(true),
+                show_log_origin: Some(false),
+                module: None,
+            })
+            .await
+            .with_context(|| "Failed to configure logger")?;
+        Ok(())
+    }
+
+    /// Configure MMDS (Microvm Metadata Service) with data and settings
+    pub async fn configure_mmds(&self, data: MmdsContentsObject) -> anyhow::Result<()> {
+        let client = self.client()?;
+        client
+            .put_mmds(data)
+            .await
+            .with_context(|| "Failed to configure MMDS data")?;
+        // Also set MMDS config to allow all IPs and use v2
+        client
+            .put_mmds_config(MmdsConfig {
+                version: Some(MmdsVersion::V2),
+                network_interfaces: vec!["eth0".to_string()],
+                ipv4_address: None,
+                imds_compat: None,
+            })
+            .await
+            .with_context(|| "Failed to configure MMDS config")?;
+        Ok(())
+    }
+
+    /// Configure balloon device for memory overcommit
+    pub async fn configure_balloon(
+        &self,
+        amount_mib: i64,
+        deflate_on_oom: bool,
+        stats_polling_interval_s: Option<i64>,
+    ) -> anyhow::Result<()> {
+        let client = self.client()?;
+        client
+            .put_balloon(Balloon {
+                amount_mib,
+                deflate_on_oom,
+                stats_polling_interval_s,
+                free_page_hinting: None,
+                free_page_reporting: None,
+            })
+            .await
+            .with_context(|| "Failed to configure balloon device")?;
+        Ok(())
+    }
+
+    /// Configure CPU modifiers (e.g., CPUID, MSR, register modifiers)
+    pub async fn configure_cpu(&self, cpu_config: CpuConfig) -> anyhow::Result<()> {
+        let client = self.client()?;
+        client
+            .put_cpu_config(cpu_config)
+            .await
+            .with_context(|| "Failed to configure CPU")?;
+        Ok(())
+    }
+
+    /// Configure a VM with initrd support
+    pub async fn configure_vm_with_initrd(
+        &self,
+        config: &super::MicrovmConfig,
+        initrd_path: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let client = self.client()?;
+
+        // Kernel, Boot Args, and optional initrd
+        client
+            .put_boot_source(BootSource {
+                kernel_image_path: config.kernel_path.to_string_lossy().to_string(),
+                boot_args: Some(config.kernel_boot_args.clone()),
+                initrd_path: initrd_path.map(|s| s.to_string()),
+            })
+            .await
+            .with_context(|| "Failed to configure boot source with initrd")?;
+
+        // Machine Config (vCPU, Mem)
+        let cpu_template = if self.mode == Some(crate::VirtualizationMode::Pvm) {
+            None
+        } else {
+            Some(CpuTemplate::T2)
+        };
+
+        client
+            .put_machine_config(MachineConfiguration {
+                vcpu_count: config.vcpu_count() as i64,
+                mem_size_mib: config.memory_mb as i64,
+                smt: Some(false),
+                track_dirty_pages: Some(false),
+                cpu_template,
+                huge_pages: None,
+            })
+            .await
+            .with_context(|| "Failed to configure machine")?;
+
+        // Drives
+        for drive in &config.drives {
+            client
+                .put_drive(
+                    &drive.drive_id,
+                    Drive {
+                        drive_id: drive.drive_id.clone(),
+                        path_on_host: Some(drive.path_on_host.to_string_lossy().to_string()),
+                        is_root_device: drive.is_root_device,
+                        is_read_only: Some(drive.is_read_only),
+                        cache_type: Some(CacheType::Unsafe),
+                        io_engine: Some(IoEngine::Sync),
+                        rate_limiter: None,
+                        partuuid: None,
+                        socket: None,
+                    },
+                )
+                .await
+                .with_context(|| format!("Failed to configure drive {}", drive.drive_id))?;
+        }
+
+        // Network
+        for net in &config.network_interfaces {
+            client
+                .put_network_interface(
+                    &net.iface_id,
+                    NetworkInterface {
+                        iface_id: net.iface_id.clone(),
+                        host_dev_name: net.host_dev_name.clone(),
+                        guest_mac: Some(net.guest_mac.clone()),
+                        rx_rate_limiter: None,
+                        tx_rate_limiter: None,
+                    },
+                )
+                .await
+                .with_context(|| {
+                    format!("Failed to configure network interface {}", net.iface_id)
+                })?;
+        }
+
+        // Entropy device for cryptographic randomness in the guest
+        client
+            .put_entropy(EntropyDevice { rate_limiter: None })
+            .await
+            .with_context(|| "Failed to configure entropy device")?;
+
+        // Vsock for host-guest communication (if configured)
+        if !config.vsock_path.is_empty() {
+            let vsock_socket = format!(
+                "{}/vsock.sock",
+                std::path::Path::new(&config.vsock_path)
+                    .parent()
+                    .unwrap_or(std::path::Path::new("/var/run/shellwego"))
+                    .display()
+            );
+            client
+                .put_vsock(Vsock {
+                    vsock_id: Some("vsock0".to_string()),
+                    guest_cid: 3,
+                    uds_path: vsock_socket,
+                })
+                .await
+                .with_context(|| "Failed to configure vsock")?;
+        }
+
+        Ok(())
+    }
+}
+
+/// Jailer configuration for isolating Firecracker processes
+///
+/// The jailer is a Firecracker companion process that provides:
+/// - Process isolation via chroot and namespace restrictions
+/// - Resource limits via cgroups
+/// - Reduced privilege execution via UID/GID dropping
+///
+/// When jailer is used, the Firecracker API socket path changes to
+/// be inside the jailer's chroot directory.
+#[derive(Debug, Clone)]
+pub struct JailerConfig {
+    /// Jail directory (base for all jailed VMs)
+    pub jail_dir: PathBuf,
+    /// UID to run the jailed process as
+    pub uid: u32,
+    /// GID to run the jailed process as
+    pub gid: u32,
+    /// Chroot base directory
+    pub chroot_base: String,
+    /// Node name (for cgroup naming)
+    pub node_name: String,
+    /// Exec file path (Firecracker binary to jail)
+    pub exec_file: PathBuf,
+}
+
+impl Default for JailerConfig {
+    fn default() -> Self {
+        Self {
+            jail_dir: PathBuf::from("/var/run/jailer"),
+            uid: 1000,
+            gid: 1000,
+            chroot_base: "/srv/jailer".to_string(),
+            node_name: String::new(),
+            exec_file: PathBuf::from("/usr/local/bin/firecracker"),
+        }
+    }
+}
+
+impl JailerConfig {
+    /// Build jailer command-line arguments for a given app ID
+    pub fn build_args(&self, app_id: &uuid::Uuid) -> Vec<String> {
+        let id = format!("shellwego-{}", app_id);
+        vec![
+            format!("--id={}", id),
+            format!("--exec-file={}", self.exec_file.display()),
+            format!("--uid={}", self.uid),
+            format!("--gid={}", self.gid),
+            format!("--chroot-base-dir={}", self.chroot_base),
+            "--daemonize".to_string(),
+            format!(
+                "--node={}",
+                if self.node_name.is_empty() {
+                    "default"
+                } else {
+                    &self.node_name
+                }
+            ),
+        ]
+    }
+
+    /// Get the API socket path when jailer is used for a given app ID
+    ///
+    /// The socket is located inside the jailer's chroot at:
+    /// `{chroot_base}/{id}/root/run/firecracker.sock`
+    pub fn socket_path(&self, app_id: &uuid::Uuid) -> PathBuf {
+        let id = format!("shellwego-{}", app_id);
+        PathBuf::from(&self.chroot_base)
+            .join(&id)
+            .join("root")
+            .join("run")
+            .join("firecracker.sock")
+    }
 }
 
 #[cfg(test)]
@@ -417,5 +689,143 @@ mod tests {
     async fn test_driver_creation_fails_for_missing_binary() {
         let result = FirecrackerDriver::new(&PathBuf::from("/nonexistent/firecracker")).await;
         assert!(result.is_err());
+    }
+
+    // --- JailerConfig tests ---
+
+    #[test]
+    fn test_jailer_config_default_values() {
+        let config = JailerConfig::default();
+        assert_eq!(config.jail_dir, PathBuf::from("/var/run/jailer"));
+        assert_eq!(config.uid, 1000);
+        assert_eq!(config.gid, 1000);
+        assert_eq!(config.chroot_base, "/srv/jailer");
+        assert!(config.node_name.is_empty());
+        assert_eq!(
+            config.exec_file,
+            PathBuf::from("/usr/local/bin/firecracker")
+        );
+    }
+
+    #[test]
+    fn test_jailer_config_build_args() {
+        let config = JailerConfig::default();
+        let app_id = uuid::Uuid::new_v4();
+        let args = config.build_args(&app_id);
+
+        assert!(args.iter().any(|a| a.starts_with("--id=shellwego-")));
+        assert!(args
+            .iter()
+            .any(|a| a == "--exec-file=/usr/local/bin/firecracker"));
+        assert!(args.iter().any(|a| a == "--uid=1000"));
+        assert!(args.iter().any(|a| a == "--gid=1000"));
+        assert!(args.iter().any(|a| a == "--chroot-base-dir=/srv/jailer"));
+        assert!(args.iter().any(|a| a == "--daemonize"));
+        assert!(args.iter().any(|a| a == "--node=default"));
+    }
+
+    #[test]
+    fn test_jailer_config_build_args_with_custom_node() {
+        let mut config = JailerConfig::default();
+        config.node_name = "worker-01".to_string();
+        let app_id = uuid::Uuid::new_v4();
+        let args = config.build_args(&app_id);
+
+        assert!(args.iter().any(|a| a == "--node=worker-01"));
+        assert!(!args.iter().any(|a| a == "--node=default"));
+    }
+
+    #[test]
+    fn test_jailer_config_socket_path() {
+        let config = JailerConfig::default();
+        let app_id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let path = config.socket_path(&app_id);
+
+        assert_eq!(
+            path,
+            PathBuf::from(format!(
+                "/srv/jailer/shellwego-{}/root/run/firecracker.sock",
+                app_id
+            ))
+        );
+    }
+
+    #[test]
+    fn test_jailer_config_socket_path_with_custom_chroot() {
+        let mut config = JailerConfig::default();
+        config.chroot_base = "/opt/jailer".to_string();
+        let app_id = uuid::Uuid::new_v4();
+        let path = config.socket_path(&app_id);
+
+        let expected_prefix = "/opt/jailer/shellwego-";
+        assert!(path.to_string_lossy().starts_with(expected_prefix));
+        assert!(path.to_string_lossy().ends_with("root/run/firecracker.sock"));
+    }
+
+    // --- EntropyDevice struct test ---
+
+    #[test]
+    fn test_entropy_device_default() {
+        let entropy = EntropyDevice::default();
+        assert!(entropy.rate_limiter.is_none());
+    }
+
+    // --- Balloon struct test ---
+
+    #[test]
+    fn test_balloon_struct_creation() {
+        let balloon = Balloon {
+            amount_mib: 256,
+            deflate_on_oom: true,
+            stats_polling_interval_s: Some(5),
+            free_page_hinting: None,
+            free_page_reporting: None,
+        };
+        assert_eq!(balloon.amount_mib, 256);
+        assert!(balloon.deflate_on_oom);
+        assert_eq!(balloon.stats_polling_interval_s, Some(5));
+    }
+
+    // --- Logger struct test ---
+
+    #[test]
+    fn test_logger_struct_creation() {
+        let logger = Logger {
+            log_path: Some("/var/log/fc.log".to_string()),
+            level: Some(LogLevel::Warning),
+            show_level: Some(true),
+            show_log_origin: Some(false),
+            module: None,
+        };
+        assert_eq!(logger.log_path, Some("/var/log/fc.log".to_string()));
+        assert_eq!(logger.level, Some(LogLevel::Warning));
+    }
+
+    // --- Vsock struct test ---
+
+    #[test]
+    fn test_vsock_struct_creation() {
+        let vsock = Vsock {
+            vsock_id: Some("vsock0".to_string()),
+            guest_cid: 3,
+            uds_path: "/tmp/vsock.sock".to_string(),
+        };
+        assert_eq!(vsock.guest_cid, 3);
+        assert_eq!(vsock.vsock_id, Some("vsock0".to_string()));
+        assert_eq!(vsock.uds_path, "/tmp/vsock.sock");
+    }
+
+    // --- MmdsConfig struct test ---
+
+    #[test]
+    fn test_mmds_config_struct_creation() {
+        let mmds_config = MmdsConfig {
+            version: Some(MmdsVersion::V2),
+            network_interfaces: vec!["eth0".to_string()],
+            ipv4_address: None,
+            imds_compat: None,
+        };
+        assert_eq!(mmds_config.version, Some(MmdsVersion::V2));
+        assert_eq!(mmds_config.network_interfaces.len(), 1);
     }
 }

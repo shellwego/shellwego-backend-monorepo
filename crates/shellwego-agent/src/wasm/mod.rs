@@ -40,23 +40,34 @@ pub enum WasmError {
 #[derive(Clone)]
 pub struct WasmRuntime {
     runtime: WasmtimeRuntime,
-    // Store modules in memory for "warm" starts
-    _module_cache: Arc<Mutex<std::collections::HashMap<String, CompiledModule>>>,
 }
 
 impl WasmRuntime {
     /// Initialize WASM runtime
     pub async fn new(config: &WasmRuntimeConfig) -> Result<Self, WasmError> {
         let runtime = WasmtimeRuntime::new(config)?;
-        Ok(Self {
-            runtime,
-            _module_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
-        })
+        Ok(Self { runtime })
     }
 
     /// Compile WASM module from bytes
     pub async fn compile(&self, wasm_bytes: &[u8]) -> Result<CompiledModule, WasmError> {
         self.runtime.compile(wasm_bytes)
+    }
+
+    /// Load and compile a .wasm file from disk (with caching)
+    pub async fn from_file(&self, path: &std::path::Path) -> Result<CompiledModule, WasmError> {
+        self.runtime.from_file(path).await
+    }
+
+    /// Execute a WASM function with input/output
+    pub async fn call(
+        &self,
+        module: &CompiledModule,
+        func_name: &str,
+        input: &[u8],
+        fuel_limit: u64,
+    ) -> Result<Vec<u8>, WasmError> {
+        self.runtime.call(module, func_name, input, fuel_limit).await
     }
 
     /// Spawn new WASM instance (like a microVM)
@@ -130,43 +141,68 @@ pub struct WasmInstance {
 
 impl WasmInstance {
     /// Wait for completion
-    /// This runs the `_start` function of the WASI module
-    pub async fn wait(self, _timeout: std::time::Duration) -> Result<WasmExitStatus, WasmError> {
-        let mut store = self.store.lock().await;
+    /// This runs the `_start` function of the WASI module with async timeout support.
+    pub async fn wait(self, timeout: std::time::Duration) -> Result<WasmExitStatus, WasmError> {
+        // Run the WASM function in a blocking thread to avoid stalling the async runtime
+        let result = tokio::task::spawn_blocking(move || {
+            let mut store = self.store.blocking_lock();
 
-        // Get the entry point (usually _start for WASI command modules)
-        let func = self
-            .instance
-            .get_typed_func::<(), ()>(&mut *store, "_start")
-            .map_err(|_| WasmError::ExecutionError("Missing _start function".to_string()))?;
+            let func = self
+                .instance
+                .get_typed_func::<(), ()>(&mut *store, "_start")
+                .map_err(|_| {
+                    WasmError::ExecutionError("Missing _start function".to_string())
+                })?;
 
-        // TODO: Run in a separate thread/task with timeout to avoid blocking executor
-        // For now, we run directly (blocking)
-        match func.call(&mut *store, ()) {
-            Ok(_) => Ok(WasmExitStatus {
+            func.call(&mut *store, ()).map_err(|e| {
+                if let Some(i32_exit) = e.downcast_ref::<wasmtime_wasi::I32Exit>() {
+                    WasmError::ExecutionError(format!("EXIT:{}", i32_exit.0))
+                } else {
+                    WasmError::ExecutionError(e.to_string())
+                }
+            })
+        });
+
+        match tokio::time::timeout(timeout, result).await {
+            Ok(Ok(_)) => Ok(WasmExitStatus {
                 success: true,
                 code: 0,
             }),
-            Err(e) => {
-                // Check if it's a clean exit (WASI exit)
-                if let Some(i32_exit) = e.downcast_ref::<wasmtime_wasi::I32Exit>() {
-                    Ok(WasmExitStatus {
-                        success: i32_exit.0 == 0,
-                        code: i32_exit.0,
-                    })
-                } else {
-                    Err(WasmError::ExecutionError(e.to_string()))
-                }
+            Ok(Err(WasmError::ExecutionError(msg))) if msg.starts_with("EXIT:") => {
+                let code: i32 = msg[5..].parse().unwrap_or(1);
+                Ok(WasmExitStatus {
+                    success: code == 0,
+                    code,
+                })
+            }
+            Ok(Err(e)) => Err(e),
+            Err(_) => Err(WasmError::ResourceLimit(format!(
+                "WASM execution timed out after {:?}",
+                timeout
+            ))),
+        }
+    }
+
+    /// Retrieve stdout content from the in-memory write pipe
+    pub async fn get_stdout(&self) -> Vec<u8> {
+        let stdout = &self._stdout;
+        match stdout.try_into_inner() {
+            Ok(cursor) => cursor.into_inner(),
+            Err(_) => {
+                // If we can't take the inner (shared references exist), return empty.
+                // In practice, after wait() completes, we should be able to read.
+                Vec::new()
             }
         }
     }
 
-    /// Retrieve stdout content
-    pub async fn get_stdout(&self) -> Vec<u8> {
-        // In a real stream, we'd read from the pipe.
-        // WritePipe::try_into_inner is complex with Arc, so we assume we can read the buffer.
-        // For this impl, we just stub it as the pipe logic in wasi-common is involved.
-        Vec::new()
+    /// Retrieve stderr content from the in-memory write pipe
+    pub async fn get_stderr(&self) -> Vec<u8> {
+        let stderr = &self._stderr;
+        match stderr.try_into_inner() {
+            Ok(cursor) => cursor.into_inner(),
+            Err(_) => Vec::new(),
+        }
     }
 }
 

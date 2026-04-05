@@ -17,7 +17,7 @@ mod driver;
 mod pvm;
 
 // Re-export types from schema (these were moved there)
-pub use driver::FirecrackerDriver;
+pub use driver::{FirecrackerDriver, JailerConfig};
 pub use pvm::{PvmConfig, PvmRecommendations};
 pub use shellwego_schema::{
     DriveConfig, MicrovmConfig, MicrovmMetrics, MicrovmState, MicrovmSummary, NetworkInterface,
@@ -38,6 +38,8 @@ pub struct VmmManager {
     mode: VirtualizationMode,
     /// Path to the binary for the active mode
     binary_path: PathBuf,
+    /// Maximum number of concurrent microVMs
+    max_microvms: u32,
 }
 
 struct VmmInner {
@@ -138,6 +140,7 @@ impl VmmManager {
             metrics,
             mode,
             binary_path,
+            max_microvms: config.max_microvms,
         })
     }
 
@@ -151,14 +154,89 @@ impl VmmManager {
         &self.binary_path
     }
 
-    /// Start a new microVM
+    /// Start a new microVM with resource enforcement
     pub async fn start(&self, config: MicrovmConfig) -> anyhow::Result<()> {
+        // Validate config before starting
+        self.validate_config(&config)?;
+
+        // Enforce max_microvms limit
+        let current_count = {
+            let inner = self.inner.read().await;
+            inner.vms.len() as u32
+        };
+        if current_count >= self.max_microvms {
+            anyhow::bail!(
+                "Maximum microVM limit reached ({}/{})",
+                current_count,
+                self.max_microvms
+            );
+        }
+
         match self.mode {
             VirtualizationMode::Kvm | VirtualizationMode::Pvm => {
                 self.start_firecracker_vm(config).await
             }
             VirtualizationMode::Wasm => self.start_wasm_function(config).await,
         }
+    }
+
+    /// Validate VM configuration before starting
+    fn validate_config(&self, config: &MicrovmConfig) -> anyhow::Result<()> {
+        // Minimum memory: 32MB
+        if config.memory_mb < 32 {
+            anyhow::bail!(
+                "Memory must be at least 32MB, got {}MB",
+                config.memory_mb
+            );
+        }
+        // Maximum memory: 32GB
+        if config.memory_mb > 32 * 1024 {
+            anyhow::bail!(
+                "Memory cannot exceed 32GB, got {}MB",
+                config.memory_mb
+            );
+        }
+        // Minimum CPU shares
+        if config.cpu_shares < 64 {
+            anyhow::bail!(
+                "CPU shares must be at least 64, got {}",
+                config.cpu_shares
+            );
+        }
+        // Maximum CPU shares
+        if config.cpu_shares > 16384 {
+            anyhow::bail!(
+                "CPU shares cannot exceed 16384, got {}",
+                config.cpu_shares
+            );
+        }
+        // Kernel path must exist
+        if !config.kernel_path.exists() {
+            anyhow::bail!(
+                "Kernel path does not exist: {:?}",
+                config.kernel_path
+            );
+        }
+        // Drives must reference existing files (if specified)
+        for drive in &config.drives {
+            let path_str = drive.path_on_host.to_string_lossy();
+            if path_str.is_empty() {
+                continue;
+            }
+            if !drive.path_on_host.exists() {
+                anyhow::bail!(
+                    "Drive path does not exist: {:?}",
+                    drive.path_on_host
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Get the current number of running microVMs
+    pub async fn vm_count(&self) -> u32 {
+        let inner = self.inner.read().await;
+        inner.vms.len() as u32
     }
 
     /// Start a Firecracker microVM (KVM or PVM mode)
@@ -566,6 +644,96 @@ mod tests {
         assert_eq!(VirtualizationMode::Kvm.to_string(), "KVM");
         assert_eq!(VirtualizationMode::Pvm.to_string(), "PVM");
         assert_eq!(VirtualizationMode::Wasm.to_string(), "WASM");
+    }
+
+    #[test]
+    fn test_validate_config_min_memory() {
+        let config = AgentConfig {
+            node_id: Some(Uuid::new_v4()),
+            force_mode: Some(VirtualizationMode::Wasm),
+            data_dir: std::env::temp_dir().join("shellwego-test-validate-min-mem"),
+            max_microvms: 10,
+            ..Default::default()
+        };
+        let metrics = Arc::new(MetricsCollector::new(Uuid::new_v4()));
+        let vmm = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(VmmManager::new(&config, metrics))
+            .unwrap();
+
+        // Memory below 32MB should fail
+        let bad_config = MicrovmConfig {
+            memory_mb: 16,
+            ..Default::default()
+        };
+        assert!(vmm.validate_config(&bad_config).is_err());
+    }
+
+    #[test]
+    fn test_validate_config_max_memory() {
+        let config = AgentConfig {
+            node_id: Some(Uuid::new_v4()),
+            force_mode: Some(VirtualizationMode::Wasm),
+            data_dir: std::env::temp_dir().join("shellwego-test-validate-max-mem"),
+            max_microvms: 10,
+            ..Default::default()
+        };
+        let metrics = Arc::new(MetricsCollector::new(Uuid::new_v4()));
+        let vmm = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(VmmManager::new(&config, metrics))
+            .unwrap();
+
+        // Memory above 32GB should fail
+        let bad_config = MicrovmConfig {
+            memory_mb: 33 * 1024,
+            ..Default::default()
+        };
+        assert!(vmm.validate_config(&bad_config).is_err());
+    }
+
+    #[test]
+    fn test_validate_config_cpu_shares_range() {
+        let config = AgentConfig {
+            node_id: Some(Uuid::new_v4()),
+            force_mode: Some(VirtualizationMode::Wasm),
+            data_dir: std::env::temp_dir().join("shellwego-test-validate-cpu"),
+            max_microvms: 10,
+            ..Default::default()
+        };
+        let metrics = Arc::new(MetricsCollector::new(Uuid::new_v4()));
+        let vmm = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(VmmManager::new(&config, metrics))
+            .unwrap();
+
+        // CPU shares below 64 should fail
+        let bad_config = MicrovmConfig {
+            cpu_shares: 32,
+            ..Default::default()
+        };
+        assert!(vmm.validate_config(&bad_config).is_err());
+
+        // CPU shares above 16384 should fail
+        let bad_config = MicrovmConfig {
+            cpu_shares: 32768,
+            ..Default::default()
+        };
+        assert!(vmm.validate_config(&bad_config).is_err());
+    }
+
+    #[tokio::test]
+    async fn test_vm_count_zero_on_creation() {
+        let config = AgentConfig {
+            node_id: Some(Uuid::new_v4()),
+            force_mode: Some(VirtualizationMode::Wasm),
+            data_dir: std::env::temp_dir().join("shellwego-test-vm-count"),
+            max_microvms: 10,
+            ..Default::default()
+        };
+        let metrics = Arc::new(MetricsCollector::new(Uuid::new_v4()));
+        let vmm = VmmManager::new(&config, metrics).await.unwrap();
+        assert_eq!(vmm.vm_count().await, 0);
     }
 
     #[test]

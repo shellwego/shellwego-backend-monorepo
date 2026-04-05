@@ -17,6 +17,11 @@ pub struct WasmRuntimeConfig {
     pub max_compute_units: f64,
     /// Maximum concurrent instances
     pub max_instances: u32,
+    /// Optional directory path for caching compiled WASM artifacts.
+    /// If set, serialized `.cwasm` files are stored here for faster cold starts.
+    /// If empty or not set, only in-memory caching is used.
+    #[serde(default)]
+    pub cache_dir: Option<String>,
 }
 
 impl Default for WasmRuntimeConfig {
@@ -25,6 +30,7 @@ impl Default for WasmRuntimeConfig {
             max_memory_mb: 128,
             max_compute_units: 1.0,
             max_instances: 100,
+            cache_dir: None,
         }
     }
 }
@@ -61,6 +67,7 @@ mod tests {
         assert_eq!(config.max_memory_mb, 128);
         assert_eq!(config.max_compute_units, 1.0);
         assert_eq!(config.max_instances, 100);
+        assert!(config.cache_dir.is_none());
     }
 
     #[test]

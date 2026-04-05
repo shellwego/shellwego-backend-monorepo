@@ -1,0 +1,211 @@
+# =============================================================================
+# ShellWeGo Helm Chart - values.yaml
+# =============================================================================
+
+# -- Number of control-plane replicas
+replicaCount: 1
+
+# -- Container image configuration
+image:
+  repository: shellwego/control-plane
+  pullPolicy: IfNotPresent
+  # -- Overrides the image tag whose default is the chart appVersion
+  tag: ""
+
+# -- Optional image pull secrets for private registries
+imagePullSecrets: []
+  # - name: my-registry-secret
+
+# -- Override the chart name
+nameOverride: ""
+# -- Override the full chart name (release-chart)
+fullnameOverride: ""
+
+# -- Service account configuration
+serviceAccount:
+  # -- Specifies whether a service account should be created
+  create: true
+  # -- Annotations to add to the service account
+  annotations: {}
+  # -- The name of the service account to use.
+  #    If not set and create is true, a name is generated
+  name: ""
+
+# -- Pod annotations
+podAnnotations: {}
+
+# -- Pod labels
+podLabels: {}
+
+# -- Pod security context
+podSecurityContext:
+  fsGroup: 1000
+
+# -- Container security context
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  readOnlyRootFilesystem: false
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+
+# -- Service configuration
+service:
+  type: ClusterIP
+  port: 8080
+  # -- Optional additional ports (e.g. for metrics)
+  metricsPort: 9090
+  annotations: {}
+
+# -- Ingress configuration
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+    # kubernetes.io/ingress.class: nginx
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - host: shellwego.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+    # - secretName: shellwego-tls
+    #   hosts:
+    #     - shellwego.local
+
+# -- Resource requests and limits
+resources:
+  requests:
+    cpu: 250m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
+
+# -- Horizontal Pod Autoscaler
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+# -- Node selection constraints
+nodeSelector: {}
+
+# -- Tolerations for tainted nodes
+tolerations: []
+
+# -- Affinity rules
+affinity: {}
+
+# -- Liveness probe
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8080
+  initialDelaySeconds: 15
+  periodSeconds: 20
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+# -- Readiness probe
+readinessProbe:
+  httpGet:
+    path: /health
+    port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+# -- Extra environment variables (passed through env)
+extraEnv: []
+  # - name: RUST_LOG
+  #   value: debug
+
+# -- Extra environment variables from ConfigMap or Secret references
+extraEnvFrom: []
+  # - configMapRef:
+  #     name: my-configmap
+  # - secretRef:
+  #     name: my-secret
+
+# -- Extra volumes to mount
+extraVolumes: []
+
+# -- Extra volume mounts
+extraVolumeMounts: []
+
+# -- Topology spread constraints
+topologySpreadConstraints: []
+
+# -- Pod disruption budget
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+  # maxUnavailable: 1
+
+# =============================================================================
+# ShellWeGo Platform Configuration
+# =============================================================================
+config:
+  # -- Primary domain for the platform
+  domain: shellwego.local
+  # -- License key (required for production)
+  license: ""
+  # -- Admin email for initial setup and notifications
+  adminEmail: admin@shellwego.local
+  # -- Default region name
+  defaultRegion: default
+  # -- Rust log level (trace, debug, info, warn, error)
+  logLevel: info
+  # -- JWT secret (auto-generated if empty; override in production)
+  jwtSecret: ""
+  # -- Database URL (PostgreSQL recommended for production)
+  databaseUrl: postgres://shellwego:shellwego@postgresql:5432/shellwego?sslmode=disable
+  # -- KMS backend type (file, vault)
+  kmsBackend: file
+  # -- Vault address (only when kmsBackend=vault)
+  vaultAddress: ""
+  # -- Vault token (only when kmsBackend=vault)
+  vaultToken: ""
+
+# =============================================================================
+# PostgreSQL sub-chart configuration
+# =============================================================================
+postgresql:
+  enabled: true
+  auth:
+    postgresPassword: postgres
+    username: shellwego
+    password: shellwego
+    database: shellwego
+  primary:
+    persistence:
+      enabled: true
+      size: 10Gi
+    resources:
+      requests:
+        cpu: 250m
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 512Mi
+
+# =============================================================================
+# Persistence configuration
+# =============================================================================
+persistence:
+  enabled: true
+  # -- PVC size for ShellWeGo data
+  size: 5Gi
+  # -- Storage class (uses cluster default if empty)
+  storageClass: ""
+  # -- Access mode
+  accessMode: ReadWriteOnce
+  # -- Annotations on the PVC
+  annotations: {}

@@ -17,9 +17,9 @@ use tower_http::{
 
 use crate::state::AppState;
 
-mod handlers;
-mod middleware;
-mod response;
+pub mod handlers;
+pub mod middleware;
+pub mod response;
 
 pub use response::ErrorResponse;
 

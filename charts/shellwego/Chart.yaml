@@ -1,0 +1,23 @@
+apiVersion: v2
+name: shellwego
+description: ShellWeGo Sovereign Cloud Platform
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+maintainers:
+  - name: ShellWeGo Contributors
+    email: maintainers@shellwego.dev
+    url: https://github.com/shellwego/shellwego
+home: https://github.com/shellwego/shellwego
+keywords:
+  - sovereign-cloud
+  - edge-computing
+  - vps
+  - firecracker
+  - rust
+  - self-hosted
+sources:
+  - https://github.com/shellwego/shellwego
+annotations:
+  catalog.cattle.io/certified: "false"
+  catalog.cattle.io/display-name: ShellWeGo

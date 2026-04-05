@@ -726,17 +726,17 @@ shellwego build --release --branding ./config/branding.yml
 ## 📋 Feature Checklist
 
 **Core Platform (All Free):**
-- [x] Multi-tenant container isolation (Firecracker)
-- [x] Automatic SSL (Let's Encrypt)
-- [x] Git-based deployment (push to deploy)
-- [x] Web-based log streaming (WebSocket)
-- [x] Environment variable management
-- [x] Persistent volume management
-- [x] Database provisioning (Postgres, MySQL, Redis)
-- [x] REST API + WebSocket real-time events
-- [x] CLI tool (Rust binary, cross-platform)
+- [ ] Multi-tenant container isolation (Firecracker) — *Phase 6*
+- [ ] Automatic SSL (Let's Encrypt) — *Phase 7*
+- [ ] Git-based deployment (push to deploy) — *Phase 4*
+- [ ] Web-based log streaming (WebSocket) — *Phase 4*
+- [ ] Environment variable management — *Phase 4*
+- [ ] Persistent volume management — *Phase 4*
+- [ ] Database provisioning (Postgres, MySQL, Redis) — *Phase 4*
+- [ ] REST API + WebSocket real-time events — *Phase 4*
+- [ ] CLI tool (Rust binary, cross-platform) — *existing, depends on Phase 4*
 - [x] Docker Compose import
-- [x] Multi-region support (federation)
+- [ ] Multi-region support (federation) — *future*
 
 **Commercial Add-ons** (Requires license key):
 - [ ] Advanced autoscaling (ML-based prediction)

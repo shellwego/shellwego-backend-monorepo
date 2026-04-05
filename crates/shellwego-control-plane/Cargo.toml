@@ -8,6 +8,10 @@ repository.workspace = true
 rust-version.workspace = true
 description = "Control plane: REST API, scheduler, and cluster state management"
 
+[lib]
+name = "shellwego_control_plane"
+path = "src/lib.rs"
+
 [[bin]]
 name = "shellwego-control-plane"
 path = "src/main.rs"

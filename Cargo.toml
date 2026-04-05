@@ -2,6 +2,23 @@
 members = ["crates/*"]
 resolver = "2"
 
+# ---------------------------------------------------------------------------
+# Integration test harness (lives at workspace root tests/)
+# ---------------------------------------------------------------------------
+# The integration tests live under `tests/` and exercise the compiled crates
+# via tower::ServiceExt against the Axum router.  They are gated behind the
+# `integration-tests` cargo feature so they do not run during normal
+# `cargo test`.
+#
+# Run with:  cargo test --features integration-tests
+# ---------------------------------------------------------------------------
+
+[workspace.dependencies.http-body-util]
+version = "0.1"
+
+[workspace.dependencies.bytes]
+version = "1.5"
+
 # Reduce disk and memory usage during builds
 [profile.dev]
 codegen-units = 256

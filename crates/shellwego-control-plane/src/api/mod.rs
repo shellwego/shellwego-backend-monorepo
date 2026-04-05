@@ -74,6 +74,7 @@ fn v1_protected_routes() -> Router<Arc<AppState>> {
         .route("/apps/{app_id}/deploy", post(handlers::deploy_app))
         .route("/apps/{app_id}/scale", post(handlers::scale_app))
         .route("/apps/{app_id}/logs", get(handlers::get_logs))
+        .route("/apps/{app_id}/logs/ws", get(handlers::ws_logs))
         .route("/apps/{app_id}/restart", post(handlers::restart_app))
         .route("/apps/{app_id}/stop", post(handlers::stop_app))
         .route("/apps/{app_id}/start", post(handlers::start_app))

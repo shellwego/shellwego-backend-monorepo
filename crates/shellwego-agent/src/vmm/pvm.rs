@@ -923,6 +923,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore] // Requires firecracker binary installed on the system
     fn test_real_is_pvm_available_with_real_binary() {
         if let Some(binary_path) = real_firecracker_binary() {
             let result = is_pvm_available(&binary_path);
@@ -942,6 +943,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore] // Requires firecracker binary installed on the system
     fn test_real_setup_pvm_environment_with_real_binary() {
         if let Some(binary_path) = real_firecracker_binary() {
             let config = PvmConfig {
@@ -963,6 +965,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore] // Requires firecracker binary installed on the system
     fn test_real_firecracker_binary_version_check() {
         if let Some(binary_path) = real_firecracker_binary() {
             // Actually run the real binary with --version
@@ -996,6 +999,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore] // Requires firecracker binary installed on the system
     fn test_real_firecracker_help_output() {
         if let Some(binary_path) = real_firecracker_binary() {
             let output = Command::new(&binary_path).arg("--help").output();

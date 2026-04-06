@@ -25,7 +25,10 @@ pub mod invoice;
 pub mod usage;
 
 // Re-export all public types at module level
-pub use config::{BillingConfig, DunningConfig};
+pub use config::{
+    BillingConfig, CryptoConfig, CryptoCurrencyConfig, DunningConfig, GcashConfig,
+    MpesaConfig, MpesaEnvironment, MercadoPagoConfig, UpiConfig,
+};
 pub use customer::{Address, Customer, CustomerStatus, PaymentMethod, SubscriptionTier};
 pub use invoice::{BillingPeriod, Invoice, InvoiceStatus, LineItem, PaymentResult};
 pub use usage::{UsageEvent, UsageSummary};

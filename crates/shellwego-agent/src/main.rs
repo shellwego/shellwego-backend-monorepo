@@ -31,7 +31,8 @@ async fn main() -> anyhow::Result<()> {
 
     let daemon = Daemon::new(config.clone(), capabilities, vmm.clone(), metrics.clone()).await?;
 
-    let reconciler = Reconciler::new(vmm.clone(), network, daemon.state_client());
+    // TODO: Read zfs_pool from AgentConfig once the field is added
+    let reconciler = Reconciler::new(vmm.clone(), network, daemon.state_client(), None);
 
     let _snapshot_manager = SnapshotManager::new(&config.data_dir).await?;
     let mut migration_manager = MigrationManager::new(&config.data_dir, vmm.clone()).await?;

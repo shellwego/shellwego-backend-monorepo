@@ -1,0 +1,58 @@
+groups:
+  - name: shellwego_critical
+    rules:
+      - alert: MicroVMSpawnDurationHigh
+        expr: histogram_quantile(0.95, rate(shellwego_microvm_spawn_duration_seconds_bucket[5m])) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MicroVM spawn duration p95 above 5s"
+          description: "The 95th percentile microVM spawn duration is {{ $value }}s on {{ $labels.node }}"
+
+      - alert: NodeMemoryPressureHigh
+        expr: shellwego_node_memory_pressure > 0.8
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Node memory pressure above 80%"
+          description: "Node {{ $labels.node }} has memory pressure of {{ $value | humanizePercentage }}"
+
+      - alert: NetworkDroppedPacketsHigh
+        expr: sum(rate(shellwego_network_dropped_packets_total[5m])) by (node) > 1.67
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High dropped packet rate (>100/min)"
+          description: "Node {{ $labels.node }} dropping {{ $value | humanize }} packets/sec"
+
+      - alert: StoragePoolUsageHigh
+        expr: shellwego_storage_pool_usage > 0.85
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Storage pool usage above 85%"
+          description: "Pool {{ $labels.pool }} on {{ $labels.node }} is at {{ $value | humanizePercentage }}"
+
+  - name: shellwego_info
+    rules:
+      - alert: ControlPlaneDown
+        expr: up{job="shellwego-control-plane"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Control plane is down"
+          description: "The control-plane target has been unreachable for >1m"
+
+      - alert: AgentDown
+        expr: up{job="shellwego-agents"} == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Agent is unreachable"
+          description: "Agent on {{ $labels.instance }} has been unreachable for >2m"

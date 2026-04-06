@@ -1,10 +1,3 @@
-# =============================================================================
-# ShellWeGo Development Stack
-# =============================================================================
-# NOTE: This docker-compose.yml is for development/testing only.
-# For production, use the Helm chart or install.sh.
-# =============================================================================
-
 version: "3.8"
 
 services:
@@ -19,21 +12,9 @@ services:
       - DATABASE_URL=postgres://shellwego:shellwego@postgres:5432/shellwego
       - NATS_URL=nats://nats:4222
       - RUST_LOG=info
-      - SHELLWEGO_DOMAIN=localhost
-      - ADMIN_EMAIL=admin@localhost
-      - STATIC_DIR=/var/lib/shellwego/static
     depends_on:
-      postgres:
-        condition: service_healthy
-      nats:
-        condition: service_started
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 15s
+      - postgres
+      - nats
 
   # Agent (for local testing, requires privileged)
   agent:
@@ -50,7 +31,6 @@ services:
       - agent-data:/var/lib/shellwego
     depends_on:
       - control-plane
-    restart: unless-stopped
 
   # Supporting services
   postgres:
@@ -61,11 +41,6 @@ services:
       POSTGRES_DB: shellwego
     volumes:
       - postgres-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U shellwego"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
 
   nats:
     image: nats:2.10-alpine
@@ -75,19 +50,54 @@ services:
 
   # Observability
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v2.51.0
     volumes:
       - ./config/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./config/prometheus_alerts.yml:/etc/prometheus/prometheus_alerts.yml
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
     ports:
       - "9090:9090"
+    depends_on:
+      - control-plane
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    volumes:
+      - ./config/alertmanager.yml:/etc/alertmanager/alertmanager.yml
+    ports:
+      - "9093:9093"
+
+  loki:
+    image: grafana/loki:2.9.6
+    volumes:
+      - ./config/loki.yml:/etc/loki/local-config.yaml
+      - loki-data:/loki
+    ports:
+      - "3100:3100"
 
   grafana:
-    image: grafana/grafana:latest
-    ports:
-      - "3000:3000"
+    image: grafana/grafana:10.4.2
+    volumes:
+      - ./config/grafana/provisioning:/etc/grafana/provisioning
+      - ./config/grafana/dashboards:/var/lib/grafana/dashboards
+      - grafana-data:/var/lib/grafana
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/01-platform-overview.json
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+      - loki
 
 volumes:
   postgres-data:
   agent-data:
+  prometheus-data:
+  loki-data:
+  grafana-data:

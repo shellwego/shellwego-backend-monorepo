@@ -40,9 +40,15 @@ pub use shellwego_schema::billing::{
 
 pub mod metering;
 pub mod invoices;
+pub mod providers;
 
 pub use metering::{MetricsStore, RealtimeCounter, DataPoint, Granularity};
 pub use invoices::{InvoiceGenerator, InvoiceTemplate};
+pub use providers::{
+    ChargeRequest, RefundRequest, RefundResult, RefundStatus,
+    ParsedWebhookEvent, WebhookEventType, PaymentStatus, PaymentProvider,
+    constant_time_compare,
+};
 
 /// Main billing error type
 #[derive(Error, Debug)]
@@ -199,6 +205,8 @@ pub struct BillingSystem {
     pool: Option<PgPool>,
     /// Lazy-initialised reqwest client for HTTP-based payment provider calls.
     http_client: Arc<reqwest::Client>,
+    /// Registered payment providers (keyed by provider name)
+    providers: Arc<RwLock<HashMap<String, Arc<dyn crate::providers::PaymentProvider>>>>,
 }
 
 impl BillingSystem {
@@ -287,6 +295,7 @@ impl BillingSystem {
             invoices,
             pool,
             http_client,
+            providers: Arc::new(RwLock::new(Self::register_providers(config))),
         })
     }
 
@@ -338,7 +347,65 @@ impl BillingSystem {
             invoices,
             pool: Some(pool),
             http_client,
+            providers: Arc::new(RwLock::new(Self::register_providers(config))),
         })
+    }
+
+    // ----------------------------------------------------------------
+    // Provider registration
+    // ----------------------------------------------------------------
+
+    /// Register payment providers based on configuration.
+    fn register_providers(config: &BillingConfig) -> HashMap<String, Arc<dyn crate::providers::PaymentProvider>> {
+        let mut providers: HashMap<String, Arc<dyn crate::providers::PaymentProvider>> = HashMap::new();
+
+        // Stripe
+        if let Some(ref api_key) = config.stripe_api_key {
+            let stripe = crate::providers::stripe::StripeProvider::new(
+                api_key.clone(),
+                config.stripe_webhook_secret.clone(),
+            );
+            providers.insert("stripe".to_string(), Arc::new(stripe) as Arc<dyn crate::providers::PaymentProvider>);
+        }
+
+        // Paystack
+        if let Some(ref secret) = config.paystack_secret_key {
+            let paystack = crate::providers::paystack::PaystackProvider::new(secret.clone());
+            providers.insert("paystack".to_string(), Arc::new(paystack) as Arc<dyn crate::providers::PaymentProvider>);
+        }
+
+        // M-Pesa
+        if let Some(ref mpesa) = config.mpesa_config {
+            let mp = crate::providers::mpesa::MpesaProvider::new(mpesa.clone());
+            providers.insert("mpesa".to_string(), Arc::new(mp) as Arc<dyn crate::providers::PaymentProvider>);
+        }
+
+        // GCash
+        if let Some(ref gcash) = config.gcash_config {
+            let gc = crate::providers::gcash::GcashProvider::new(gcash.clone());
+            providers.insert("gcash".to_string(), Arc::new(gc) as Arc<dyn crate::providers::PaymentProvider>);
+        }
+
+        // UPI
+        if let Some(ref upi) = config.upi_config {
+            let u = crate::providers::upi::UpiProvider::new(upi.clone());
+            providers.insert("upi".to_string(), Arc::new(u) as Arc<dyn crate::providers::PaymentProvider>);
+        }
+
+        // Mercado Pago
+        if let Some(ref mp) = config.mercadopago_config {
+            let mp_provider = crate::providers::mercadopago::MercadoPagoProvider::new(mp.clone());
+            providers.insert("mercadopago".to_string(), Arc::new(mp_provider) as Arc<dyn crate::providers::PaymentProvider>);
+        }
+
+        // Crypto
+        if let Some(ref crypto) = config.crypto_config {
+            let cp = crate::providers::crypto::CryptoProvider::new(crypto.clone());
+            providers.insert("crypto".to_string(), Arc::new(cp) as Arc<dyn crate::providers::PaymentProvider>);
+        }
+
+        info!(provider_count = providers.len(), "Registered payment providers");
+        providers
     }
 
     // ----------------------------------------------------------------
@@ -771,6 +838,7 @@ impl BillingSystem {
             due_date: period.end + Duration::days(self.config.payment_terms_days as i64),
             created_at: Utc::now(),
             paid_at: None,
+            transaction_id: None,
         };
 
         // Store invoice to database
@@ -838,6 +906,80 @@ impl BillingSystem {
         if result.success {
             self.mark_invoice_paid(invoice_id, result.transaction_id.clone())
                 .await?;
+        }
+
+        Ok(result)
+    }
+
+    /// Process payment using a specific provider.
+    ///
+    /// This is the new provider-aware payment method that dispatches to the
+    /// correct payment provider based on `provider_name`.
+    #[instrument(skip(self), fields(invoice_id = %invoice_id))]
+    pub async fn process_payment_with_provider(
+        &self,
+        invoice_id: &str,
+        provider_name: &str,
+        payment_token: &str,
+        customer_email: Option<&str>,
+    ) -> Result<PaymentResult, BillingError> {
+        let invoice = self.get_invoice(invoice_id).await?;
+
+        if invoice.status == InvoiceStatus::Paid {
+            return Ok(PaymentResult {
+                success: true,
+                transaction_id: None,
+                message: "Invoice already paid".to_string(),
+            });
+        }
+
+        let providers = self.providers.read().await;
+        let provider = providers.get(provider_name)
+            .ok_or_else(|| BillingError::ProviderError(
+                format!("Unknown provider: {}", provider_name)
+            ))?
+            .clone();
+        drop(providers);
+
+        let amount_cents = (invoice.total * Decimal::ONE_HUNDRED).to_string()
+            .parse::<i64>()
+            .unwrap_or(0);
+
+        let mut metadata = HashMap::new();
+        metadata.insert("invoice_id".to_string(), invoice_id.to_string());
+        metadata.insert("customer_id".to_string(), invoice.customer_id.clone());
+        if let Some(email) = customer_email {
+            metadata.insert("email".to_string(), email.to_string());
+        }
+
+        let request = crate::providers::ChargeRequest {
+            invoice_id: invoice_id.to_string(),
+            customer_id: invoice.customer_id.clone(),
+            amount_cents,
+            currency: invoice.currency.clone(),
+            payment_token: payment_token.to_string(),
+            description: format!("Invoice {}", invoice.invoice_number),
+            metadata,
+            idempotency_key: Some(format!("inv_{}_{}", invoice_id, Uuid::new_v4())),
+        };
+
+        let result = provider.charge(request).await?;
+
+        // Record payment attempt
+        let method = PaymentMethod::Card { token: payment_token.to_string() };
+        if let Err(e) = self.record_payment_attempt(
+            invoice_id,
+            &invoice.customer_id,
+            &amount_cents.to_string(),
+            &invoice.currency,
+            &method,
+            &result,
+        ).await {
+            warn!(error = %e, "Failed to record payment attempt");
+        }
+
+        if result.success {
+            self.mark_invoice_paid(invoice_id, result.transaction_id.clone()).await?;
         }
 
         Ok(result)
@@ -918,6 +1060,122 @@ impl BillingSystem {
         })
     }
 
+    /// Handle a webhook from a specific payment provider.
+    ///
+    /// Verifies the webhook signature, parses the event, and processes it.
+    pub async fn handle_webhook_provider(
+        &self,
+        provider_name: &str,
+        payload: &[u8],
+        signature: &str,
+    ) -> Result<WebhookResult, BillingError> {
+        let providers = self.providers.read().await;
+        let provider = providers.get(provider_name)
+            .ok_or_else(|| BillingError::WebhookVerificationError(
+                format!("Unknown provider: {}", provider_name)
+            ))?
+            .clone();
+        drop(providers);
+
+        // Verify signature
+        if !provider.verify_webhook(payload, signature)? {
+            return Err(BillingError::WebhookVerificationError(
+                "Invalid webhook signature".to_string(),
+            ));
+        }
+
+        // Parse event
+        let event = provider.parse_webhook_event(payload)?;
+
+        // Process the normalized event
+        match event.event_type {
+            crate::providers::WebhookEventType::PaymentSucceeded => {
+                if let Some(ref inv_id) = event.invoice_id {
+                    self.mark_invoice_paid(inv_id, event.transaction_id.clone()).await?;
+                    info!(invoice_id = %inv_id, "Webhook: payment succeeded");
+                }
+            }
+            crate::providers::WebhookEventType::PaymentFailed => {
+                if let Some(ref inv_id) = event.invoice_id {
+                    let reason = event.failure_reason.as_deref().unwrap_or("Unknown failure");
+                    self.handle_payment_failure(inv_id, reason).await?;
+                }
+            }
+            crate::providers::WebhookEventType::PaymentRefunded => {
+                info!(provider = %provider_name, "Webhook: payment refunded");
+            }
+            crate::providers::WebhookEventType::PaymentPending => {
+                info!(provider = %provider_name, "Webhook: payment pending");
+            }
+            crate::providers::WebhookEventType::SubscriptionCreated => {
+                info!(provider = %provider_name, "Webhook: subscription created");
+            }
+            crate::providers::WebhookEventType::SubscriptionCanceled => {
+                info!(provider = %provider_name, "Webhook: subscription canceled");
+            }
+            crate::providers::WebhookEventType::SubscriptionRenewed => {
+                info!(provider = %provider_name, "Webhook: subscription renewed");
+            }
+            _ => {
+                info!(event_type = ?event.event_type, provider = %provider_name, "Webhook: unhandled event type");
+            }
+        }
+
+        Ok(WebhookResult {
+            event_type: event.provider_event_type,
+            processed: true,
+        })
+    }
+
+    /// Process a refund through a specific payment provider.
+    ///
+    /// Supports both full refunds (amount_cents = None) and partial refunds
+    /// (amount_cents = Some(n)).
+    #[instrument(skip(self), fields(transaction_id = %transaction_id))]
+    pub async fn refund_payment(
+        &self,
+        transaction_id: &str,
+        provider_name: &str,
+        amount_cents: Option<i64>,
+        reason: &str,
+    ) -> Result<crate::providers::RefundResult, BillingError> {
+        let providers = self.providers.read().await;
+        let provider = providers.get(provider_name)
+            .ok_or_else(|| BillingError::ProviderError(
+                format!("Unknown provider: {}", provider_name)
+            ))?
+            .clone();
+        drop(providers);
+
+        let request = crate::providers::RefundRequest {
+            original_transaction_id: transaction_id.to_string(),
+            amount_cents,
+            reason: reason.to_string(),
+            idempotency_key: Some(format!("refund_{}_{}", transaction_id, Uuid::new_v4())),
+        };
+
+        let result = provider.refund(request).await?;
+
+        info!(
+            refund_id = %result.refund_id,
+            status = ?result.status,
+            amount_cents = result.amount_cents_refunded,
+            "Refund processed"
+        );
+
+        Ok(result)
+    }
+
+    /// Get the list of registered provider names.
+    pub async fn get_provider_names(&self) -> Vec<String> {
+        self.providers.read().await.keys().cloned().collect()
+    }
+
+    /// Check if a specific provider is registered.
+    pub async fn has_provider(&self, name: &str) -> bool {
+        self.providers.read().await.contains_key(name)
+    }
+
     /// Start background workers for billing operations
     ///
     /// Spawns background tasks for:
@@ -972,17 +1230,70 @@ impl BillingSystem {
         });
 
         // Payment retry worker (runs hourly)
-        let self_clone = Arc::new(self.clone());
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
-
-                // Retry failed payments
-                if let Err(e) = self_clone.retry_failed_payments().await {
-                    error!(error = %e, "Payment retry failed");
+        {
+            let self_clone = Arc::new(self.clone());
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
+                    if let Err(e) = self_clone.retry_failed_payments().await {
+                        error!(error = %e, "Payment retry failed");
+                    }
                 }
-            }
-        });
+            });
+        }
+
+        // Async payment polling worker (runs every 60 seconds)
+        {
+            let providers = self.providers.clone();
+            let pool = self.pool.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+
+                    if let Some(ref pool) = pool {
+                        // Query pending payments that need status polling
+                        let rows = match sqlx::query(
+                            "SELECT id, provider, transaction_id FROM payments WHERE status = 'pending' AND transaction_id IS NOT NULL"
+                        ).fetch_all(pool).await {
+                            Ok(r) => r,
+                            Err(e) => {
+                                error!(error = %e, "Failed to query pending payments for polling");
+                                continue;
+                            }
+                        };
+
+                        for row in rows {
+                            let payment_id: String = row.get("id");
+                            let provider_name: String = row.get("provider");
+                            let provider_tx_id: String = row.get("transaction_id");
+
+                            let prov_read = providers.read().await;
+                            if let Some(provider) = prov_read.get(&provider_name) {
+                                match provider.check_payment_status(&provider_tx_id).await {
+                                    Ok(crate::providers::PaymentStatus::Succeeded) => {
+                                        drop(prov_read);
+                                        let _ = sqlx::query(
+                                            "UPDATE payments SET status = 'succeeded', updated_at = NOW() WHERE id = $1"
+                                        ).bind(&payment_id).execute(pool).await;
+                                        info!(payment_id = %payment_id, "Payment polling: succeeded");
+                                    }
+                                    Ok(crate::providers::PaymentStatus::Failed) => {
+                                        drop(prov_read);
+                                        let _ = sqlx::query(
+                                            "UPDATE payments SET status = 'failed', updated_at = NOW() WHERE id = $1"
+                                        ).bind(&payment_id).execute(pool).await;
+                                        info!(payment_id = %payment_id, "Payment polling: failed");
+                                    }
+                                    _ => {
+                                        // Still pending or unknown, skip
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
 
         Ok(())
     }
@@ -1461,7 +1772,7 @@ impl BillingSystem {
         let due_date: DateTime<Utc> = row.get("due_date");
         let created_at: DateTime<Utc> = row.get("created_at");
         let paid_at: Option<DateTime<Utc>> = row.get("paid_at");
-        let _transaction_id: Option<String> = row.get("transaction_id");
+        let transaction_id: Option<String> = row.get("transaction_id");
 
         let line_items: Vec<LineItem> = serde_json::from_value(line_items_json)?;
 
@@ -1496,6 +1807,7 @@ impl BillingSystem {
             due_date,
             created_at,
             paid_at,
+            transaction_id,
         })
     }
 
@@ -1523,6 +1835,7 @@ impl BillingSystem {
             if let Some(invoice) = invoices.get_mut(invoice_id) {
                 invoice.status = InvoiceStatus::Paid;
                 invoice.paid_at = Some(Utc::now());
+                invoice.transaction_id = transaction_id.clone();
             }
         }
 
@@ -1887,7 +2200,8 @@ impl BillingSystem {
     /// publishable/secret key. The config field name is a known limitation
     /// that should be addressed in a future configuration refactor.
     fn verify_stripe_webhook(&self, payload: &[u8], signature: &str) -> Result<bool, BillingError> {
-        let signing_secret = self.config.stripe_api_key.as_ref()
+        let signing_secret = self.config.stripe_webhook_secret.as_ref()
+            .or(self.config.stripe_api_key.as_ref())
             .ok_or_else(|| BillingError::WebhookVerificationError(
                 "No Stripe signing secret configured".to_string(),
             ))?;
@@ -2007,6 +2321,7 @@ impl Clone for BillingSystem {
             invoices: self.invoices.clone(),
             pool: self.pool.clone(),
             http_client: self.http_client.clone(),
+            providers: self.providers.clone(),
         }
     }
 }
@@ -2234,6 +2549,7 @@ impl BillingSystem {
                     .build()
                     .unwrap(),
             ),
+            providers: Arc::new(RwLock::new(Self::register_providers(config))),
         }
     }
 }

@@ -11,7 +11,7 @@
 | # | Plan File | Title | Complexity | Crates Touched | Status |
 |---|-----------|-------|------------|----------------|--------|
 | 01 | `01-security-hardening.plan.md` | Security Hardening (JWT, RBAC, KMS, Audit, Supply Chain) | XL | control-plane | ✅ Done |
-| 02 | `02-scheduler-deploy-guardian.plan.md` | Scheduler, Deploy Pipeline & Guardian | XL | control-plane, schema | ⏳ Pending |
+| 02 | `02-scheduler-deploy-guardian.plan.md` | Scheduler, Deploy Pipeline & Guardian | XL | control-plane, schema | ✅ Done |
 | 03 | `03-quic-message-bus.plan.md` | QUIC Message Bus | L | network, schema | ⏳ Pending |
 | 04 | `04-agent-activation.plan.md` | Agent Runtime Activation | XL | agent, network, schema, storage, registry | ⏳ Pending |
 | 05 | `05-edge-proxy-enhancements.plan.md` | Edge Proxy Enhancements | L | edge | ⏳ Pending |

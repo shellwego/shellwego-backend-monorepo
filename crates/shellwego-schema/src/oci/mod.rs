@@ -26,3 +26,6 @@ pub use descriptor::{Descriptor, ConfigDescriptor, LayerDescriptor, ManifestDesc
 pub use platform::Platform;
 pub use config::{ImageConfig, ContainerConfig, RootFs, HistoryEntry};
 pub use auth::{RegistryAuth, AuthToken, OciConfig};
+
+pub mod mirror;
+pub use mirror::{MirrorConfig, MirrorPriority, MirrorHealth, MirrorList};

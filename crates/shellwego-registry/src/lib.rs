@@ -6,6 +6,10 @@ use thiserror::Error;
 
 pub mod cache;
 pub mod pull;
+pub mod mirror;
+pub mod p2p;
+pub mod gc;
+pub mod distribution;
 
 // Re-export OCI types from schema
 pub use shellwego_schema::oci::{
@@ -20,6 +24,18 @@ pub use cache::{LayerCache, CachedImageInfo, CacheStats, LayerInfo};
 
 // Re-export pull types
 pub use pull::{ImagePuller, PulledImage, PullProgress, ImageReference};
+
+// Re-export mirror types
+pub use mirror::MirrorChain;
+
+// Re-export P2P types
+pub use p2p::{DragonflyClient, PeerId, PeerInfo, PieceTracker, PieceScheduler};
+
+// Re-export GC types
+pub use gc::{GarbageCollector, GcConfig, GcResult, LayerRefCount};
+
+// Re-export distribution types
+pub use distribution::{DistributionManager, DistributionManagerBuilder, PullOptions};
 
 #[derive(Error, Debug)]
 pub enum RegistryError {
@@ -43,6 +59,15 @@ pub enum RegistryError {
 
     #[error("Request error: {0}")]
     Request(#[from] reqwest::Error),
+
+    #[error("Mirror error: {0}")]
+    Mirror(String),
+
+    #[error("P2P error: {0}")]
+    P2P(String),
+
+    #[error("GC error: {0}")]
+    Gc(String),
 }
 
 /// Registry backend trait for pluggable image sources

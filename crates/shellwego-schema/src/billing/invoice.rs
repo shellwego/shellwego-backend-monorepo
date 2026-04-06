@@ -80,6 +80,8 @@ pub struct Invoice {
     pub created_at: DateTime<Utc>,
     /// When the invoice was paid (if applicable)
     pub paid_at: Option<DateTime<Utc>>,
+    /// Transaction ID from payment provider (set when paid)
+    pub transaction_id: Option<String>,
 }
 
 /// Invoice status
@@ -164,6 +166,7 @@ mod tests {
             due_date: Utc::now() + chrono::Duration::days(30),
             created_at: Utc::now(),
             paid_at: None,
+            transaction_id: None,
         };
 
         let json = serde_json::to_string(&invoice).unwrap();

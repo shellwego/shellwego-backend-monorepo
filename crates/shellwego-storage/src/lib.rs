@@ -10,13 +10,20 @@ pub mod encryption;
 pub mod oci;
 pub mod s3;
 pub mod zfs;
+pub mod provisioner;
+pub mod metrics;
+#[cfg(feature = "luks2")]
+pub mod luks;
 
-pub use encryption::{DataKey, EncryptionConfig, EncryptionProvider};
+pub use encryption::{DataKey, EncryptionConfig, EncryptionProvider, EncryptionStatus};
 pub use s3::{S3Backend, S3Config};
 pub use zfs::ZfsManager;
+pub use provisioner::VolumeProvisioner;
+pub use metrics::StorageMetrics;
 
 // Re-export OCI types from schema
 pub use oci::{OciClient, OciError};
+pub use shellwego_registry::pull::ImagePuller;
 pub use shellwego_schema::oci::{ConfigDescriptor, LayerDescriptor, Manifest, OciConfig, Platform};
 
 /// Storage backend trait for pluggability
@@ -114,6 +121,9 @@ pub enum StorageError {
 
     #[error("Backend error: {0}")]
     Backend(String),
+
+    #[error("Encryption error: {0}")]
+    Encryption(String),
 }
 
 /// Helper to sanitize dataset names

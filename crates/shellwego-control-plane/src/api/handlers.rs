@@ -227,8 +227,9 @@ pub async fn deploy_app(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
     super::middleware::check_permission(&current_user, "apps:write").map_err(|(code, err)| (code, Json(err)))?;
     // Verify app exists first
-    let _app: Option<App> = state.db.find_by_id("apps", &app_id).await.map_err(internal_db_err)?
+    let app: Option<App> = state.db.find_by_id("apps", &app_id).await.map_err(internal_db_err)?
         .ok_or_else(|| not_found_err("App"))?;
+    let app = app.unwrap();
 
     let deployment_id = Uuid::new_v4();
 
@@ -245,6 +246,42 @@ pub async fn deploy_app(
     });
 
     state.db.insert("deployments", &deployment_entity).await.map_err(internal_db_err)?;
+
+    // Update app status to "deploying"
+    let update = serde_json::json!({
+        "name": "",
+        "slug": "",
+        "status": "deploying",
+        "image": "",
+        "command": null,
+        "resources": null,
+        "env": {},
+        "domains": [],
+        "volumes": [],
+        "health_check": null,
+        "source": null,
+    });
+    state.db.update("apps", &app_id, &update).await.map_err(internal_db_err)?;
+
+    // Run the deploy pipeline (non-blocking)
+    let pipeline = state.deploy_pipeline.clone();
+    let image = app.image.clone();
+    tokio::spawn(async move {
+        match pipeline.deploy(
+            deployment_id,
+            app_id,
+            image,
+            1, // replicas — should come from app config
+            shellwego_schema::entities::app::ResourceSpec::default(),
+        ).await {
+            Ok(result) => {
+                info!("Deployment {} completed: {}", deployment_id, result.status);
+            }
+            Err(e) => {
+                error!("Deployment {} failed: {}", deployment_id, e);
+            }
+        }
+    });
 
     Ok(Json(serde_json::json!({
         "deployment_id": deployment_id,
@@ -304,6 +341,19 @@ pub async fn restart_app(
     let _app: Option<App> = state.db.find_by_id("apps", &app_id).await.map_err(internal_db_err)?
         .ok_or_else(|| not_found_err("App"))?;
 
+    // Run restart pipeline in background
+    let pipeline = state.deploy_pipeline.clone();
+    tokio::spawn(async move {
+        match pipeline.restart(&app_id).await {
+            Ok(result) => {
+                info!("Restart completed for app {}: {}", app_id, result.status);
+            }
+            Err(e) => {
+                error!("Restart failed for app {}: {}", app_id, e);
+            }
+        }
+    });
+
     Ok(Json(serde_json::json!({
         "status": "restarting",
         "app_id": app_id
@@ -316,25 +366,19 @@ pub async fn stop_app(
     Path(app_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
     super::middleware::check_permission(&current_user, "apps:write").map_err(|(code, err)| (code, Json(err)))?;
-    // Verify app exists and update status
+    // Verify app exists
     let _app: Option<App> = state.db.find_by_id("apps", &app_id).await.map_err(internal_db_err)?
         .ok_or_else(|| not_found_err("App"))?;
 
-    let update_entity = serde_json::json!({
-        "name": "",
-        "slug": "",
-        "status": "stopped",
-        "image": "",
-        "command": null,
-        "resources": null,
-        "env": {},
-        "domains": [],
-        "volumes": [],
-        "health_check": null,
-        "source": null,
-    });
-
-    state.db.update("apps", &app_id, &update_entity).await.map_err(internal_db_err)?;
+    // Run undeploy pipeline
+    match state.deploy_pipeline.undeploy(&app_id).await {
+        Ok(terminated) => {
+            info!("Stopped app {}: {} instances terminated", app_id, terminated);
+        }
+        Err(e) => {
+            warn!("Stop app {} warning: {}", app_id, e);
+        }
+    }
 
     Ok(Json(serde_json::json!({
         "status": "stopped",
@@ -348,13 +392,15 @@ pub async fn start_app(
     Path(app_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
     super::middleware::check_permission(&current_user, "apps:write").map_err(|(code, err)| (code, Json(err)))?;
-    let _app: Option<App> = state.db.find_by_id("apps", &app_id).await.map_err(internal_db_err)?
+    let app: Option<App> = state.db.find_by_id("apps", &app_id).await.map_err(internal_db_err)?
         .ok_or_else(|| not_found_err("App"))?;
+    let app = app.unwrap();
 
+    // Update status to deploying
     let update_entity = serde_json::json!({
         "name": "",
         "slug": "",
-        "status": "running",
+        "status": "deploying",
         "image": "",
         "command": null,
         "resources": null,
@@ -367,6 +413,42 @@ pub async fn start_app(
 
     state.db.update("apps", &app_id, &update_entity).await.map_err(internal_db_err)?;
 
+    // Trigger deploy pipeline in background
+    let pipeline = state.deploy_pipeline.clone();
+    let image = app.image.clone();
+    tokio::spawn(async move {
+        let deployment_id = Uuid::new_v4();
+        let deployment_entity = serde_json::json!({
+            "id": deployment_id.to_string(),
+            "app_id": app_id.to_string(),
+            "build_id": Uuid::nil().to_string(),
+            "status": "pending",
+            "strategy": "rolling",
+            "started_at": Utc::now().to_rfc3339(),
+            "finished_at": null,
+            "previous_deployment": null,
+        });
+        // Insert deployment record via DB directly
+        if let Err(e) = pipeline.scheduler.db.insert("deployments", &deployment_entity).await {
+            error!("Failed to create deployment record for app {}: {}", app_id, e);
+            return;
+        }
+        match pipeline.deploy(
+            deployment_id,
+            app_id,
+            image,
+            1,
+            shellwego_schema::entities::app::ResourceSpec::default(),
+        ).await {
+            Ok(result) => {
+                info!("Start deploy completed for app {}: {}", app_id, result.status);
+            }
+            Err(e) => {
+                error!("Start deploy failed for app {}: {}", app_id, e);
+            }
+        }
+    });
+
     Ok(Json(serde_json::json!({
         "status": "starting",
         "app_id": app_id
@@ -374,15 +456,32 @@ pub async fn start_app(
 }
 
 pub async fn get_logs(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Extension(current_user): Extension<CurrentUser>,
-    Path(_app_id): Path<Uuid>,
+    Path(app_id): Path<Uuid>,
     Query(_params): Query<LogQuery>,
 ) -> Result<Json<Vec<LogEntry>>, (StatusCode, Json<ErrorResponse>)> {
     super::middleware::check_permission(&current_user, "apps:read").map_err(|(code, err)| (code, Json(err)))?;
-    // Log streaming from live containers is not yet connected to DB;
-    // returns empty for now — real implementation would stream from agent.
-    Ok(Json(Vec::new()))
+    // Query app_instances for this app and return status entries as log entries
+    let instances: Vec<serde_json::Value> = state.db
+        .query("app_instances", HashMap::from([("app_id".to_string(), app_id.to_string())]), Some(100), None)
+        .await
+        .unwrap_or_default();
+
+    let mut logs = Vec::new();
+    for inst in &instances {
+        let status = inst["status"].as_str().unwrap_or("unknown");
+        let created_at_str = inst["created_at"].as_str().unwrap_or("");
+        let ts = chrono::DateTime::parse_from_rfc3339(created_at_str)
+            .map(|dt| dt.with_timezone(&Utc))
+            .unwrap_or_else(|_| Utc::now());
+        logs.push(LogEntry {
+            timestamp: ts,
+            message: format!("Instance {} status: {}", inst["id"].as_str().unwrap_or("?"), status),
+            source: format!("node:{}", inst["node_id"].as_str().unwrap_or("?")),
+        });
+    }
+    Ok(Json(logs))
 }
 
 #[derive(Debug, Deserialize)]
@@ -428,6 +527,30 @@ pub struct NodeCapacity {
     pub disk_gb: u64,
 }
 
+/// Helper: query heartbeat data for a node to get real capacity info.
+/// Uses sqlx::query with manual column extraction for sqlx::Any compatibility.
+async fn get_node_capacity_from_heartbeat(db: &Arc<crate::orm::Database>, node_id: &Uuid) -> NodeCapacity {
+    let sql = "SELECT cpu_usage, memory_usage, disk_usage FROM agent_heartbeats WHERE node_id = ? ORDER BY reported_at DESC LIMIT 1";
+    let rows: Vec<sqlx::any::AnyRow> = sqlx::query(sql)
+        .bind(node_id.to_string())
+        .fetch_all(db.pool())
+        .await
+        .unwrap_or_default();
+
+    if let Some(row) = rows.first() {
+        let _cpu_usage: f64 = row.try_get("cpu_usage").unwrap_or(0.0);
+        let _memory_usage: f64 = row.try_get("memory_usage").unwrap_or(0.0);
+        let disk_usage: f64 = row.try_get("disk_usage").unwrap_or(0.0);
+        NodeCapacity {
+            cpu_cores: 8.0, // TODO: derive from node registration data
+            memory_gb: 32,
+            disk_gb: (100.0 * (1.0 - disk_usage)) as u64,
+        }
+    } else {
+        NodeCapacity::default()
+    }
+}
+
 /// Register node request
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RegisterNodeRequest {
@@ -453,19 +576,16 @@ pub async fn list_nodes(
     // Merge in-memory agents with DB-persisted nodes
     let mut nodes: Vec<Node> = Vec::new();
 
-    // In-memory live agents
+    // In-memory live agents — query heartbeat data for capacity
     let agents = state.list_agents();
     for a in agents {
+        let capacity = get_node_capacity_from_heartbeat(&state.db, &a.node_id).await;
         nodes.push(Node {
             id: a.node_id,
             hostname: a.hostname,
             status: "ready".to_string(),
             region: a.region,
-            capacity: NodeCapacity {
-                cpu_cores: 8.0,
-                memory_gb: 32,
-                disk_gb: 100,
-            },
+            capacity,
             created_at: a.connected_at,
         });
     }
@@ -544,16 +664,13 @@ pub async fn get_node(
     // Check in-memory agents first
     if let Some(conn) = state.agents.get(&node_id) {
         let agent = conn.value().clone();
+        let capacity = get_node_capacity_from_heartbeat(&state.db, &agent.node_id).await;
         return Ok(Json(Node {
             id: agent.node_id,
             hostname: agent.hostname,
             status: "ready".to_string(),
             region: agent.region,
-            capacity: NodeCapacity {
-                cpu_cores: 8.0,
-                memory_gb: 32,
-                disk_gb: 100,
-            },
+            capacity,
             created_at: agent.connected_at,
         }));
     }
@@ -699,7 +816,15 @@ pub async fn create_volume(
 
     state.db.insert("volumes", &volume_entity).await.map_err(internal_db_err)?;
 
-    let volume: Option<Volume> = state.db.find_by_id("volumes", &id).await.map_err(internal_db_err)?;
+    // TODO(Plan 10): Dispatch provisioning command to agent via QUIC message bus.
+    // The actual ZFS provisioning happens asynchronously on the agent node.
+    // 1. Find available agent with sufficient storage capacity
+    // 2. Send ProvisionVolume command with volume_id, size_gb, encrypted
+    // 3. Agent provisions via VolumeProvisioner / ZfsManager
+    // 4. Agent reports back with VolumeStatus::Attached or VolumeStatus::Error
+    // For now, the volume remains in "creating" status until agent confirms.
+
+    let volume: Option<Volume> = state.db.find_by_id("volumes", &id).await.map_err(internal_db_err)?
     let volume = volume.ok_or_else(|| {
         (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse::new("INTERNAL_ERROR", "Failed to retrieve created volume")))
     })?;
@@ -810,14 +935,22 @@ pub async fn snapshot_volume(
     Path(volume_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
     super::middleware::check_permission(&current_user, "volumes:write").map_err(|(code, err)| (code, Json(err)))?;
-    // Verify volume exists
-    let _existing: Option<Volume> = state.db.find_by_id("volumes", &volume_id).await.map_err(internal_db_err)?
+    // Verify volume exists and is in a state that allows snapshotting
+    let existing: Option<Volume> = state.db.find_by_id("volumes", &volume_id).await.map_err(internal_db_err)?
         .ok_or_else(|| not_found_err("Volume"))?;
+
+    // TODO(Plan 10): Send snapshot command to the agent hosting this volume.
+    // 1. Look up which agent is hosting this volume (from attached_to or scheduling metadata)
+    // 2. Send SnapshotVolume command via QUIC message bus
+    // 3. Agent creates ZFS snapshot via ZfsManager::snapshot_volume()
+    // 4. Agent reports back with snapshot ID and size
+    // For now, return a placeholder snapshot ID.
 
     let snapshot_id = Uuid::new_v4();
     Ok(Json(serde_json::json!({
         "snapshot_id": snapshot_id,
         "volume_id": volume_id,
+        "volume_name": existing.name,
         "status": "creating"
     })))
 }

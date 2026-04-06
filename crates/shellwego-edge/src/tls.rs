@@ -466,10 +466,13 @@ impl CertificateManager {
         let mut params = CertificateParams::default();
         params.distinguished_name = DistinguishedName::new();
         params.distinguished_name.push(DnType::CommonName, domain);
-        params.alg = &PKCS_ECDSA_P256_SHA256;
+        // rcgen 0.12+: alg is now Option<&SignatureAlgorithm>
+        params.alg = Some(&PKCS_ECDSA_P256_SHA256);
         params.subject_alt_names = vec![rcgen::SanType::DnsName(domain.to_string())];
 
-        let key_pair = KeyPair::generate(&PKCS_ECDSA_P256_SHA256)
+        // rcgen 0.12+: KeyPair::generate() takes no argument;
+        // the algorithm is read from params.alg
+        let key_pair = KeyPair::generate()
             .map_err(|e| CertError::GenerationError(format!("Failed to generate key: {}", e)))?;
 
         let key_pem = key_pair.serialize_pem();

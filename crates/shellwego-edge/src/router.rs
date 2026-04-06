@@ -292,6 +292,9 @@ pub struct Route {
     pub tls: Option<RouteTlsConfig>,
     /// Route enabled
     pub enabled: bool,
+    /// Retry policy configuration
+    #[serde(default)]
+    pub retry: Option<crate::retry::RetryPolicyConfig>,
 }
 
 impl Default for Route {
@@ -305,6 +308,7 @@ impl Default for Route {
             load_balancer: LoadBalancerStrategy::RoundRobin,
             tls: None,
             enabled: true,
+            retry: None,
         }
     }
 }

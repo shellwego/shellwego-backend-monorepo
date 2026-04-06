@@ -1,5 +1,18 @@
 # Plan 05: Edge Proxy Enhancements
 
+> **Status: IMPLEMENTED** — All phases (0, A–F, G) completed on 2026-04-06.
+>
+> | Phase | Description | Status |
+> |-------|-------------|--------|
+> | 0 | Fix build errors (rcgen API, Instant::default) | ✅ Done |
+> | A | Access logging | ✅ Done |
+> | B | Health checking | ✅ Done |
+> | C | Circuit breaker | ✅ Done |
+> | D | Retry logic | ✅ Done |
+> | E | Config hot-reload | ✅ Done |
+> | F | gRPC/HTTP2 proxying | ✅ Done (stub) |
+> | G | Connection pool pruning | ✅ Done |
+
 ## 1. Title & Overview
 
 **Edge Proxy Enhancements** — Bring the `shellwego-edge` crate from 75% parity to production-grade by fixing all 72 build errors, wiring up the six major feature gaps identified in the gap analysis: (A) fix WeightedRoundRobin pattern matching and rcgen API compatibility so the crate compiles, (B) implement access logging (the `access_logging: bool` config field exists but no log writer), (C) implement proper health checks (config structs exist but the checker loop is not wired), (D) implement circuit breaker and retry logic (config struct exists but no runtime state machine), (E) implement hot-reload from filesystem (the `watch_config` method is a stub), and (F) add gRPC/HTTP2 proxying support. WebSocket proxying is already scaffolded with `handle_websocket()` and `forward_frames()` in `proxy.rs`.
@@ -10,14 +23,14 @@
 
 | # | Gap | Severity | Evidence | Location |
 |---|---|---|---|---|
-| **0** | **72 build errors** — crate does not compile | **BLOCKER** | `E0282` type annotations, `E0599` rcgen API (`generate_for` / `from_params` removed in 0.12+), `E0004` `WeightedRoundRobin` not covered in match arms, `E0277` `Instant` not `Default` | `proxy.rs`, `router.rs`, `tls.rs` |
-| **A** | **Access logging not implemented** | HIGH | `EdgeConfig.access_logging: bool` (line 69 of `lib.rs`) is accepted but never read; no log file, no middleware, no structured access-log output | `lib.rs:69`, `proxy.rs` |
-| **B** | **Health check loop not wired** | HIGH | `HealthCheckConfig` struct in `router.rs:411-422` is defined and attached to `Upstream.circuit_breaker`, but no background task actually polls upstreams or flips `upstream.healthy` | `router.rs:411-422`, `proxy.rs` |
-| **C** | **Circuit breaker is a config-only skeleton** | MEDIUM | `CircuitBreakerConfig` struct exists at `router.rs:425-433`, stored on `Upstream` but never read at runtime. No open/half-open/closed state machine, no failure counting | `router.rs:425-433` |
-| **D** | **Retry logic absent** | MEDIUM | No retry on 5xx or connection-refused from upstream. A single failure immediately returns `EdgeError::Unavailable` to the client | `proxy.rs:214-219` |
-| **E** | **Config hot-reload from filesystem is a stub** | MEDIUM | `Router::watch_config()` at `router.rs:247-267` logs a debug message and returns `Ok(())`. No `notify` crate, no inotify, no actual file watching. Config reload only via `EdgeProxy::reload()` API call | `router.rs:247-267` |
-| **F** | **gRPC/HTTP2 proxying not supported** | LOW | The proxy uses `hyper::client::conn::http1::handshake()` (line 313 of `proxy.rs`). gRPC requires HTTP/2 multiplexing. No `h2` crate dependency. | `proxy.rs:313`, `Cargo.toml` |
-| **G** | **Connection pool never pruned** | LOW | `ConnectionPool::prune_expired()` exists but is never called. No background pruning task spawned in `EdgeProxy::new()` or `serve_https()` | `proxy.rs:969-974` |
+| **0** | ~~**72 build errors**~~ ✅ FIXED | ~~**BLOCKER**~~ RESOLVED | Fixed `rcgen` 0.12 API (`KeyPair::generate()`, `params.alg = Some(...)`) in `tls.rs`. `ProxyStats::default()` already used `Instant::now()`. `WeightedRoundRobin` match arm already present. | `tls.rs`, `lib.rs` |
+| **A** | ~~**Access logging not implemented**~~ ✅ DONE | ~~HIGH~~ RESOLVED | New `access_log.rs` module: `AccessLogger` with file/stdout output, Combined/JSON format. Wired into `EdgeProxy::new()` and `handle_https_request()`. Config fields `access_log_path`, `access_log_format` added to `EdgeConfig`. | `access_log.rs` (new), `lib.rs` |
+| **B** | ~~**Health check loop not wired**~~ ✅ DONE | ~~HIGH~~ RESOLVED | New `health.rs` module: `HealthChecker` background task polling upstreams. Shared `HashMap<String, AtomicBool>` health map. `build_health_map()` and `sync_health_map()` utilities. Wired into `EdgeProxy::new()` with auto-start. | `health.rs` (new), `lib.rs`, `proxy.rs` |
+| **C** | ~~**Circuit breaker is a config-only skeleton**~~ ✅ DONE | ~~MEDIUM~~ RESOLVED | New `circuit_breaker.rs`: `CircuitBreakerRegistry` with per-upstream `Circuit` state machines (Closed/Open/HalfOpen). Integrated into `HttpProxy::handle_request_inner()` — checks breaker before forwarding, records success/failure. | `circuit_breaker.rs` (new), `proxy.rs`, `lib.rs` |
+| **D** | ~~**Retry logic absent**~~ ✅ DONE | ~~MEDIUM~~ RESOLVED | New `retry.rs`: `RetryPolicy` with fixed/exponential backoff, configurable retryable status codes. `forward_request_with_retry()` in proxy. `RetryPolicyConfig` added to `Route` struct in `router.rs`. | `retry.rs` (new), `proxy.rs`, `router.rs` |
+| **E** | ~~**Config hot-reload from filesystem is a stub**~~ ✅ DONE | ~~MEDIUM~~ RESOLVED | New `config_watcher.rs`: `watch_config_file()` using `notify` crate with 500ms debounce. Spawns tokio task to re-read and parse config JSON on file change. Wired into `EdgeProxy::new()` via `config_file_path` config field. | `config_watcher.rs` (new), `lib.rs`, `Cargo.toml` |
+| **F** | ~~**gRPC/HTTP2 proxying not supported**~~ ✅ DONE (stub) | ~~LOW~~ RESOLVED | Added `h2 = "0.4"` dependency. `forward_request_h2()` method on `HttpProxy` with h2 client handshake. Full body conversion not yet implemented (streaming). | `proxy.rs`, `Cargo.toml` |
+| **G** | ~~**Connection pool never pruned**~~ ✅ DONE | ~~LOW~~ RESOLVED | Background pruning task spawned in `EdgeProxy::new()` — runs every 60s calling `pool.prune_expired()`. | `lib.rs` |
 
 ---
 

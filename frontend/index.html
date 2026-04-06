@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ShellWeGo Dashboard</title>
+    <link rel="stylesheet" href="/style.css">
+    <link id="favicon" rel="icon" href="/assets/logo.svg">
+</head>
+<body>
+    <div id="app">
+        <!-- Login screen -->
+        <div id="login-screen" class="screen active">
+            <div class="login-card">
+                <img id="brand-logo" src="/assets/logo.svg" alt="Logo" class="logo">
+                <h1 id="brand-name">ShellWeGo</h1>
+                <p class="login-subtitle">Sovereign Cloud Platform</p>
+                <form id="login-form">
+                    <input type="email" id="email" placeholder="Email" required autocomplete="email">
+                    <input type="password" id="password" placeholder="Password" required autocomplete="current-password">
+                    <button type="submit" id="login-btn">Sign In</button>
+                </form>
+                <p id="login-error" class="error" hidden></p>
+                <p class="login-hint">Default: admin@shellwego.local</p>
+            </div>
+        </div>
+
+        <!-- Dashboard (shown after login) -->
+        <div id="dashboard-screen" class="screen" hidden>
+            <nav id="sidebar">
+                <div class="brand">
+                    <img id="nav-logo" src="/assets/logo.svg" alt="Logo" class="nav-logo">
+                    <span id="nav-brand-name">ShellWeGo</span>
+                </div>
+                <ul>
+                    <li data-section="overview" class="active">
+                        <span class="nav-icon">&#9632;</span> Overview
+                    </li>
+                    <li data-section="apps">
+                        <span class="nav-icon">&#9654;</span> Apps
+                    </li>
+                    <li data-section="nodes">
+                        <span class="nav-icon">&#9881;</span> Nodes
+                    </li>
+                    <li data-section="volumes">
+                        <span class="nav-icon">&#9679;</span> Volumes
+                    </li>
+                    <li data-section="domains">
+                        <span class="nav-icon">&#9737;</span> Domains
+                    </li>
+                    <li data-section="databases">
+                        <span class="nav-icon">&#9776;</span> Databases
+                    </li>
+                    <li data-section="secrets">
+                        <span class="nav-icon">&#9919;</span> Secrets
+                    </li>
+                </ul>
+                <div class="user-info">
+                    <span id="user-email"></span>
+                    <button id="logout-btn">Sign Out</button>
+                </div>
+            </nav>
+            <main id="main-content">
+                <!-- Sections rendered dynamically by app.js -->
+            </main>
+        </div>
+    </div>
+
+    <!-- Toast notification container -->
+    <div id="toast-container"></div>
+
+    <!-- Footer -->
+    <div class="brand-footer">
+        Powered by <a href="https://github.com/shellwego/shellwego-backend-monorepo" target="_blank">ShellWeGo</a> &mdash; Sovereign Cloud Platform
+    </div>
+
+    <script src="/app.js"></script>
+</body>
+</html>

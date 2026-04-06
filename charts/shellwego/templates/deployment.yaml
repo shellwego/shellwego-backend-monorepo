@@ -50,6 +50,8 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ include "shellwego.fullname" . }}
+            - secretRef:
+                name: {{ include "shellwego.fullname" . }}
           {{- with .Values.extraEnvFrom }}
             {{- toYaml . | nindent 12 }}
           {{- end }}

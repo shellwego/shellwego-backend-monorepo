@@ -10,18 +10,11 @@ data:
   RUST_LOG: {{ .Values.config.logLevel | quote }}
   LOG_LEVEL: {{ .Values.config.logLevel | quote }}
   BIND_ADDR: "0.0.0.0:8080"
-  DATABASE_URL: {{ include "shellwego.databaseUrl" . | quote }}
   ADMIN_EMAIL: {{ .Values.config.adminEmail | quote }}
   {{- if .Values.config.license }}
   SHELLWEGO_LICENSE: {{ .Values.config.license | quote }}
   {{- end }}
-  {{- if .Values.config.jwtSecret }}
-  JWT_SECRET: {{ .Values.config.jwtSecret | quote }}
-  {{- end }}
   KMS_BACKEND: {{ .Values.config.kmsBackend | quote }}
   {{- if .Values.config.vaultAddress }}
   VAULT_ADDRESS: {{ .Values.config.vaultAddress | quote }}
-  {{- end }}
-  {{- if .Values.config.vaultToken }}
-  VAULT_TOKEN: {{ .Values.config.vaultToken | quote }}
   {{- end }}

@@ -1,0 +1,9 @@
+target/
+.git/
+.github/
+docs/
+tests/
+frontend/node_modules/
+*.md
+CLA.md
+LICENSE

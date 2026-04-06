@@ -60,7 +60,7 @@ ShellWeGo is architected for three revenue streams. Pick one, or run all three:
 ```bash
 # 1. Buy a Hetzner CX31 ($12/month, 4 vCPU, 16GB RAM)
 # 2. Run this:
-curl -fsSL https://shellwego.com/install.sh  | bash
+curl -fsSL https://raw.githubusercontent.com/shellwego/shellwego-backend-monorepo/main/scripts/install.sh  | sudo bash
 # 3. Point domain, setup Stripe
 # 4. Tweet "New PaaS for [Your City] developers"
 # 5. Charge local startups $15/month (half the price of Heroku, 10x the margin)
@@ -144,7 +144,7 @@ Run the infrastructure for others who don't want to:
 ```bash
 # On Bare Metal or KVM-enabled servers
 
-curl -fsSL https://shellwego.com/install.sh | sudo bash -s -- \
+curl -fsSL https://raw.githubusercontent.com/shellwego/shellwego-backend-monorepo/main/scripts/install.sh | sudo bash -s -- \
   --domain paas.yourcompany.com \
   --email admin@yourcompany.com \
   --license agpl  # or 'commercial' if you bought a key
@@ -155,7 +155,7 @@ curl -fsSL https://shellwego.com/install.sh | sudo bash -s -- \
 ```bash
 # On Hetzner Cloud, DigitalOcean, AWS EC2, etc.
 
-curl -fsSL https://shellwego.com/install.sh | sudo bash -s -- \
+curl -fsSL https://raw.githubusercontent.com/shellwego/shellwego-backend-monorepo/main/scripts/install.sh | sudo bash -s -- \
   --domain paas.yourcompany.com \
   --email admin@yourcompany.com \
   --mode pvm \
@@ -167,7 +167,7 @@ curl -fsSL https://shellwego.com/install.sh | sudo bash -s -- \
 ```bash
 # For function workloads without virtualization
 
-curl -fsSL https://shellwego.com/install.sh | sudo bash -s -- \
+curl -fsSL https://raw.githubusercontent.com/shellwego/shellwego-backend-monorepo/main/scripts/install.sh | sudo bash -s -- \
   --domain paas.yourcompany.com \
   --email admin@yourcompany.com \
   --mode wasm \
@@ -184,28 +184,9 @@ This installs:
 
 ### Method 2: Docker Compose (Development/Testing)
 ```yaml
-# docker-compose.yml
-version: "3.8"
-services:
-  shellwego:
-    image: shellwego/shellwego:latest
-    ports:
-      - "80:80"
-      - "443:443"
-      - "8080:8080"  # Admin UI
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - shellwego-data:/data
-      - /dev/kvm:/dev/kvm  # Required for microVMs
-    environment:
-      - SHELLWEGO_DOMAIN=localhost
-      - SHELLWEGO_LICENSE=AGPL-3.0
-      - SHELLWEGO_ADMIN_EMAIL=admin@example.com
-      - DATABASE_URL=sqlite:///data/shellwego.db
-    privileged: true  # Required for Firecracker
-    
-volumes:
-  shellwego-data:
+# See docker-compose.yml in the repository root for the development stack.
+# docker-compose up -d
+# Visit http://localhost:8080
 ```
 
 ```bash
@@ -216,7 +197,7 @@ docker-compose up -d
 
 ### Method 3: Kubernetes (Scale)
 ```bash
-helm repo add shellwego https://charts.shellwego.com 
+helm repo add shellwego https://shellwego.github.io/shellwego-backend-monorepo/charts
 helm install shellwego shellwego/shellwego \
   --set domain=paas.yourcompany.com \
   --set license.type=agpl \
@@ -513,7 +494,7 @@ zfs set atime=off shellwego  # Performance optimization
 mount bpffs /sys/fs/bpf -t bpf
 
 # 4. Install ShellWeGo (Static Binary)
-curl -fsSL https://shellwego.com/install.sh  | sudo bash
+curl -fsSL https://raw.githubusercontent.com/shellwego/shellwego-backend-monorepo/main/scripts/install.sh | sudo bash
 
 # 5. Initialize Control Plane
 shellwego init --role=control-plane \

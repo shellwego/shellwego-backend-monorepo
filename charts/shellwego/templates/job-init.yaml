@@ -1,0 +1,28 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "shellwego.fullname" . }}-init
+  labels:
+    {{- include "shellwego.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": hook-succeeded
+spec:
+  template:
+    metadata:
+      name: {{ include "shellwego.fullname" . }}-init
+      labels:
+        {{- include "shellwego.labels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: init
+          image: "{{ .Values.image.repository }}:{{ include "shellwego.imageTag" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["shellwego-control-plane", "migrate"]
+          envFrom:
+            - secretRef:
+                name: {{ include "shellwego.fullname" . }}
+            - configMapRef:
+                name: {{ include "shellwego.fullname" . }}

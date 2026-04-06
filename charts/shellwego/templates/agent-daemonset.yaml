@@ -1,0 +1,47 @@
+{{- if .Values.agent.enabled -}}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "shellwego.fullname" . }}-agent
+  labels:
+    {{- include "shellwego.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent
+spec:
+  selector:
+    matchLabels:
+      {{- include "shellwego.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: agent
+  template:
+    metadata:
+      labels:
+        {{- include "shellwego.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: agent
+    spec:
+      hostPID: true
+      containers:
+        - name: agent
+          image: "{{ .Values.agent.image.repository }}:{{ .Values.agent.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.agent.image.pullPolicy | default "IfNotPresent" }}
+          securityContext:
+            privileged: true
+          env:
+            - name: CONTROL_PLANE_URL
+              value: "http://{{ include "shellwego.fullname" . }}:8080"
+            - name: NODE_REGION
+              value: {{ .Values.agent.region | default .Values.config.defaultRegion | quote }}
+            - name: RUST_LOG
+              value: {{ .Values.config.logLevel | quote }}
+          volumeMounts:
+            - name: lib-modules
+              mountPath: /lib/modules
+              readOnly: true
+            - name: dev-kvm
+              mountPath: /dev/kvm
+      volumes:
+        - name: lib-modules
+          hostPath:
+            path: /lib/modules
+        - name: dev-kvm
+          hostPath:
+            path: /dev/kvm
+{{- end }}

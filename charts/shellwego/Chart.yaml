@@ -2,13 +2,13 @@ apiVersion: v2
 name: shellwego
 description: ShellWeGo Sovereign Cloud Platform
 type: application
-version: 0.1.0
+version: 0.2.0
 appVersion: "0.1.0"
 maintainers:
   - name: ShellWeGo Contributors
     email: maintainers@shellwego.dev
-    url: https://github.com/shellwego/shellwego
-home: https://github.com/shellwego/shellwego
+    url: https://github.com/shellwego/shellwego-backend-monorepo
+home: https://github.com/shellwego/shellwego-backend-monorepo
 keywords:
   - sovereign-cloud
   - edge-computing
@@ -17,7 +17,12 @@ keywords:
   - rust
   - self-hosted
 sources:
-  - https://github.com/shellwego/shellwego
+  - https://github.com/shellwego/shellwego-backend-monorepo
+dependencies:
+  - name: postgresql
+    version: "16.x.x"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: postgresql.enabled
 annotations:
   catalog.cattle.io/certified: "false"
   catalog.cattle.io/display-name: ShellWeGo

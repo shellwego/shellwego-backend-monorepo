@@ -1,3 +1,10 @@
+# =============================================================================
+# ShellWeGo Development Stack
+# =============================================================================
+# NOTE: This docker-compose.yml is for development/testing only.
+# For production, use the Helm chart or install.sh.
+# =============================================================================
+
 version: "3.8"
 
 services:
@@ -12,9 +19,21 @@ services:
       - DATABASE_URL=postgres://shellwego:shellwego@postgres:5432/shellwego
       - NATS_URL=nats://nats:4222
       - RUST_LOG=info
+      - SHELLWEGO_DOMAIN=localhost
+      - ADMIN_EMAIL=admin@localhost
+      - STATIC_DIR=/var/lib/shellwego/static
     depends_on:
-      - postgres
-      - nats
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   # Agent (for local testing, requires privileged)
   agent:
@@ -31,6 +50,7 @@ services:
       - agent-data:/var/lib/shellwego
     depends_on:
       - control-plane
+    restart: unless-stopped
 
   # Supporting services
   postgres:
@@ -41,6 +61,11 @@ services:
       POSTGRES_DB: shellwego
     volumes:
       - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shellwego"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   nats:
     image: nats:2.10-alpine

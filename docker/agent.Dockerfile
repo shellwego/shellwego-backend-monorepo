@@ -2,15 +2,19 @@
 # ShellWeGo - Agent Dockerfile
 # =============================================================================
 # Purpose-built image for the shellwego-agent (worker node daemon).
+# Supports multi-arch builds (linux/amd64, linux/arm64).
 # Requires KVM/QEMU for VM management and Firecracker support.
 # Usage:
-#   docker build -f docker/agent.Dockerfile -t shellwego/agent:latest ..
+#   docker buildx build -f docker/agent.Dockerfile --platform linux/amd64 -t shellwego/agent:latest .
 # =============================================================================
 
 # ---------------------------------------------------------------------------
 # Stage 1: Builder
 # ---------------------------------------------------------------------------
-FROM rust:1.75-slim AS builder
+FROM --platform=$BUILDPLATFORM rust:1.94-slim AS builder
+
+ARG TARGETPLATFORM
+ARG BUILDPLATFORM
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
@@ -23,7 +27,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /build
 
-# Dependency caching layer
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 
 # Stub crate sources for dependency caching
@@ -56,7 +59,7 @@ FROM debian:bookworm-slim AS runtime
 
 LABEL maintainer="ShellWeGo Contributors"
 LABEL description="ShellWeGo Agent - Worker node daemon for VM and workload management"
-LABEL org.opencontainers.image.source="https://github.com/shellwego/shellwego"
+LABEL org.opencontainers.image.source="https://github.com/shellwego/shellwego-backend-monorepo"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \

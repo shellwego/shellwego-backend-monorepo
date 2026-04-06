@@ -38,7 +38,7 @@ readonly INSTALL_DIR="/opt/shellwego"
 readonly CONFIG_DIR="/etc/shellwego"
 readonly DATA_DIR="/var/lib/shellwego"
 readonly LOG_DIR="/var/log/shellwego"
-readonly TLS_DIR="${CONFIG_DIR}/tls"
+readonly TLS_DIR="${DATA_DIR}/tls"
 readonly BIN_DIR="/usr/local/bin"
 readonly MONOREPO_URL="https://github.com/shellwego/shellwego-backend-monorepo.git"
 
@@ -108,6 +108,8 @@ MODE="auto"
 LICENSE="agpl"
 UNINSTALL=false
 PURGE_ZFS=false
+SKIP_BUILD=false
+BINARY_URL=""
 
 usage() {
   sed -n '2,/^#  ===/p' "$0" | sed 's/^# \?//'
@@ -123,6 +125,8 @@ parse_args() {
       --license=*) LICENSE="${1#*=}" ;;
       --uninstall) UNINSTALL=true ;;
       --purge-zfs) PURGE_ZFS=true ;;
+      --skip-build) SKIP_BUILD=true ;;
+      --binary-url=*) BINARY_URL="${1#*=}" ;;
       --help|-h)   usage ;;
       *)
         die "Unknown option: $1. Run with --help for usage."
@@ -839,7 +843,7 @@ print_success() {
   printf "${GREEN}${BOLD}  ShellWeGo Sovereign Cloud — Installation Complete!${RESET}\n"
   printf "${GREEN}${BOLD}═══════════════════════════════════════════════════════════════${RESET}\n"
   printf "\n"
-  printf "  ${BOLD}Dashboard:${RESET}    ${CYAN}${proto}://${DOMAIN}/dashboard${RESET}\n"
+  printf "  ${BOLD}Web UI:${RESET}       ${CYAN}${proto}://${DOMAIN}${RESET}\n"
   printf "  ${BOLD}API Endpoint:${RESET} ${CYAN}${proto}://${DOMAIN}:8443${RESET}\n"
   printf "  ${BOLD}gRPC:${RESET}         ${CYAN}${DOMAIN}:9090${RESET}\n"
   printf "\n"
@@ -978,7 +982,19 @@ main() {
   install_deps
   install_rust
   install_wasmtime_fallback
-  build_from_source
+  if [[ -n "$BINARY_URL" ]]; then
+      download_binaries "$BINARY_URL"
+  elif [[ "$SKIP_BUILD" == false ]]; then
+      build_from_source
+  else
+      step "Skipping build (--skip-build flag)"
+      local -a bins=(shellwego-control-plane shellwego-agent shellwego-cli)
+      for bin in "${bins[@]}"; do
+          if [[ ! -f "${BIN_DIR}/${bin}" ]]; then
+              die "Binary ${BIN_DIR}/${bin} not found. Cannot skip build."
+          fi
+      done
+  fi
   init_zfs_pool
   generate_tls_cert
   write_config

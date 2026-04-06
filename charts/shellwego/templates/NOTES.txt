@@ -2,6 +2,14 @@ Thank you for installing {{ .Chart.Name }}!
 
 Your ShellWeGo Sovereign Cloud Platform is being deployed.
 
+== First Login ==
+
+  Default credentials:
+    Email:    admin@{{ .Values.config.domain }}
+    Password: shellwego-admin-12345
+
+  IMPORTANT: Change the default password immediately after first login.
+
 == Accessing the Control Plane ==
 
 {{- if .Values.ingress.enabled }}
@@ -32,6 +40,16 @@ Your ShellWeGo Sovereign Cloud Platform is being deployed.
 
 {{- end }}
 
+== Dashboard ==
+
+  {{- if .Values.ingress.enabled }}
+  Dashboard: http{{ if .Values.ingress.tls }}s{{ end }}://{{ (index .Values.ingress.hosts 0).host }}
+  {{- else }}
+  Forward the dashboard port:
+    kubectl port-forward svc/{{ include "shellwego.fullname" . }} 8080:8080
+  Then open: http://localhost:8080
+  {{- end }}
+
 == Platform Configuration ==
 
   Domain:    {{ .Values.config.domain }}
@@ -58,6 +76,6 @@ The embedded PostgreSQL instance is running. To connect:
   2. Configure the CLI to point to your control plane:
      shellwego config set api-url http://localhost:{{ .Values.service.port }}
 
-  3. Create your admin account and get started!
+  3. Login with the default admin credentials and get started!
 
-Documentation: https://github.com/shellwego/shellwego
+Documentation: https://github.com/shellwego/shellwego-backend-monorepo

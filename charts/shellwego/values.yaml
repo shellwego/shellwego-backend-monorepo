@@ -209,3 +209,14 @@ persistence:
   accessMode: ReadWriteOnce
   # -- Annotations on the PVC
   annotations: {}
+
+# =============================================================================
+# Agent Configuration
+# =============================================================================
+agent:
+  enabled: false
+  image:
+    repository: shellwego/agent
+    tag: ""
+    pullPolicy: IfNotPresent
+  region: default

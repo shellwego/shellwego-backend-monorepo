@@ -1,0 +1,35 @@
+# ShellWeGo White-Label Branding Configuration
+# Place this file at config/branding.yml or /etc/shellwego/branding.yml
+# The dashboard reads these values at runtime via GET /v1/config/branding.
+
+brand:
+  # Platform name shown in dashboard header and page title
+  name: "ShellWeGo"
+  # Path to logo SVG (relative to frontend/ or absolute URL)
+  logo: "/assets/logo.svg"
+  # Favicon path
+  favicon: "/assets/logo.svg"
+  # Primary brand color (hex)
+  primary_color: "#00D4AA"
+  # Font family
+  font: "Inter"
+  # Dashboard theme: "dark" or "light"
+  theme: "dark"
+
+  # Commercial license features
+  # hide_powered_by: true        # Remove "Powered by ShellWeGo" footer
+  # custom_footer: "Your custom footer text"
+  # disable_telemetry: true      # AGPL requires telemetry opt-in
+
+email:
+  from: "noreply@shellwego.local"
+  # smtp_server: "smtp.sendgrid.net"
+  # smtp_port: 587
+  # smtp_username: "apikey"
+  # smtp_password_env: "SMTP_PASSWORD"
+
+payments:
+  gateway: "none"  # Options: none, stripe, paystack, flutterwave, mpesa
+  currency: "USD"
+  # stripe_public_key: ""
+  # stripe_secret_key_env: "STRIPE_SECRET_KEY"

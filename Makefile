@@ -95,3 +95,31 @@ scan:
 # Generate JWT dev keys
 jwt-keys:
         bash scripts/generate-jwt-keys.sh
+
+# =============================================================================
+# Docker builds
+# =============================================================================
+docker-build-cp:
+        docker build -f docker/control-plane.Dockerfile -t shellwego/control-plane:latest .
+
+docker-build-agent:
+        docker build -f docker/agent.Dockerfile -t shellwego/agent:latest .
+
+docker-build: docker-build-cp docker-build-agent
+
+# =============================================================================
+# Helm
+# =============================================================================
+helm-package:
+        helm package charts/shellwego
+
+helm-lint:
+        helm lint charts/shellwego
+
+helm-template:
+        helm template shellwego charts/shellwego
+
+# Dashboard dev server (requires control-plane running on :8080)
+dev-dashboard:
+        @echo "Open http://localhost:8080 in your browser"
+        @echo "Or use: python3 -m http.server 3000 --directory frontend"

@@ -16,6 +16,7 @@ path = "src/main.rs"
 shellwego-schema = { path = "../shellwego-schema" }
 shellwego-storage = { path = "../shellwego-storage" }
 shellwego-network = { path = "../shellwego-network", features = ["quinn"] }
+shellwego-observability = { path = "../shellwego-observability" }
 
 # Async runtime
 tokio = { workspace = true, features = ["full", "process"] }

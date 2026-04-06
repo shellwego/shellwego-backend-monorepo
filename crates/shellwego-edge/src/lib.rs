@@ -4,8 +4,18 @@
 //! Handles HTTP/HTTPS routing, TLS termination, ACME certificate provisioning,
 //! WebSocket proxying, and load balancing.
 
+pub mod access_log;
+pub mod circuit_breaker;
+pub mod config_watcher;
+pub mod health;
+pub mod proxy;
+pub mod retry;
+pub mod router;
+pub mod tls;
+
+use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -15,10 +25,6 @@ use hyper::{Body, Request, Response, StatusCode};
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, RwLock};
 use tracing::{info, warn};
-
-pub mod proxy;
-pub mod router;
-pub mod tls;
 
 pub use proxy::{ConnectionPool, HttpProxy, ProxyMetrics, RequestContext};
 pub use router::{ConfigSource, Matcher, Middleware, RequestInfo, Route, Router, Upstream};
@@ -41,6 +47,16 @@ pub struct EdgeProxy {
     stats: ProxyStats,
     /// Shutdown signal
     shutdown_tx: broadcast::Sender<()>,
+    /// Access logger (if enabled)
+    access_logger: Option<Arc<access_log::AccessLogger>>,
+    /// Health checker handle
+    health_checker: Option<Arc<health::HealthChecker>>,
+    /// Circuit breaker registry
+    circuit_breakers: Arc<circuit_breaker::CircuitBreakerRegistry>,
+    /// Shared health state map (upstream URL -> healthy flag)
+    health_map: Arc<parking_lot::RwLock<HashMap<String, AtomicBool>>>,
+    /// Config file watcher (kept alive for the duration of the proxy)
+    _config_watcher: Option<notify::RecommendedWatcher>,
 }
 
 /// Edge configuration
@@ -66,6 +82,12 @@ pub struct EdgeConfig {
     pub max_connections_per_upstream: usize,
     /// Enable access logging
     pub access_logging: bool,
+    /// Access log file path (None = stdout)
+    pub access_log_path: Option<String>,
+    /// Access log format
+    pub access_log_format: Option<access_log::AccessLogFormat>,
+    /// Path to config file for hot-reload (None = no file watching)
+    pub config_file_path: Option<String>,
 }
 
 impl Default for EdgeConfig {
@@ -81,6 +103,9 @@ impl Default for EdgeConfig {
             idle_timeout_secs: 90,
             max_connections_per_upstream: 100,
             access_logging: true,
+            access_log_path: None,
+            access_log_format: None,
+            config_file_path: None,
         }
     }
 }
@@ -195,19 +220,114 @@ impl EdgeProxy {
             (None, None)
         };
 
+        // Create circuit breaker registry
+        let circuit_breakers = Arc::new(circuit_breaker::CircuitBreakerRegistry::new());
+
+        // Register circuit breakers for all upstreams that have CB configs
+        for route in &config.routes {
+            for upstream in &route.upstreams {
+                if let Some(ref cb_config) = upstream.circuit_breaker {
+                    circuit_breakers.register(&upstream.url, cb_config.clone());
+                }
+            }
+        }
+
+        // Build health map from routes
+        let router_read = router.read().await;
+        let health_map = Arc::new(parking_lot::RwLock::new(
+            health::build_health_map(&router_read),
+        ));
+        drop(router_read);
+
+        // Create and start health checker if any upstream has health check config
+        let has_health_checks = config.routes.iter().any(|route| {
+            route
+                .upstreams
+                .iter()
+                .any(|u| u.health_check.is_some())
+        });
+
+        let health_checker = if has_health_checks {
+            let checker = Arc::new(health::HealthChecker::new(
+                router.clone(),
+                Arc::clone(&health_map),
+            ));
+            checker.clone().start();
+            info!("Health checker started");
+            Some(checker)
+        } else {
+            None
+        };
+
         // Create HTTP proxy
         let proxy = proxy::HttpProxy::with_timeouts(
             Duration::from_secs(config.request_timeout_secs),
             Duration::from_secs(config.connect_timeout_secs),
+            Arc::clone(&circuit_breakers),
+            Arc::clone(&health_map),
         );
+
+        // Create access logger
+        let access_logger = if config.access_logging {
+            match &config.access_log_path {
+                Some(path) => Some(Arc::new(
+                    access_log::AccessLogger::file(
+                        path,
+                        config
+                            .access_log_format
+                            .unwrap_or(access_log::AccessLogFormat::Combined),
+                    )
+                    .await?,
+                )),
+                None => Some(Arc::new(access_log::AccessLogger::stdout(
+                    config
+                        .access_log_format
+                        .unwrap_or(access_log::AccessLogFormat::Combined),
+                ))),
+            }
+        } else {
+            None
+        };
+
+        if access_logger.is_some() {
+            info!("Access logging enabled");
+        }
 
         // Create shutdown channel
         let (shutdown_tx, _) = broadcast::channel::<()>(1);
 
+        // Start config file watcher if path is provided
+        let mut config_watcher: Option<notify::RecommendedWatcher> = None;
+        if let Some(ref config_path) = config.config_file_path {
+            match config_watcher::watch_config_file(config_path, router.clone()) {
+                Ok(watcher) => {
+                    info!("Config file watcher started for: {}", config_path);
+                    config_watcher = Some(watcher);
+                }
+                Err(e) => {
+                    warn!("Failed to start config file watcher: {}", e);
+                }
+            }
+        }
+
+        // Spawn connection pool pruning task
+        let pool = proxy.pool();
+        let idle_timeout = Duration::from_secs(config.idle_timeout_secs);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+                pool.prune_expired();
+            }
+        });
+
         info!(
-            "EdgeProxy initialized with {} routes, TLS={}",
+            "EdgeProxy initialized with {} routes, TLS={}, access_logging={}, health_checker={}, config_watcher={}",
             config.routes.len(),
-            tls_manager.is_some()
+            tls_manager.is_some(),
+            access_logger.is_some(),
+            health_checker.is_some(),
+            config_watcher.is_some(),
         );
 
         Ok(Self {
@@ -218,6 +338,11 @@ impl EdgeProxy {
             config,
             stats: ProxyStats::default(),
             shutdown_tx,
+            access_logger,
+            health_checker,
+            circuit_breakers,
+            health_map,
+            _config_watcher: config_watcher,
         })
     }
 
@@ -335,6 +460,7 @@ impl EdgeProxy {
         let tls_manager = self.tls_manager.clone();
         let cert_resolver = self.cert_resolver.clone();
         let stats = Arc::new(self.stats.clone());
+        let access_logger = self.access_logger.clone();
 
         // Build the TLS acceptor if we have a certificate resolver
         let tls_acceptor = if let Some(resolver) = &self.cert_resolver {
@@ -374,6 +500,7 @@ impl EdgeProxy {
                                 let _cert_resolver = cert_resolver.clone();
                                 let tls_acceptor = tls_acceptor.clone();
                                 let stats = stats.clone();
+                                let access_logger = access_logger.clone();
 
                                 tokio::spawn(async move {
                                     stats.active_connections.fetch_add(1, Ordering::Relaxed);
@@ -385,17 +512,14 @@ impl EdgeProxy {
                                         // Wrap the TCP stream with TLS
                                         match acceptor.accept(stream).await {
                                             Ok(tls_stream) => {
-                                                // The CertificateResolver caches resolved certs
-                                                // internally via its sync cache, so no explicit
-                                                // warm_cache call is needed here.
-
                                                 let service = service_fn(move |req: Request<Body>| {
                                                     let router = router.clone();
                                                     let tls_manager = tls_manager.clone();
                                                     let proxy = proxy.clone();
                                                     let stats = stats.clone();
+                                                    let access_logger = access_logger.clone();
                                                     async move {
-                                                        handle_https_request(req, router, tls_manager, proxy, stats).await
+                                                        handle_https_request(req, router, tls_manager, proxy, stats, access_logger).await
                                                     }
                                                 });
 
@@ -415,8 +539,9 @@ impl EdgeProxy {
                                             let tls_manager = tls_manager.clone();
                                             let proxy = proxy.clone();
                                             let stats = stats.clone();
+                                            let access_logger = access_logger.clone();
                                             async move {
-                                                handle_https_request(req, router, tls_manager, proxy, stats).await
+                                                handle_https_request(req, router, tls_manager, proxy, stats, access_logger).await
                                             }
                                         });
 
@@ -484,7 +609,7 @@ impl EdgeProxy {
         Ok(())
     }
 
-    /// Reload configuration without dropping connections
+    /// Reload configuration without dropping connections.
     pub async fn reload(&self, new_config: EdgeConfig) -> Result<(), EdgeError> {
         info!("Reloading EdgeProxy configuration");
 
@@ -494,6 +619,19 @@ impl EdgeProxy {
 
         for route in &new_config.routes {
             router.add_route(route.clone())?;
+        }
+
+        // Re-sync health map
+        health::sync_health_map(&self.health_map, &router);
+
+        // Register new circuit breakers
+        for route in &new_config.routes {
+            for upstream in &route.upstreams {
+                if let Some(ref cb_config) = upstream.circuit_breaker {
+                    self.circuit_breakers
+                        .register(&upstream.url, cb_config.clone());
+                }
+            }
         }
 
         info!(
@@ -520,6 +658,21 @@ impl EdgeProxy {
     /// Add a route dynamically
     pub async fn add_route(&self, route: Route) -> Result<(), EdgeError> {
         let mut router = self.router.write().await;
+
+        // Register circuit breakers for new upstreams
+        for upstream in &route.upstreams {
+            if let Some(ref cb_config) = upstream.circuit_breaker {
+                self.circuit_breakers
+                    .register(&upstream.url, cb_config.clone());
+            }
+            // Add to health map if health check is configured
+            if upstream.health_check.is_some() {
+                let mut map = self.health_map.write();
+                map.entry(upstream.url.clone())
+                    .or_insert_with(|| AtomicBool::new(upstream.healthy));
+            }
+        }
+
         router.add_route(route)
     }
 
@@ -527,6 +680,16 @@ impl EdgeProxy {
     pub async fn remove_route(&self, route_id: &str) -> Result<(), EdgeError> {
         let mut router = self.router.write().await;
         router.remove_route(route_id)
+    }
+
+    /// Get the circuit breaker registry (for monitoring/status)
+    pub fn circuit_breakers(&self) -> &Arc<circuit_breaker::CircuitBreakerRegistry> {
+        &self.circuit_breakers
+    }
+
+    /// Get the health map (for monitoring/status)
+    pub fn health_map(&self) -> &Arc<parking_lot::RwLock<HashMap<String, AtomicBool>>> {
+        &self.health_map
     }
 }
 
@@ -541,6 +704,7 @@ async fn handle_https_request(
     tls_manager: Option<Arc<tls::CertificateManager>>,
     proxy: HttpProxy,
     stats: Arc<ProxyStats>,
+    access_logger: Option<Arc<access_log::AccessLogger>>,
 ) -> Result<Response<Body>, EdgeError> {
     let start = Instant::now();
 
@@ -557,6 +721,29 @@ async fn handle_https_request(
 
     match router_guard.match_request(&request_info) {
         Some(route) => {
+            let upstream_url = route
+                .upstreams
+                .first()
+                .map(|u| u.url.clone())
+                .unwrap_or_default();
+
+            // Get the request ID if set by middleware
+            let request_id = req
+                .headers()
+                .get("X-Request-Id")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+
+            let user_agent = req
+                .headers()
+                .get("user-agent")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+
+            let client_ip = request_info.client_ip.clone();
+            let method = request_info.method.clone();
+            let path = request_info.path.clone();
+
             let result = proxy.handle_request(req, route).await;
 
             // Update stats
@@ -567,10 +754,50 @@ async fn handle_https_request(
                 stats.errors.fetch_add(1, Ordering::Relaxed);
             }
 
+            // Log access
+            if let Some(ref logger) = access_logger {
+                let entry = access_log::AccessLogEntry {
+                    client_ip,
+                    method,
+                    path,
+                    protocol: "HTTP/1.1".to_string(),
+                    status: result
+                        .as_ref()
+                        .map(|r| r.status().as_u16())
+                        .unwrap_or(502),
+                    response_size: 0,
+                    latency_ms: start.elapsed().as_millis() as u64,
+                    user_agent,
+                    request_id,
+                    upstream_url: Some(upstream_url),
+                };
+                logger.log(&entry).await;
+            }
+
             result
         }
         None => {
-            // No matching route
+            // No matching route — still log the 404
+            if let Some(ref logger) = access_logger {
+                let entry = access_log::AccessLogEntry {
+                    client_ip: request_info.client_ip,
+                    method: request_info.method,
+                    path: request_info.path,
+                    protocol: "HTTP/1.1".to_string(),
+                    status: 404,
+                    response_size: 9, // "Not Found"
+                    latency_ms: start.elapsed().as_millis() as u64,
+                    user_agent: req
+                        .headers()
+                        .get("user-agent")
+                        .and_then(|v| v.to_str().ok())
+                        .map(|s| s.to_string()),
+                    request_id: None,
+                    upstream_url: None,
+                };
+                logger.log(&entry).await;
+            }
+
             Ok(Response::builder()
                 .status(StatusCode::NOT_FOUND)
                 .body(Body::from("Not Found"))

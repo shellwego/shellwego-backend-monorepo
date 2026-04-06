@@ -95,3 +95,8 @@ scan:
 # Generate JWT dev keys
 jwt-keys:
         bash scripts/generate-jwt-keys.sh
+
+# Validate monitoring configuration and dashboards
+validate-monitoring:
+        python3 -m json.tool config/grafana/dashboards/*.json > /dev/null
+        python3 scripts/validate-dashboards.sh config/grafana/dashboards

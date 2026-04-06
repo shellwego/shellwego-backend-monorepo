@@ -1,4 +1,4 @@
-//! Agent-local metrics collection and export
+//! Agent-local metrics collection and export, wired to shared observability registry
 
 use bytes::Bytes;
 use http_body_util::Full;
@@ -6,6 +6,7 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
+use shellwego_observability::metrics::{MetricsRegistry, builtin};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -13,9 +14,10 @@ use sysinfo::{Disks, System};
 use tokio::net::TcpListener;
 use tracing::info;
 
-/// Agent metrics collector
+/// Agent metrics collector — delegates to shared MetricsRegistry
 pub struct MetricsCollector {
     node_id: uuid::Uuid,
+    registry: Arc<MetricsRegistry>,
     system: Arc<Mutex<System>>,
     disks: Arc<Mutex<Disks>>,
     /// Running microVM count, updated by VmmManager
@@ -23,18 +25,28 @@ pub struct MetricsCollector {
 }
 
 impl MetricsCollector {
-    /// Create collector
+    /// Create collector with shared metrics registry
     pub fn new(node_id: uuid::Uuid) -> Self {
+        let registry = Arc::new(MetricsRegistry::new());
+        builtin::register_builtin(registry.inner_registry())
+            .expect("Failed to register builtin metrics");
+
         let mut system = System::new_all();
         system.refresh_all();
         let disks = Disks::new_with_refreshed_list();
 
         Self {
             node_id,
+            registry,
             system: Arc::new(Mutex::new(system)),
             disks: Arc::new(Mutex::new(disks)),
             microvm_count: AtomicU32::new(0),
         }
+    }
+
+    /// Get reference to the shared metrics registry
+    pub fn registry(&self) -> &Arc<MetricsRegistry> {
+        &self.registry
     }
 
     /// Update the running microVM count (called by VmmManager)
@@ -43,10 +55,19 @@ impl MetricsCollector {
         tracing::debug!("Updating microVM count to {}", count);
     }
 
-    /// Record microVM spawn duration
+    /// Record microVM spawn duration using shared histogram
     pub fn record_spawn(&self, duration_ms: u64, success: bool) {
-        // In a real Prometheus setup, we would update a Histogram here.
-        // For now, we log structured data that can be scraped or piped.
+        let node_name = &self.node_id.to_string();
+        let duration_secs = duration_ms as f64 / 1000.0;
+        builtin::MICROVM_SPAWN_DURATION
+            .with_label_values(&[node_name, "unknown"])
+            .observe(duration_secs);
+
+        let status = if success { "success" } else { "failed" };
+        builtin::DEPLOYMENT_COUNT
+            .with_label_values(&[node_name, status, "unknown"])
+            .inc();
+
         info!(
             event = "microvm_spawn",
             duration_ms = duration_ms,
@@ -55,10 +76,40 @@ impl MetricsCollector {
         );
     }
 
+    /// Update all node-level metrics from current system state
+    pub fn refresh_metrics(&self) {
+        let node_name = &self.node_id.to_string();
+        let mut sys = self.system.lock().unwrap();
+        sys.refresh_cpu();
+        sys.refresh_memory();
+
+        let total_mem = sys.total_memory() as f64;
+        let used_mem = sys.used_memory() as f64;
+        let available_mem = (sys.available_memory()) as f64;
+        let pressure = if total_mem > 0.0 { used_mem / total_mem } else { 0.0 };
+
+        // Update memory metrics
+        builtin::NODE_MEMORY_USAGE.with_label_values(&[node_name, "total"]).set(total_mem);
+        builtin::NODE_MEMORY_USAGE.with_label_values(&[node_name, "used"]).set(used_mem);
+        builtin::NODE_MEMORY_USAGE.with_label_values(&[node_name, "available"]).set(available_mem);
+        builtin::NODE_MEMORY_PRESSURE.with_label_values(&[node_name]).set(pressure);
+
+        // Update microVM count
+        builtin::APPS_RUNNING.with_label_values(&[node_name, "running"])
+            .set(self.microvm_count.load(Ordering::Relaxed) as f64);
+
+        // Storage usage
+        let disks = self.disks.lock().unwrap();
+        let (disk_total, disk_used) = disks.list().iter().fold((0u64, 0u64), |acc, d| {
+            (acc.0 + d.total_space(), acc.1 + (d.total_space() - d.available_space()))
+        });
+        let storage_ratio = if disk_total > 0 { disk_used as f64 / disk_total as f64 } else { 0.0 };
+        builtin::STORAGE_POOL_USAGE.with_label_values(&[node_name, "default"]).set(storage_ratio);
+    }
+
     /// Get current snapshot
     pub fn get_snapshot(&self) -> ResourceSnapshot {
         let mut sys = self.system.lock().unwrap();
-        // Refresh specific components if needed, or rely on update loop
         sys.refresh_cpu();
         sys.refresh_memory();
 
@@ -68,7 +119,6 @@ impl MetricsCollector {
 
         let cpu_usage = sys.global_cpu_info().cpu_usage();
 
-        // Simple disk summation
         let disks = self.disks.lock().unwrap();
         let (disk_total, disk_used) = disks.list().iter().fold((0, 0), |acc, disk| {
             (
@@ -89,47 +139,9 @@ impl MetricsCollector {
         }
     }
 
-    /// Generate Prometheus formatted metrics
+    /// Generate Prometheus formatted metrics via shared registry
     pub fn generate_prometheus(&self) -> String {
-        let snap = self.get_snapshot();
-        let mut buffer = String::new();
-
-        // Node resources
-        let _ = std::fmt::Write::write_fmt(
-            &mut buffer,
-            format_args!(
-                "# HELP shellwego_node_memory_bytes Node memory stats\n\
-             # TYPE shellwego_node_memory_bytes gauge\n\
-             shellwego_node_memory_bytes{{type=\"total\"}} {}\n\
-             shellwego_node_memory_bytes{{type=\"used\"}} {}\n\
-             shellwego_node_memory_bytes{{type=\"available\"}} {}\n",
-                snap.memory_total, snap.memory_used, snap.memory_available
-            ),
-        );
-
-        let _ = std::fmt::Write::write_fmt(
-            &mut buffer,
-            format_args!(
-                "# HELP shellwego_node_cpu_percent Node CPU usage\n\
-             # TYPE shellwego_node_cpu_percent gauge\n\
-             shellwego_node_cpu_percent {}\n",
-                snap.cpu_usage_percent
-            ),
-        );
-
-        let _ = std::fmt::Write::write_fmt(
-            &mut buffer,
-            format_args!(
-                "# HELP shellwego_microvm_count Number of running microVMs\n\
-             # TYPE shellwego_microvm_count gauge\n\
-             shellwego_microvm_count {}\n",
-                snap.microvm_count
-            ),
-        );
-
-        // TODO: Add metrics per microVM (needs VMM integration here)
-
-        buffer
+        self.registry.export_text().unwrap_or_default()
     }
 
     /// Start background collection loop
@@ -137,14 +149,12 @@ impl MetricsCollector {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
         loop {
             interval.tick().await;
-            // Background refresh logic
-            {
-                let mut sys = self.system.lock().unwrap();
-                sys.refresh_cpu();
-                sys.refresh_memory();
-                let mut disks = self.disks.lock().unwrap();
-                disks.refresh_list();
-            }
+            self.refresh_metrics();
+            let mut sys = self.system.lock().unwrap();
+            sys.refresh_cpu();
+            sys.refresh_memory();
+            let mut disks = self.disks.lock().unwrap();
+            disks.refresh_list();
         }
     }
 }

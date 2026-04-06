@@ -26,8 +26,8 @@ use crate::{BillingError};
 /// Invoice generator with template rendering
 /// 
 /// Generates professional invoices using Tera templates.
-/// Supports PDF generation via headless Chrome (optional feature)
-/// or external conversion services.
+/// Supports PDF generation via genpdf (pure Rust, optional feature)
+/// or returns HTML for external conversion services.
 pub struct InvoiceGenerator {
     /// Template engine for HTML rendering
     templates: Tera,
@@ -208,43 +208,134 @@ impl InvoiceGenerator {
     
     /// Generate invoice PDF
     /// 
-    /// Converts the rendered HTML to PDF format.
-    /// Uses headless Chrome when the "pdf" feature is enabled,
-    /// otherwise returns the HTML for external processing.
+    /// Generates a PDF invoice using the genpdf library (pure Rust).
+    /// Requires the "pdf" feature flag.
     #[instrument(skip(self, invoice), fields(invoice_id = %invoice.id))]
     #[cfg(feature = "pdf")]
     pub async fn generate_pdf(&self, invoice: &Invoice) -> Result<Vec<u8>, BillingError> {
-        use headless_chrome::{Browser, LaunchOptions};
+        use genpdf::{Document, elements, style, fonts};
         
-        info!("Generating PDF for invoice");
+        info!("Generating PDF for invoice {}", invoice.invoice_number);
         
-        let html = self.render_html(invoice)?;
+        // Use built-in fonts
+        let font_data = fonts::FontData::new(
+            fonts::builtin::BUILTINS.by_regular.take()
+                .ok_or_else(|| BillingError::InvoiceError("Failed to load builtin font".to_string()))?,
+            None,
+        );
+        let font_family = fonts::FontFamily::from_font_data(font_data, None, None, None);
         
-        // Launch headless browser
-        let browser = Browser::new(LaunchOptions {
-            headless: true,
-            ..Default::default()
-        })
-        .map_err(|e| BillingError::InvoiceError(format!("Failed to launch browser: {}", e)))?;
+        let mut doc = Document::new(font_family);
+        doc.set_title(format!("Invoice {}", invoice.invoice_number));
         
-        let tab = browser.new_tab()
-            .map_err(|e| BillingError::InvoiceError(format!("Failed to create tab: {}", e)))?;
+        // Company header
+        doc.push(elements::Paragraph::new(&self.branding.company_name)
+            .styled(style::Style::new().with_font_size(24.0)));
+        if let Some(ref phone) = self.branding.phone {
+            doc.push(elements::Paragraph::new(&format!("Phone: {}", phone))
+                .styled(style::Style::new().with_font_size(10.0)));
+        }
+        doc.push(elements::Paragraph::new(&self.branding.email)
+            .styled(style::Style::new().with_font_size(10.0)));
+        if let Some(ref website) = self.branding.website {
+            doc.push(elements::Paragraph::new(website)
+                .styled(style::Style::new().with_font_size(10.0)));
+        }
+        doc.push(elements::Break::new(1.0));
         
-        // Set content
-        tab.navigate_to(&format!("data:text/html,{}", urlencoding::encode(&html)))
-            .map_err(|e| BillingError::InvoiceError(format!("Failed to load content: {}", e)))?;
+        // Invoice details
+        doc.push(elements::Paragraph::new(&format!(
+            "Invoice: {}  |  Date: {}  |  Due: {}",
+            invoice.invoice_number,
+            invoice.created_at.format("%B %d, %Y"),
+            invoice.due_date.format("%B %d, %Y"),
+        )).styled(style::Style::new().with_font_size(11.0)));
+        doc.push(elements::Break::new(0.5));
         
-        // Wait for render
-        tab.wait_for_element("body")
-            .map_err(|e| BillingError::InvoiceError(format!("Wait failed: {}", e)))?;
+        // Bill To
+        doc.push(elements::Paragraph::new(&format!(
+            "Bill To: {} ({})",
+            invoice.customer_name,
+            invoice.customer_email,
+        )).styled(style::Style::new().with_font_size(11.0)));
+        doc.push(elements::Break::new(1.0));
         
-        // Print to PDF
-        let pdf = tab.print_to_pdf(None)
-            .map_err(|e| BillingError::InvoiceError(format!("PDF generation failed: {}", e)))?;
+        // Line items
+        let mut table = elements::Table::new(vec![
+            (style::Style::new().bold(), 3.0),
+            (style::Style::new().bold(), 1.0),
+            (style::Style::new().bold(), 1.0),
+            (style::Style::new().bold(), 1.5),
+            (style::Style::new().bold(), 1.5),
+        ]);
         
-        info!(size = pdf.len(), "PDF generated successfully");
+        // Header row
+        table.push_row(elements::TableRow::new(vec![
+            elements::TableCell::new("Description").with_style(style::Style::new().bold()),
+            elements::TableCell::new("Qty").with_style(style::Style::new().bold()),
+            elements::TableCell::new("Unit").with_style(style::Style::new().bold()),
+            elements::TableCell::new("Unit Price").with_style(style::Style::new().bold()),
+            elements::TableCell::new("Amount").with_style(style::Style::new().bold()),
+        ]));
         
-        Ok(pdf)
+        // Data rows
+        for item in &invoice.line_items {
+            table.push_row(elements::TableRow::new(vec![
+                elements::TableCell::new(&item.description),
+                elements::TableCell::new(&format!("{:.2}", item.quantity)),
+                elements::TableCell::new(&item.unit),
+                elements::TableCell::new(&format!("${:.4}", item.unit_price)),
+                elements::TableCell::new(&item.amount.to_string()),
+            ]));
+        }
+        doc.push(table);
+        doc.push(elements::Break::new(0.5));
+        
+        // Totals
+        doc.push(elements::Paragraph::new(&format!(
+            "Subtotal: {} {}",
+            invoice.subtotal, invoice.currency
+        )).styled(style::Style::new().with_font_size(11.0)));
+        
+        if invoice.credit_applied > Decimal::ZERO {
+            doc.push(elements::Paragraph::new(&format!(
+                "Credits: -{} {}",
+                invoice.credit_applied, invoice.currency
+            )).styled(style::Style::new().with_font_size(11.0)));
+        }
+        
+        doc.push(elements::Paragraph::new(&format!(
+            "Total: {} {}",
+            invoice.total, invoice.currency
+        )).styled(style::Style::new().bold().with_font_size(14.0)));
+        
+        // Transaction ID if paid
+        if let Some(ref txn_id) = invoice.transaction_id {
+            doc.push(elements::Break::new(0.5));
+            doc.push(elements::Paragraph::new(&format!(
+                "Transaction ID: {}", txn_id
+            )).styled(style::Style::new().with_font_size(9.0)));
+        }
+        
+        // Footer
+        if let Some(ref footer) = self.branding.footer {
+            doc.push(elements::Break::new(1.0));
+            doc.push(elements::Paragraph::new(footer)
+                .styled(style::Style::new().with_font_size(9.0)));
+        }
+        
+        if let Some(ref terms) = self.branding.terms {
+            doc.push(elements::Paragraph::new(terms)
+                .styled(style::Style::new().with_font_size(8.0)));
+        }
+        
+        // Render to bytes
+        let mut bytes = Vec::new();
+        doc.render(&mut bytes)
+            .map_err(|e| BillingError::InvoiceError(format!("PDF render failed: {}", e)))?;
+        
+        info!(size = bytes.len(), "PDF generated successfully");
+        Ok(bytes)
     }
     
     /// Generate invoice PDF (without pdf feature)
@@ -440,11 +531,12 @@ Best regards,
             due_date,
             created_at: Utc::now(),
             paid_at: None,
+            transaction_id: None,
         }
     }
     
     /// Generate a unique invoice number
-    fn generate_invoice_number(&self) -> String {
+    pub fn generate_invoice_number(&self) -> String {
         let now = Utc::now();
         let random_suffix: u32 = (now.timestamp_nanos_opt().unwrap_or(0) % 10000) as u32;
         format!(

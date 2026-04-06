@@ -1,5 +1,10 @@
 # Plan 03: QUIC Message Bus
 
+> **Status: IMPLEMENTED** (2026-04-06)
+>
+> All 7 phases implemented. Rust compilation checks skipped due to resource constraints.
+> See `## 10. Implementation Notes` at the bottom for deviations from the original plan.
+
 ## 1. Title & Overview
 
 **QUIC Message Bus** — Build a real publish/subscribe message bus on top of the existing Quinn QUIC client/server foundation. The README claims "QUIC/Quinn pub/sub, 5M msgs/sec" but the current code only implements a raw point-to-point QUIC client and server (`QuinnClient`, `QuinnServer`) that can send and receive `Message` enums over bidirectional streams. There is no topic/channel subscription, no fan-out delivery, no message routing, no at-least-once delivery guarantees, and no ack/retry mechanism. This gap blocks the scheduler (Plan 02) from dispatching commands to agents and blocks the agent (Plan 04) from receiving work and reporting status. The existing `ChannelPriority` enum in the schema crate is defined but completely unused — this plan wires it into the message bus.
@@ -1062,3 +1067,51 @@ The complexity is driven primarily by the concurrent nature of the router (multi
 | **postcard deserialization mismatch** — schema changes between CP and Agent versions cause deserialization failures. | Medium | High — messages silently dropped or panics. | postcard is version-sensitive by design. Add a `version: u8` field to `BusMessage` envelope. On deserialization error, log the raw bytes for debugging and increment a `messages_malformed` counter. |
 | **Dependency conflicts** — adding `lru`, `parking_lot`, `dashmap` may conflict with existing crate versions. | Low | Low — all are well-maintained, minimal transitive deps. | `dashmap` is already a workspace dependency. `parking_lot` and `lru` are lightweight. Verify with `cargo tree -p shellwego-network` after adding. |
 | **Existing warning fixes break something** — resolving 7 warnings might remove code that other crates depend on. | Low | Medium | Warnings are unused imports/variables/dead fields. Dead fields in eBPF structs should be `#[allow(dead_code)]` if they represent future API. Run full `cargo test` workspace after fixes. |
+
+## 10. Implementation Notes
+
+Implemented 2026-04-06. Below are deviations from the original plan.
+
+### Deviations
+
+1. **`BusMessage` split into two types** — The plan's `BusMessage` wraps `Message` directly, which creates a circular type dependency when placed inside `Message::Publish`. Solved by splitting into:
+   - `BusMessage` (in-memory, with deserialized `Message` payload) — non-`Serialize`/`Deserialize`.
+   - `BusMessageEnvelope` (wire format, with `payload_bytes: Vec<u8>`) — `Serialize`/`Deserialize`.
+   - Conversion methods: `BusMessage::to_envelope()` and `BusMessage::from_envelope()`.
+
+2. **`Topic` placed in `shellwego-schema`** — The plan originally placed `Topic` only in the network crate's `bus/topic.rs`. To keep the schema crate as the single source of truth for wire types, `Topic` and `TopicError` were placed in `shellwego-schema/src/network/quinn.rs`. The network crate's `bus/topic.rs` re-exports from schema.
+
+3. **`postcard` added to schema crate** — `BusMessage::to_envelope()` and `from_envelope()` need postcard serialization in the schema crate. Added `postcard = "1.0"` to `shellwego-schema/Cargo.toml`.
+
+4. **Additional `Message` variants** — Beyond `Subscribe`, `Unsubscribe`, `Ack`, `Nack` (as planned), also added `Publish { bus_message: BusMessageEnvelope }`, `Ping`, and `Pong` variants for completeness.
+
+5. **`bytes` crate added** — The envelope module uses `bytes::BytesMut` for zero-copy frame construction. Added `bytes = "1.6"` to `shellwego-network/Cargo.toml`.
+
+6. **`Ping`/`Pong` client method** — Added `QuinnClient::ping()` method that measures round-trip time, beyond what the plan specified.
+
+7. **`AgentConn` additional methods** — Added `send_message()` and `receive_message()` for `BusMessage` transport, wrapping in `Message::Publish`.
+
+8. **`ReliabilityLayer::new()` returns tuple** — Returns `(Self, retry_rx, dead_letter_rx)` so callers can poll the retry channel for retransmission.
+
+9. **`BusRouter` subscriber counter** — Changed from a `static COUNTER` (global) to a per-instance `AtomicU64` field for better test isolation.
+
+10. **Rust compilation not verified** — Per user instructions, `cargo check`/`cargo test`/`cargo clippy` were skipped due to resource constraints. Compilation verification should be done in CI.
+
+### Files Created
+- `crates/shellwego-network/src/quinn/bus/mod.rs`
+- `crates/shellwego-network/src/quinn/bus/topic.rs`
+- `crates/shellwego-network/src/quinn/bus/envelope.rs`
+- `crates/shellwego-network/src/quinn/bus/router.rs`
+- `crates/shellwego-network/src/quinn/bus/reliability.rs`
+- `crates/shellwego-network/src/quinn/bus/bench.rs`
+- `crates/shellwego-network/benches/quic_bus.rs`
+
+### Files Modified
+- `crates/shellwego-schema/src/network/quinn.rs` — Added `Topic`, `TopicError`, `SubscriptionId`, `BusMessageEnvelope`, `BusMessage`, `BusConfig`; extended `Message` enum with 7 new variants.
+- `crates/shellwego-schema/src/network/mod.rs` — Re-exported new types.
+- `crates/shellwego-schema/src/lib.rs` — Re-exported new types at crate root.
+- `crates/shellwego-schema/Cargo.toml` — Added `postcard` dependency.
+- `crates/shellwego-network/src/quinn/mod.rs` — Added `pub mod bus;` and re-exports.
+- `crates/shellwego-network/src/quinn/server.rs` — Extended `AgentConn`, added `run_with_bus()`, `send_message()`, `receive_message()`.
+- `crates/shellwego-network/src/quinn/client.rs` — Added `publish()`, `subscribe()`, `unsubscribe()`, `ack()`, `nack()`, `ping()`.
+- `crates/shellwego-network/Cargo.toml` — Added `dashmap`, `parking_lot`, `lru`, `chrono`, `bytes`; added tokio features; added criterion dev-dep and bench target.

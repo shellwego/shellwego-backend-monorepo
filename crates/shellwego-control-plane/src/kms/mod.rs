@@ -97,13 +97,15 @@ pub struct KmsClient {
     secrets: Arc<RwLock<HashMap<String, EncryptedSecret>>>,
     key_versions: Arc<RwLock<Vec<KeyVersion>>>,
     cache: Arc<RwLock<HashMap<String, (String, DateTime<Utc>)>>>,
+    /// AES-256-GCM master key derived from key_id via Argon2
+    master_key: [u8; 32],
 }
 
 impl KmsClient {
     /// Create a new KMS client from configuration
     pub async fn from_config(config: KmsConfig) -> Result<Self, KmsError> {
         info!("Initializing KMS client with backend: {:?}", config.backend);
-        
+
         // Initialize key versions
         let key_versions = vec![
             KeyVersion {
@@ -113,12 +115,30 @@ impl KmsClient {
                 algorithm: "AES-256-GCM".to_string(),
             }
         ];
-        
+
+        // Derive master key from key_id using Argon2
+        let key_id_for_derive = if config.key_id.is_empty() {
+            "shellwego-default-master-key".to_string()
+        } else {
+            config.key_id.clone()
+        };
+        let master_key = {
+            use argon2::{Argon2, PasswordHasher, password_hash::SaltString};
+            let salt = SaltString::encode_b64(&rand_core::OsRng).unwrap();
+            let argon2 = Argon2::default();
+            let hash = argon2.hash_password(key_id_for_derive.as_bytes(), &salt).unwrap();
+            let hash_bytes = hash.hash.unwrap().as_bytes();
+            let mut key = [0u8; 32];
+            key.copy_from_slice(&hash_bytes[..32]);
+            key
+        };
+
         Ok(Self {
             config,
             secrets: Arc::new(RwLock::new(HashMap::new())),
             key_versions: Arc::new(RwLock::new(key_versions)),
             cache: Arc::new(RwLock::new(HashMap::new())),
+            master_key,
         })
     }
 
@@ -175,41 +195,32 @@ impl KmsClient {
         }
     }
 
-    async fn encrypt_vault(&self, plaintext: &str) -> Result<(String, String), KmsError> {
-        // Simulated Vault encryption
-        debug!("Encrypting via Vault");
-        let ciphertext = BASE64.encode(format!("vault:{}", plaintext));
-        let nonce = BASE64.encode(Uuid::new_v4().as_bytes());
-        Ok((ciphertext, nonce))
+    async fn encrypt_vault(&self, _plaintext: &str) -> Result<(String, String), KmsError> {
+        Err(KmsError::BackendError("Vault backend not implemented. Integrate hvac/vault-rs crate.".to_string()))
     }
 
-    async fn encrypt_aws(&self, plaintext: &str) -> Result<(String, String), KmsError> {
-        debug!("Encrypting via AWS KMS");
-        let ciphertext = BASE64.encode(format!("aws:{}", plaintext));
-        let nonce = BASE64.encode(Uuid::new_v4().as_bytes());
-        Ok((ciphertext, nonce))
+    async fn encrypt_aws(&self, _plaintext: &str) -> Result<(String, String), KmsError> {
+        Err(KmsError::BackendError("AWS KMS backend not implemented. Integrate aws-sdk-kms crate.".to_string()))
     }
 
-    async fn encrypt_gcp(&self, plaintext: &str) -> Result<(String, String), KmsError> {
-        debug!("Encrypting via GCP KMS");
-        let ciphertext = BASE64.encode(format!("gcp:{}", plaintext));
-        let nonce = BASE64.encode(Uuid::new_v4().as_bytes());
-        Ok((ciphertext, nonce))
+    async fn encrypt_gcp(&self, _plaintext: &str) -> Result<(String, String), KmsError> {
+        Err(KmsError::BackendError("GCP KMS backend not implemented. Integrate google-cloud-kms crate.".to_string()))
     }
 
-    async fn encrypt_azure(&self, plaintext: &str) -> Result<(String, String), KmsError> {
-        debug!("Encrypting via Azure Key Vault");
-        let ciphertext = BASE64.encode(format!("azure:{}", plaintext));
-        let nonce = BASE64.encode(Uuid::new_v4().as_bytes());
-        Ok((ciphertext, nonce))
+    async fn encrypt_azure(&self, _plaintext: &str) -> Result<(String, String), KmsError> {
+        Err(KmsError::BackendError("Azure Key Vault backend not implemented. Integrate azure-security-keyvault crate.".to_string()))
     }
 
     async fn encrypt_file(&self, plaintext: &str) -> Result<(String, String), KmsError> {
-        debug!("Encrypting via file-based encryption");
-        // Simplified encryption - in production use proper AES-GCM
-        let ciphertext = BASE64.encode(format!("file:{}", plaintext));
-        let nonce = BASE64.encode(Uuid::new_v4().as_bytes());
-        Ok((ciphertext, nonce))
+        use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
+        debug!("Encrypting via AES-256-GCM file-based encryption");
+        let cipher = Aes256Gcm::new_from_slice(&self.master_key)
+            .map_err(|e| KmsError::EncryptionFailed(e.to_string()))?;
+        let nonce_bytes = rand::random::<[u8; 12]>();
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        let ciphertext = cipher.encrypt(nonce, plaintext.as_bytes())
+            .map_err(|e| KmsError::EncryptionFailed(e.to_string()))?;
+        Ok((BASE64.encode(&ciphertext), BASE64.encode(&nonce_bytes)))
     }
 
     /// Decrypt a value
@@ -232,41 +243,40 @@ impl KmsClient {
             KmsBackend::AwsKms { .. } => self.decrypt_aws(&secret.ciphertext).await?,
             KmsBackend::GcpKms { .. } => self.decrypt_gcp(&secret.ciphertext).await?,
             KmsBackend::AzureKeyVault { .. } => self.decrypt_azure(&secret.ciphertext).await?,
-            KmsBackend::File => self.decrypt_file(&secret.ciphertext).await?,
+            KmsBackend::File => self.decrypt_file_with_nonce(&secret.ciphertext, &secret.nonce).await?,
         };
         
         info!("Decrypted secret: {}", secret.key);
         Ok(plaintext)
     }
 
-    async fn decrypt_vault(&self, ciphertext: &str) -> Result<String, KmsError> {
-        let decoded = BASE64.decode(ciphertext)?;
-        let decoded_str = String::from_utf8(decoded)?;
-        Ok(decoded_str.trim_start_matches("vault:").to_string())
+    async fn decrypt_vault(&self, _ciphertext: &str) -> Result<String, KmsError> {
+        Err(KmsError::BackendError("Vault backend not implemented. Integrate hvac/vault-rs crate.".to_string()))
     }
 
-    async fn decrypt_aws(&self, ciphertext: &str) -> Result<String, KmsError> {
-        let decoded = BASE64.decode(ciphertext)?;
-        let decoded_str = String::from_utf8(decoded)?;
-        Ok(decoded_str.trim_start_matches("aws:").to_string())
+    async fn decrypt_aws(&self, _ciphertext: &str) -> Result<String, KmsError> {
+        Err(KmsError::BackendError("AWS KMS backend not implemented. Integrate aws-sdk-kms crate.".to_string()))
     }
 
-    async fn decrypt_gcp(&self, ciphertext: &str) -> Result<String, KmsError> {
-        let decoded = BASE64.decode(ciphertext)?;
-        let decoded_str = String::from_utf8(decoded)?;
-        Ok(decoded_str.trim_start_matches("gcp:").to_string())
+    async fn decrypt_gcp(&self, _ciphertext: &str) -> Result<String, KmsError> {
+        Err(KmsError::BackendError("GCP KMS backend not implemented. Integrate google-cloud-kms crate.".to_string()))
     }
 
-    async fn decrypt_azure(&self, ciphertext: &str) -> Result<String, KmsError> {
-        let decoded = BASE64.decode(ciphertext)?;
-        let decoded_str = String::from_utf8(decoded)?;
-        Ok(decoded_str.trim_start_matches("azure:").to_string())
+    async fn decrypt_azure(&self, _ciphertext: &str) -> Result<String, KmsError> {
+        Err(KmsError::BackendError("Azure Key Vault backend not implemented. Integrate azure-security-keyvault crate.".to_string()))
     }
 
-    async fn decrypt_file(&self, ciphertext: &str) -> Result<String, KmsError> {
-        let decoded = BASE64.decode(ciphertext)?;
-        let decoded_str = String::from_utf8(decoded)?;
-        Ok(decoded_str.trim_start_matches("file:").to_string())
+    /// Decrypt file-based secret with nonce (AES-256-GCM)
+    async fn decrypt_file_with_nonce(&self, ciphertext: &str, nonce_b64: &str) -> Result<String, KmsError> {
+        use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
+        let cipher = Aes256Gcm::new_from_slice(&self.master_key)
+            .map_err(|e| KmsError::DecryptionFailed(e.to_string()))?;
+        let ciphertext_bytes = BASE64.decode(ciphertext)?;
+        let nonce_bytes = BASE64.decode(nonce_b64)?;
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        let plaintext = cipher.decrypt(nonce, ciphertext_bytes.as_ref())
+            .map_err(|e| KmsError::DecryptionFailed(e.to_string()))?;
+        String::from_utf8(plaintext).map_err(Into::into)
     }
 
     /// Rotate master key
@@ -345,6 +355,17 @@ impl KmsClient {
     pub async fn list_keys(&self) -> Vec<String> {
         let secrets = self.secrets.read().await;
         secrets.keys().cloned().collect()
+    }
+
+    /// Detect and migrate legacy base64-encoded secrets
+    /// Legacy secrets have a "file:" prefix after base64 decoding
+    pub fn is_legacy_secret(&self, ciphertext: &str) -> bool {
+        if let Ok(decoded) = BASE64.decode(ciphertext) {
+            if let Ok(s) = String::from_utf8(decoded) {
+                return s.starts_with("file:");
+            }
+        }
+        false
     }
 
     /// Health check

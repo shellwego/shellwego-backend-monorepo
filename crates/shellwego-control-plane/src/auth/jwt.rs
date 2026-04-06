@@ -1,7 +1,8 @@
 //! JWT token generation and validation
 //!
-//! Uses jsonwebtoken crate with HS256 algorithm for token signing.
-//! Supports access tokens (15min default) and refresh tokens (7d default).
+//! Uses jsonwebtoken crate with RS256 algorithm (asymmetric) for token signing
+//! when RSA keys are configured, falling back to HS256 (symmetric) for legacy
+//! compatibility. Supports access tokens (15min default) and refresh tokens (7d default).
 
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
@@ -85,8 +86,18 @@ pub fn create_access_token(
         token_type: "access".to_string(),
     };
 
-    let header = Header::default();
-    let key = EncodingKey::from_secret(config.secret.as_bytes());
+    let key = if let Some(ref private_pem) = config.private_key_pem {
+        EncodingKey::from_rsa_pem(private_pem.as_bytes())
+            .map_err(|e| AuthError::InternalError(format!("Failed to parse RSA private key: {}", e)))?
+    } else {
+        tracing::warn!("No RSA private key configured, falling back to HS256 (insecure)");
+        EncodingKey::from_secret(config.secret.as_bytes())
+    };
+    let header = if config.private_key_pem.is_some() {
+        Header::new(jsonwebtoken::Algorithm::RS256)
+    } else {
+        Header::default()
+    };
 
     encode(&header, &claims, &key)
         .map_err(|e| AuthError::InternalError(format!("Failed to create access token: {}", e)))
@@ -112,8 +123,18 @@ pub fn create_refresh_token(
         token_type: "refresh".to_string(),
     };
 
-    let header = Header::default();
-    let key = EncodingKey::from_secret(config.secret.as_bytes());
+    let key = if let Some(ref private_pem) = config.private_key_pem {
+        EncodingKey::from_rsa_pem(private_pem.as_bytes())
+            .map_err(|e| AuthError::InternalError(format!("Failed to parse RSA private key: {}", e)))?
+    } else {
+        tracing::warn!("No RSA private key configured, falling back to HS256 (insecure)");
+        EncodingKey::from_secret(config.secret.as_bytes())
+    };
+    let header = if config.private_key_pem.is_some() {
+        Header::new(jsonwebtoken::Algorithm::RS256)
+    } else {
+        Header::default()
+    };
 
     encode(&header, &claims, &key)
         .map_err(|e| AuthError::InternalError(format!("Failed to create refresh token: {}", e)))
@@ -127,8 +148,14 @@ pub fn validate_token(
     token_str: &str,
     allow_refresh: bool,
 ) -> Result<AccessClaims, AuthError> {
-    let key = DecodingKey::from_secret(config.secret.as_bytes());
-    let mut validation = Validation::default();
+    let (key, alg) = if let Some(ref public_pem) = config.public_key_pem {
+        let k = DecodingKey::from_rsa_pem(public_pem.as_bytes())
+            .map_err(|e| AuthError::InvalidToken(format!("Failed to parse RSA public key: {}", e)))?;
+        (k, jsonwebtoken::Algorithm::RS256)
+    } else {
+        (DecodingKey::from_secret(config.secret.as_bytes()), jsonwebtoken::Algorithm::HS256)
+    };
+    let mut validation = Validation::new(alg);
     validation.leeway = 0;
     validation.set_issuer(&[&config.issuer]);
     validation.set_audience(&["shellwego-api"]);
@@ -196,8 +223,14 @@ mod tests {
     use super::*;
 
     fn test_config() -> JwtConfig {
+        let private_key = rsa::RsaPrivateKey::new(&mut rand_core::OsRng, 2048).unwrap();
+        let public_key = private_key.to_public_key();
+        let private_pem = private_key.to_pkcs1_pem(rsa::pkcs8::LineEnding::LF).unwrap().to_string();
+        let public_pem = public_key.to_public_key_pem(rsa::pkcs8::LineEnding::LF).unwrap().to_string();
         JwtConfig {
-            secret: "test-secret-key-long-enough-for-hmac".to_string(),
+            secret: String::new(),
+            private_key_pem: Some(private_pem),
+            public_key_pem: Some(public_pem),
             issuer: "shellwego-test".to_string(),
             expiry_secs: 900,
             refresh_expiry_secs: 604800,
@@ -293,9 +326,18 @@ mod tests {
         )
         .unwrap();
 
+        // Generate a different RSA keypair for the "wrong" config
+        let wrong_private_key = rsa::RsaPrivateKey::new(&mut rand_core::OsRng, 2048).unwrap();
+        let wrong_public_key = wrong_private_key.to_public_key();
+        let wrong_private_pem = wrong_private_key.to_pkcs1_pem(rsa::pkcs8::LineEnding::LF).unwrap().to_string();
+        let wrong_public_pem = wrong_public_key.to_public_key_pem(rsa::pkcs8::LineEnding::LF).unwrap().to_string();
         let wrong_config = JwtConfig {
             secret: "wrong-secret-key-for-testing".to_string(),
-            ..test_config()
+            private_key_pem: Some(wrong_private_pem),
+            public_key_pem: Some(wrong_public_pem),
+            issuer: "shellwego-test".to_string(),
+            expiry_secs: 900,
+            refresh_expiry_secs: 604800,
         };
         let result = validate_token(&wrong_config, &token, false);
         assert!(result.is_err());
@@ -303,8 +345,14 @@ mod tests {
 
     #[test]
     fn test_expired_token_rejected() {
+        let private_key = rsa::RsaPrivateKey::new(&mut rand_core::OsRng, 2048).unwrap();
+        let public_key = private_key.to_public_key();
+        let private_pem = private_key.to_pkcs1_pem(rsa::pkcs8::LineEnding::LF).unwrap().to_string();
+        let public_pem = public_key.to_public_key_pem(rsa::pkcs8::LineEnding::LF).unwrap().to_string();
         let config = JwtConfig {
-            secret: "test-secret-key-long-enough-for-hmac".to_string(),
+            secret: String::new(),
+            private_key_pem: Some(private_pem),
+            public_key_pem: Some(public_pem),
             issuer: "shellwego-test".to_string(),
             expiry_secs: 0,
             refresh_expiry_secs: 0,

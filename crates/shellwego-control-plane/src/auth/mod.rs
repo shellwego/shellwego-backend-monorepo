@@ -286,6 +286,11 @@ impl AuthService {
         })
     }
 
+    /// Validate access token without blocklist check (useful for tests)
+    pub fn validate_access_token_raw(&self, token_str: &str) -> Result<crate::auth::jwt::AccessClaims, AuthError> {
+        crate::auth::jwt::validate_token(&self.jwt_config, token_str, false)
+    }
+
     /// Get user by ID
     pub async fn get_user(&self, user_id: &Uuid) -> Option<UserRecord> {
         self.users.get(user_id).map(|r| r.value().clone())
@@ -436,8 +441,14 @@ mod tests {
     use super::*;
 
     fn test_jwt_config() -> JwtConfig {
+        let private_key = rsa::RsaPrivateKey::new(&mut rand_core::OsRng, 2048).unwrap();
+        let public_key = private_key.to_public_key();
+        let private_pem = private_key.to_pkcs1_pem(rsa::pkcs8::LineEnding::LF).unwrap().to_string();
+        let public_pem = public_key.to_public_key_pem(rsa::pkcs8::LineEnding::LF).unwrap().to_string();
         JwtConfig {
-            secret: "test-secret-key-for-testing-that-is-long-enough".to_string(),
+            secret: String::new(),
+            private_key_pem: Some(private_pem),
+            public_key_pem: Some(public_pem),
             issuer: "shellwego-test".to_string(),
             expiry_secs: 900,
             refresh_expiry_secs: 604800,

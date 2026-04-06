@@ -83,3 +83,15 @@ outdated:
 release:
         cargo build --release --target x86_64-unknown-linux-musl
         cargo build --release --target aarch64-unknown-linux-musl
+
+# Generate SBOM
+sbom:
+        bash scripts/sbom.sh
+
+# Vulnerability scan
+scan:
+        bash scripts/scan.sh
+
+# Generate JWT dev keys
+jwt-keys:
+        bash scripts/generate-jwt-keys.sh

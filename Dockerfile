@@ -49,6 +49,8 @@ RUN touch crates/shellwego-control-plane/src/main.rs && \
 # ---------------------------------------------------------------------------
 # Stage 2: Runtime
 # ---------------------------------------------------------------------------
+# NOTE: In production CI, verify image signatures before deployment:
+#   cosign verify --key cosign.pub shellwego/control-plane:$TAG
 FROM debian:bookworm-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \

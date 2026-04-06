@@ -83,6 +83,13 @@ pub struct JwtConfig {
     /// Refresh token expiration in seconds
     #[serde(default = "default_refresh_expiry")]
     pub refresh_expiry_secs: u64,
+
+    /// RSA private key PEM content (for token signing)
+    #[serde(default)]
+    pub private_key_pem: Option<String>,
+    /// RSA public key PEM content (for token verification)
+    #[serde(default)]
+    pub public_key_pem: Option<String>,
 }
 
 fn default_jwt_issuer() -> String { "shellwego".to_string() }
@@ -182,6 +189,13 @@ impl Config {
                 info!("Using development JWT secret - DO NOT USE IN PRODUCTION");
                 "dev-secret-change-in-production".to_string()
             });
+
+        let private_key_pem = std::env::var("JWT_PRIVATE_KEY_PEM").ok();
+        let public_key_pem = std::env::var("JWT_PUBLIC_KEY_PEM").ok();
+
+        if private_key_pem.is_none() && public_key_pem.is_none() {
+            tracing::warn!("No RSA keys configured (JWT_PRIVATE_KEY_PEM / JWT_PUBLIC_KEY_PEM). Falling back to HS256 (insecure for production).");
+        }
         
         let default_region = std::env::var("DEFAULT_REGION")
             .unwrap_or_else(|_| "default".to_string());
@@ -201,6 +215,8 @@ impl Config {
                 issuer: default_jwt_issuer(),
                 expiry_secs: default_jwt_expiry(),
                 refresh_expiry_secs: default_refresh_expiry(),
+                private_key_pem,
+                public_key_pem,
             },
             default_region: default_region.clone(),
             log_level: std::env::var("LOG_LEVEL")
@@ -251,6 +267,8 @@ impl Default for Config {
                 issuer: default_jwt_issuer(),
                 expiry_secs: default_jwt_expiry(),
                 refresh_expiry_secs: default_refresh_expiry(),
+                private_key_pem: None,
+                public_key_pem: None,
             },
             default_region: default_region(),
             log_level: default_log_level(),

@@ -6,7 +6,7 @@
 //! Phase 4: All CRUD handlers now use the real Database for persistence.
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Extension, Path, Query, State},
     http::StatusCode,
     Json,
 };
@@ -126,8 +126,10 @@ fn default_per_page() -> u32 { 20 }
 
 pub async fn list_apps(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Query(params): Query<ListAppsQuery>,
 ) -> Result<Json<PaginatedResponse<App>>, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "apps:read").map_err(|(code, err)| (code, Json(err)))?;
     let per_page = params.per_page.clamp(1, 100);
     let page = params.page.max(1);
     let offset = (page - 1) * per_page;
@@ -148,8 +150,10 @@ pub async fn list_apps(
 
 pub async fn create_app(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Json(req): Json<CreateAppRequest>,
 ) -> Result<(StatusCode, Json<App>), (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "apps:write").map_err(|(code, err)| (code, Json(err)))?;
     // Validation
     if req.name.len() < 3 || req.name.len() > 63 {
         return Err(validation_err("App name must be 3-63 characters"));
@@ -193,16 +197,20 @@ pub async fn create_app(
 
 pub async fn get_app(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Path(app_id): Path<Uuid>,
 ) -> Result<Json<App>, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "apps:read").map_err(|(code, err)| (code, Json(err)))?;
     let app: Option<App> = state.db.find_by_id("apps", &app_id).await.map_err(internal_db_err)?;
     app.map(Json).ok_or_else(|| not_found_err("App"))
 }
 
 pub async fn delete_app(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Path(app_id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "apps:delete").map_err(|(code, err)| (code, Json(err)))?;
     state.db.delete("apps", &app_id).await.map_err(|e| {
         match e {
             DatabaseError::NotFound => not_found_err("App"),
@@ -214,8 +222,10 @@ pub async fn delete_app(
 
 pub async fn deploy_app(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Path(app_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "apps:write").map_err(|(code, err)| (code, Json(err)))?;
     // Verify app exists first
     let _app: Option<App> = state.db.find_by_id("apps", &app_id).await.map_err(internal_db_err)?
         .ok_or_else(|| not_found_err("App"))?;
@@ -245,9 +255,11 @@ pub async fn deploy_app(
 
 pub async fn scale_app(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Path(app_id): Path<Uuid>,
     Json(body): Json<ScaleRequest>,
 ) -> Result<Json<App>, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "apps:write").map_err(|(code, err)| (code, Json(err)))?;
     // Verify app exists
     let existing: Option<App> = state.db.find_by_id("apps", &app_id).await.map_err(internal_db_err)?
         .ok_or_else(|| not_found_err("App"))?;
@@ -284,8 +296,10 @@ pub async fn scale_app(
 
 pub async fn restart_app(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Path(app_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "apps:write").map_err(|(code, err)| (code, Json(err)))?;
     // Verify app exists
     let _app: Option<App> = state.db.find_by_id("apps", &app_id).await.map_err(internal_db_err)?
         .ok_or_else(|| not_found_err("App"))?;
@@ -298,8 +312,10 @@ pub async fn restart_app(
 
 pub async fn stop_app(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Path(app_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "apps:write").map_err(|(code, err)| (code, Json(err)))?;
     // Verify app exists and update status
     let _app: Option<App> = state.db.find_by_id("apps", &app_id).await.map_err(internal_db_err)?
         .ok_or_else(|| not_found_err("App"))?;
@@ -328,8 +344,10 @@ pub async fn stop_app(
 
 pub async fn start_app(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Path(app_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "apps:write").map_err(|(code, err)| (code, Json(err)))?;
     let _app: Option<App> = state.db.find_by_id("apps", &app_id).await.map_err(internal_db_err)?
         .ok_or_else(|| not_found_err("App"))?;
 
@@ -357,9 +375,11 @@ pub async fn start_app(
 
 pub async fn get_logs(
     State(_state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Path(_app_id): Path<Uuid>,
     Query(_params): Query<LogQuery>,
 ) -> Result<Json<Vec<LogEntry>>, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "apps:read").map_err(|(code, err)| (code, Json(err)))?;
     // Log streaming from live containers is not yet connected to DB;
     // returns empty for now — real implementation would stream from agent.
     Ok(Json(Vec::new()))
@@ -426,8 +446,10 @@ pub struct ListNodesQuery {
 
 pub async fn list_nodes(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Query(_params): Query<ListNodesQuery>,
 ) -> Result<Json<PaginatedResponse<Node>>, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "nodes:read").map_err(|(code, err)| (code, Json(err)))?;
     // Merge in-memory agents with DB-persisted nodes
     let mut nodes: Vec<Node> = Vec::new();
 
@@ -463,8 +485,10 @@ pub async fn list_nodes(
 
 pub async fn register_node(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Json(req): Json<RegisterNodeRequest>,
 ) -> Result<(StatusCode, Json<Node>), (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "nodes:write").map_err(|(code, err)| (code, Json(err)))?;
     let node_id = Uuid::new_v4();
 
     // Register in memory for live agent tracking
@@ -513,8 +537,10 @@ pub async fn register_node(
 
 pub async fn get_node(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Path(node_id): Path<Uuid>,
 ) -> Result<Json<Node>, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "nodes:read").map_err(|(code, err)| (code, Json(err)))?;
     // Check in-memory agents first
     if let Some(conn) = state.agents.get(&node_id) {
         let agent = conn.value().clone();
@@ -539,8 +565,10 @@ pub async fn get_node(
 
 pub async fn deregister_node(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Path(node_id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "nodes:delete").map_err(|(code, err)| (code, Json(err)))?;
     // Remove from in-memory
     state.deregister_agent(&node_id);
 
@@ -558,8 +586,10 @@ pub async fn deregister_node(
 
 pub async fn drain_node(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Path(node_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "nodes:write").map_err(|(code, err)| (code, Json(err)))?;
     // Verify node exists (in-memory or DB)
     if !state.agents.contains_key(&node_id) {
         let _node: Option<Node> = state.db.find_by_id("nodes", &node_id).await.map_err(internal_db_err)?
@@ -626,7 +656,9 @@ pub struct CreateVolumeRequest {
 
 pub async fn list_volumes(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
 ) -> Result<Json<PaginatedResponse<Volume>>, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "volumes:read").map_err(|(code, err)| (code, Json(err)))?;
     let items: Vec<Volume> = state.db.find_all("volumes").await.map_err(internal_db_err)?;
     let total = items.len() as u64;
     Ok(Json(PaginatedResponse::new(items, None, false).with_total_count(total)))
@@ -634,8 +666,10 @@ pub async fn list_volumes(
 
 pub async fn create_volume(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Json(req): Json<CreateVolumeRequest>,
 ) -> Result<(StatusCode, Json<Volume>), (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "volumes:write").map_err(|(code, err)| (code, Json(err)))?;
     // Validation
     if req.size_gb < 1 || req.size_gb > 10240 {
         return Err(validation_err("Volume size must be between 1 and 10240 GB"));
@@ -675,16 +709,20 @@ pub async fn create_volume(
 
 pub async fn get_volume(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Path(volume_id): Path<Uuid>,
 ) -> Result<Json<Volume>, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "volumes:read").map_err(|(code, err)| (code, Json(err)))?;
     let volume: Option<Volume> = state.db.find_by_id("volumes", &volume_id).await.map_err(internal_db_err)?;
     volume.map(Json).ok_or_else(|| not_found_err("Volume"))
 }
 
 pub async fn delete_volume(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Path(volume_id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "volumes:delete").map_err(|(code, err)| (code, Json(err)))?;
     state.db.delete("volumes", &volume_id).await.map_err(|e| {
         match e {
             DatabaseError::NotFound => not_found_err("Volume"),
@@ -696,9 +734,11 @@ pub async fn delete_volume(
 
 pub async fn attach_volume(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Path(volume_id): Path<Uuid>,
     Json(body): Json<AttachVolumeRequest>,
 ) -> Result<Json<Volume>, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "volumes:write").map_err(|(code, err)| (code, Json(err)))?;
     // Verify volume exists
     let _existing: Option<Volume> = state.db.find_by_id("volumes", &volume_id).await.map_err(internal_db_err)?
         .ok_or_else(|| not_found_err("Volume"))?;
@@ -734,8 +774,10 @@ pub struct AttachVolumeRequest {
 
 pub async fn detach_volume(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Path(volume_id): Path<Uuid>,
 ) -> Result<Json<Volume>, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "volumes:write").map_err(|(code, err)| (code, Json(err)))?;
     let _existing: Option<Volume> = state.db.find_by_id("volumes", &volume_id).await.map_err(internal_db_err)?
         .ok_or_else(|| not_found_err("Volume"))?;
 
@@ -764,8 +806,10 @@ pub async fn detach_volume(
 
 pub async fn snapshot_volume(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Path(volume_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "volumes:write").map_err(|(code, err)| (code, Json(err)))?;
     // Verify volume exists
     let _existing: Option<Volume> = state.db.find_by_id("volumes", &volume_id).await.map_err(internal_db_err)?
         .ok_or_else(|| not_found_err("Volume"))?;
@@ -805,7 +849,9 @@ pub struct CreateDomainRequest {
 
 pub async fn list_domains(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
 ) -> Result<Json<PaginatedResponse<Domain>>, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "domains:read").map_err(|(code, err)| (code, Json(err)))?;
     let items: Vec<Domain> = state.db.find_all("domains").await.map_err(internal_db_err)?;
     let total = items.len() as u64;
     Ok(Json(PaginatedResponse::new(items, None, false).with_total_count(total)))
@@ -813,8 +859,10 @@ pub async fn list_domains(
 
 pub async fn create_domain(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Json(req): Json<CreateDomainRequest>,
 ) -> Result<(StatusCode, Json<Domain>), (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "domains:write").map_err(|(code, err)| (code, Json(err)))?;
     // Validation
     if req.hostname.trim().is_empty() {
         return Err(validation_err("Hostname must not be empty"));
@@ -849,16 +897,20 @@ pub async fn create_domain(
 
 pub async fn get_domain(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Path(domain_id): Path<Uuid>,
 ) -> Result<Json<Domain>, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "domains:read").map_err(|(code, err)| (code, Json(err)))?;
     let domain: Option<Domain> = state.db.find_by_id("domains", &domain_id).await.map_err(internal_db_err)?;
     domain.map(Json).ok_or_else(|| not_found_err("Domain"))
 }
 
 pub async fn delete_domain(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Path(domain_id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "domains:delete").map_err(|(code, err)| (code, Json(err)))?;
     state.db.delete("domains", &domain_id).await.map_err(|e| {
         match e {
             DatabaseError::NotFound => not_found_err("Domain"),
@@ -870,8 +922,10 @@ pub async fn delete_domain(
 
 pub async fn verify_domain(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Path(domain_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "domains:write").map_err(|(code, err)| (code, Json(err)))?;
     let _existing: Option<Domain> = state.db.find_by_id("domains", &domain_id).await.map_err(internal_db_err)?
         .ok_or_else(|| not_found_err("Domain"))?;
 
@@ -927,7 +981,9 @@ const VALID_ENGINES: &[&str] = &["postgres", "mysql", "redis", "mongodb"];
 
 pub async fn list_databases(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
 ) -> Result<Json<PaginatedResponse<Database>>, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "databases:read").map_err(|(code, err)| (code, Json(err)))?;
     let items: Vec<Database> = state.db.find_all("managed_databases").await.map_err(internal_db_err)?;
     let total = items.len() as u64;
     Ok(Json(PaginatedResponse::new(items, None, false).with_total_count(total)))
@@ -935,8 +991,10 @@ pub async fn list_databases(
 
 pub async fn create_database(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Json(req): Json<CreateDatabaseRequest>,
 ) -> Result<(StatusCode, Json<Database>), (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "databases:write").map_err(|(code, err)| (code, Json(err)))?;
     // Validation
     if !VALID_ENGINES.contains(&req.engine.to_lowercase().as_str()) {
         return Err(validation_err(&format!(
@@ -977,16 +1035,20 @@ pub async fn create_database(
 
 pub async fn get_database(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Path(db_id): Path<Uuid>,
 ) -> Result<Json<Database>, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "databases:read").map_err(|(code, err)| (code, Json(err)))?;
     let database: Option<Database> = state.db.find_by_id("managed_databases", &db_id).await.map_err(internal_db_err)?;
     database.map(Json).ok_or_else(|| not_found_err("Database"))
 }
 
 pub async fn delete_database(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Path(db_id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "databases:delete").map_err(|(code, err)| (code, Json(err)))?;
     state.db.delete("managed_databases", &db_id).await.map_err(|e| {
         match e {
             DatabaseError::NotFound => not_found_err("Database"),
@@ -998,8 +1060,10 @@ pub async fn delete_database(
 
 pub async fn backup_database(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Path(db_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "databases:write").map_err(|(code, err)| (code, Json(err)))?;
     let _existing: Option<Database> = state.db.find_by_id("managed_databases", &db_id).await.map_err(internal_db_err)?
         .ok_or_else(|| not_found_err("Database"))?;
 
@@ -1013,9 +1077,11 @@ pub async fn backup_database(
 
 pub async fn restore_database(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Path(db_id): Path<Uuid>,
     Json(body): Json<RestoreDatabaseRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "databases:write").map_err(|(code, err)| (code, Json(err)))?;
     let _existing: Option<Database> = state.db.find_by_id("managed_databases", &db_id).await.map_err(internal_db_err)?
         .ok_or_else(|| not_found_err("Database"))?;
 
@@ -1059,16 +1125,24 @@ pub struct CreateSecretRequest {
 
 pub async fn list_secrets(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
 ) -> Result<Json<PaginatedResponse<Secret>>, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "secrets:read").map_err(|(code, err)| (code, Json(err)))?;
     let items: Vec<Secret> = state.db.find_all("secrets").await.map_err(internal_db_err)?;
     let total = items.len() as u64;
+    // Audit log
+    state.audit.log(
+        &current_user, "secret.list", "secret", "", None
+    ).await;
     Ok(Json(PaginatedResponse::new(items, None, false).with_total_count(total)))
 }
 
 pub async fn create_secret(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Json(req): Json<CreateSecretRequest>,
 ) -> Result<(StatusCode, Json<Secret>), (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "secrets:write").map_err(|(code, err)| (code, Json(err)))?;
     // Encrypt the secret value using KMS
     let encrypted = state.kms_client.encrypt(&req.name, &req.value).await
         .map_err(|e| (
@@ -1104,35 +1178,55 @@ pub async fn create_secret(
         (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse::new("INTERNAL_ERROR", "Failed to retrieve created secret")))
     })?;
 
+    // Audit log
+    state.audit.log(
+        &current_user, "secret.create", "secret", &id.to_string(), None
+    ).await;
+
     Ok((StatusCode::CREATED, Json(secret)))
 }
 
 pub async fn get_secret(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Path(secret_id): Path<Uuid>,
 ) -> Result<Json<Secret>, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "secrets:read").map_err(|(code, err)| (code, Json(err)))?;
     let secret: Option<Secret> = state.db.find_by_id("secrets", &secret_id).await.map_err(internal_db_err)?;
-    secret.map(Json).ok_or_else(|| not_found_err("Secret"))
+    let secret = secret.ok_or_else(|| not_found_err("Secret"))?;
+    // Audit log
+    state.audit.log(
+        &current_user, "secret.read", "secret", &secret_id.to_string(), None
+    ).await;
+    Ok(Json(secret))
 }
 
 pub async fn delete_secret(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Path(secret_id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "secrets:delete").map_err(|(code, err)| (code, Json(err)))?;
     state.db.delete("secrets", &secret_id).await.map_err(|e| {
         match e {
             DatabaseError::NotFound => not_found_err("Secret"),
             _ => internal_db_err(e),
         }
     })?;
+    // Audit log
+    state.audit.log(
+        &current_user, "secret.delete", "secret", &secret_id.to_string(), None
+    ).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn rotate_secret(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Path(secret_id): Path<Uuid>,
     Json(body): Json<RotateSecretRequest>,
 ) -> Result<Json<Secret>, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "secrets:write").map_err(|(code, err)| (code, Json(err)))?;
     // Verify secret exists
     let existing: Option<Secret> = state.db.find_by_id("secrets", &secret_id).await.map_err(internal_db_err)?
         .ok_or_else(|| not_found_err("Secret"))?;
@@ -1161,6 +1255,12 @@ pub async fn rotate_secret(
 
     state.db.update("secrets", &secret_id, &update_entity).await.map_err(internal_db_err)?;
 
+    // Audit log
+    state.audit.log(
+        &current_user, "secret.rotate", "secret", &secret_id.to_string(),
+        Some(serde_json::json!({"new_version": 2}))
+    ).await;
+
     let secret: Option<Secret> = state.db.find_by_id("secrets", &secret_id).await.map_err(internal_db_err)?;
     secret.map(Json).ok_or_else(|| {
         (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse::new("INTERNAL_ERROR", "Failed to retrieve updated secret")))
@@ -1176,7 +1276,9 @@ pub struct RotateSecretRequest {
 
 pub async fn list_builds(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
 ) -> Result<Json<PaginatedResponse<serde_json::Value>>, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "builds:read").map_err(|(code, err)| (code, Json(err)))?;
     let items: Vec<serde_json::Value> = state.db.find_all("builds").await.map_err(internal_db_err)?;
     let total = items.len() as u64;
     Ok(Json(PaginatedResponse::new(items, None, false).with_total_count(total)))
@@ -1184,16 +1286,20 @@ pub async fn list_builds(
 
 pub async fn get_build(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Path(build_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "builds:read").map_err(|(code, err)| (code, Json(err)))?;
     let build: Option<serde_json::Value> = state.db.find_by_id("builds", &build_id).await.map_err(internal_db_err)?;
     build.map(Json).ok_or_else(|| not_found_err("Build"))
 }
 
 pub async fn get_build_logs(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Path(build_id): Path<Uuid>,
 ) -> Result<Json<Vec<String>>, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "builds:read").map_err(|(code, err)| (code, Json(err)))?;
     // Verify build exists
     let _build: Option<serde_json::Value> = state.db.find_by_id("builds", &build_id).await.map_err(internal_db_err)?
         .ok_or_else(|| not_found_err("Build"))?;
@@ -1204,8 +1310,10 @@ pub async fn get_build_logs(
 
 pub async fn cancel_build(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Path(build_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "builds:write").map_err(|(code, err)| (code, Json(err)))?;
     let _build: Option<serde_json::Value> = state.db.find_by_id("builds", &build_id).await.map_err(internal_db_err)?
         .ok_or_else(|| not_found_err("Build"))?;
 
@@ -1572,7 +1680,9 @@ pub struct CreateOrganizationRequest {
 
 pub async fn list_organizations(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
 ) -> Result<Json<PaginatedResponse<Organization>>, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "organizations:read").map_err(|(code, err)| (code, Json(err)))?;
     let items: Vec<Organization> = state.db.find_all("organizations").await.map_err(internal_db_err)?;
     let total = items.len() as u64;
     Ok(Json(PaginatedResponse::new(items, None, false).with_total_count(total)))
@@ -1580,8 +1690,10 @@ pub async fn list_organizations(
 
 pub async fn create_organization(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Json(req): Json<CreateOrganizationRequest>,
 ) -> Result<(StatusCode, Json<Organization>), (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "organizations:write").map_err(|(code, err)| (code, Json(err)))?;
     // Validation
     if req.name.len() < 2 || req.name.len() > 100 {
         return Err(validation_err("Organization name must be 2-100 characters"));
@@ -1613,8 +1725,10 @@ pub async fn create_organization(
 
 pub async fn get_organization(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
     Path(org_id): Path<Uuid>,
 ) -> Result<Json<Organization>, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "organizations:read").map_err(|(code, err)| (code, Json(err)))?;
     let org: Option<Organization> = state.db.find_by_id("organizations", &org_id).await.map_err(internal_db_err)?;
     org.map(Json).ok_or_else(|| not_found_err("Organization"))
 }
@@ -1623,7 +1737,9 @@ pub async fn get_organization(
 
 pub async fn get_metrics(
     State(state): State<Arc<AppState>>,
+    Extension(current_user): Extension<CurrentUser>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "apps:read").map_err(|(code, err)| (code, Json(err)))?;
     let apps_count = state.db.count("apps").await.unwrap_or(0);
     let nodes_count = state.db.count("nodes").await.unwrap_or(0);
     let builds_count = state.db.count("builds").await.unwrap_or(0);
@@ -1670,8 +1786,11 @@ pub struct AuditLogResponse {
 /// GET /v1/audit-logs — list audit logs (protected)
 pub async fn list_audit_logs(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<PaginatedResponse<AuditLogResponse>>, (StatusCode, Json<ErrorResponse>)> {
-    let items: Vec<AuditLogResponse> = state.db.find_all("audit_logs").await.map_err(internal_db_err)?;
+    Extension(current_user): Extension<CurrentUser>,
+) -> Result<Json<PaginatedResponse<serde_json::Value>>, (StatusCode, Json<ErrorResponse>)> {
+    super::middleware::check_permission(&current_user, "audit:read").map_err(|(code, err)| (code, Json(err)))?;
+    let items: Vec<serde_json::Value> = state.db.find_all("audit_logs").await
+        .map_err(internal_db_err)?;
     let total = items.len() as u64;
     Ok(Json(PaginatedResponse::new(items, None, false).with_total_count(total)))
 }

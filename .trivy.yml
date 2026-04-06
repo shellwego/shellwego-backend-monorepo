@@ -1,0 +1,7 @@
+severity:
+  - CRITICAL
+  - HIGH
+ignore:
+  - CVE-XXXX-XXXXX
+output: table
+format: table

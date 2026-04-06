@@ -8,6 +8,10 @@ repository.workspace = true
 rust-version.workspace = true
 description = "Storage drivers: ZFS dataset management, snapshots, and clones"
 
+[features]
+default = []
+luks2 = []
+
 [dependencies]
 # Schema types
 shellwego-schema = { path = "../shellwego-schema" }

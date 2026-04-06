@@ -110,6 +110,8 @@ pub struct Model {
     pub filesystem: FilesystemType,
     pub encrypted: bool,
     #[serde(default)]
+    pub compression_ratio: Option<f64>,
+    #[serde(default)]
     pub encryption_key_id: Option<String>,
     #[serde(default)]
     pub attached_to: Option<Uuid>, // App ID

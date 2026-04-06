@@ -228,6 +228,9 @@ impl StorageBackend for S3Backend {
                     let name = key.strip_prefix(&self.prefix).unwrap_or(key);
                     let name = name.trim_end_matches('/');
 
+                    let last_modified = obj.last_modified()
+                        .map(|t| chrono::DateTime::from_timestamp(t.secs(), 0).unwrap_or_else(chrono::Utc::now))
+                        .unwrap_or_else(chrono::Utc::now);
                     volumes.push(VolumeInfo {
                         name: name.to_string(),
                         mountpoint: None,
@@ -235,7 +238,7 @@ impl StorageBackend for S3Backend {
                         available_bytes: 0,
                         referenced_bytes: obj.size() as u64,
                         compression_ratio: 1.0,
-                        created: chrono::Utc::now(),
+                        created: last_modified,
                         properties: std::collections::HashMap::new(),
                     });
                 }
@@ -259,6 +262,10 @@ impl StorageBackend for S3Backend {
             .await
             .map_err(|e| StorageError::Backend(format!("S3 head: {}", e)))?;
 
+        let last_modified = resp.last_modified()
+            .map(|t| chrono::DateTime::from_timestamp(t.secs(), 0).unwrap_or_else(chrono::Utc::now))
+            .unwrap_or_else(chrono::Utc::now);
+
         Ok(VolumeInfo {
             name: name.to_string(),
             mountpoint: None,
@@ -266,7 +273,7 @@ impl StorageBackend for S3Backend {
             available_bytes: 0,
             referenced_bytes: resp.content_length() as u64,
             compression_ratio: 1.0,
-            created: chrono::Utc::now(),
+            created: last_modified,
             properties: std::collections::HashMap::new(),
         })
     }

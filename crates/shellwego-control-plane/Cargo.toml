@@ -19,6 +19,7 @@ path = "src/main.rs"
 [dependencies]
 # Internal crates
 shellwego-schema = { path = "../shellwego-schema" }
+shellwego-storage = { path = "../shellwego-storage" }
 
 # Async runtime
 tokio = { workspace = true }

@@ -64,7 +64,7 @@ impl ZfsManager {
     }
 
     /// Get full dataset path for a volume/app
-    fn full_path(&self, name: &str) -> String {
+    pub fn full_path(&self, name: &str) -> String {
         format!("{}/{}", self.base_dataset, name)
     }
 
@@ -271,6 +271,35 @@ impl ZfsManager {
     pub async fn clear_cache(&self) {
         let mut cache = self.cache.write().await;
         cache.entries.clear();
+    }
+
+    /// Access the underlying CLI (for direct operations)
+    pub fn cli(&self) -> &ZfsCli {
+        &self.cli
+    }
+
+    /// Create a ZFS block volume (zvol)
+    pub async fn create_zvol(&self, volume_id: uuid::Uuid, size_gb: u64) -> Result<VolumeInfo, StorageError> {
+        let vol_name = format!("volumes/{}", volume_id);
+        let full_name = self.full_path(&vol_name);
+
+        info!("Creating zvol {} ({}GB)", volume_id, size_gb);
+
+        self.cli.create_zvol(&full_name, size_gb).await?;
+        self.cli.get_info(&full_name).await
+    }
+
+    /// List all shellwego volumes
+    pub async fn list_volumes(&self) -> Result<Vec<VolumeInfo>, StorageError> {
+        let volumes_dataset = format!("{}/volumes", self.base_dataset);
+        self.cli.list_volumes(&volumes_dataset).await
+    }
+
+    /// Get compression ratio for a volume
+    pub async fn get_compression_ratio(&self, volume_id: uuid::Uuid) -> Result<f64, StorageError> {
+        let vol_name = format!("volumes/{}", volume_id);
+        let dataset = self.full_path(&vol_name);
+        self.cli.get_compression_ratio(&dataset).await
     }
 
     async fn pull_image_to_dataset(

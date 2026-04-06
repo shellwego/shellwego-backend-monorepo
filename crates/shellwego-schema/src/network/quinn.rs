@@ -61,6 +61,47 @@ pub enum Message {
         /// Error message if failed
         error: Option<String>,
     },
+    /// Subscribe to a topic pattern.
+    Subscribe {
+        /// Client-provided subscription ID (for unsubscribe later).
+        subscription_id: SubscriptionId,
+        /// Topic pattern (may contain wildcards `*` and `>`).
+        topic_pattern: String,
+    },
+    /// Unsubscribe from a topic.
+    Unsubscribe {
+        /// The subscription ID to cancel.
+        subscription_id: SubscriptionId,
+    },
+    /// Acknowledgment of a received message (for at-least-once delivery).
+    Ack {
+        /// The msg_id being acknowledged.
+        msg_id: Uuid,
+    },
+    /// Negative acknowledgment — message could not be processed.
+    Nack {
+        /// The msg_id that failed.
+        msg_id: Uuid,
+        /// Reason for failure.
+        reason: String,
+    },
+    /// Publish a message to a topic on the bus.
+    Publish {
+        /// The bus message envelope.
+        bus_message: BusMessageEnvelope,
+    },
+    /// Ping — internal keepalive.
+    Ping {
+        /// Timestamp of the ping.
+        timestamp: DateTime<Utc>,
+    },
+    /// Pong — response to a Ping.
+    Pong {
+        /// Timestamp of the original ping.
+        ping_timestamp: DateTime<Utc>,
+        /// Timestamp of the pong response.
+        pong_timestamp: DateTime<Utc>,
+    },
 }
 
 /// Resource limits for scheduled apps
@@ -195,6 +236,280 @@ pub enum ChannelPriority {
     Logs = 3,
     /// Best effort (lowest priority)
     BestEffort = 4,
+}
+
+// ---------------------------------------------------------------------------
+// Message Bus Types (Plan 03)
+// ---------------------------------------------------------------------------
+
+/// Error type for topic validation.
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
+pub enum TopicError {
+    #[error("topic name is empty")]
+    Empty,
+    #[error("topic too long: {0} bytes (max {MAX_LEN})", MAX_LEN = 256)]
+    TooLong(usize),
+    #[error("empty segment in topic: {0}")]
+    EmptySegment(String),
+    #[error("invalid characters in segment: {0}")]
+    InvalidChars(String),
+}
+
+/// A validated topic name for the message bus.
+///
+/// Format: `segment.segment.segment` where each segment matches `[a-zA-Z0-9_-]+`.
+/// Maximum length: 256 bytes total.
+/// Reserved prefixes: `system.` (internal control messages).
+///
+/// Wildcards:
+/// - `agent.*` — matches any single segment (e.g., `agent.heartbeat` but not `agent.cmd.schedule`).
+/// - `node.>` — multi-level wildcard, matches all sub-topics (must be last segment).
+///
+/// Examples:
+/// - `agent.cmd.schedule` — schedule an app on an agent
+/// - `agent.heartbeat` — agent heartbeats
+/// - `system.ping` — internal keepalive
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema, schemars::JsonSchema))]
+pub struct Topic(String);
+
+impl Topic {
+    pub const MAX_LEN: usize = 256;
+    pub const SYSTEM_PREFIX: &str = "system.";
+
+    /// Create a new topic with validation.
+    pub fn new(name: impl Into<String>) -> Result<Self, TopicError> {
+        let s = name.into();
+        if s.is_empty() {
+            return Err(TopicError::Empty);
+        }
+        if s.len() > Self::MAX_LEN {
+            return Err(TopicError::TooLong(s.len()));
+        }
+        for segment in s.split('.') {
+            if segment.is_empty() {
+                return Err(TopicError::EmptySegment(s));
+            }
+            if segment == "*" || segment == ">" {
+                continue; // wildcards allowed in patterns
+            }
+            if !segment.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+                return Err(TopicError::InvalidChars(segment.to_string()));
+            }
+        }
+        Ok(Self(s))
+    }
+
+    /// Access the underlying string.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Returns true if this topic pattern matches a concrete topic.
+    /// - Exact match: `agent.heartbeat` == `agent.heartbeat`
+    /// - Single-segment wildcard: `agent.*` matches `agent.heartbeat` but not `agent.cmd.schedule`
+    /// - Multi-level wildcard: `agent.>` matches `agent.heartbeat`, `agent.cmd.schedule`, etc.
+    /// The `>` wildcard must be the last segment.
+    pub fn matches(&self, concrete: &Topic) -> bool {
+        let pattern_parts: Vec<&str> = self.0.split('.').collect();
+        let concrete_parts: Vec<&str> = concrete.0.split('.').collect();
+
+        for (i, pat) in pattern_parts.iter().enumerate() {
+            match *pat {
+                ">" => return true, // matches everything remaining (must be last)
+                "*" => {
+                    if i >= concrete_parts.len() {
+                        return false;
+                    }
+                    // matches exactly one segment
+                }
+                exact => {
+                    if concrete_parts.get(i) != Some(&exact) {
+                        return false;
+                    }
+                }
+            }
+        }
+        pattern_parts.len() == concrete_parts.len()
+    }
+
+    /// Returns true if this topic contains wildcard characters.
+    pub fn is_wildcard(&self) -> bool {
+        self.0.contains('*') || self.0.contains('>')
+    }
+
+    /// Returns true if this is a system-reserved topic.
+    pub fn is_system(&self) -> bool {
+        self.0.starts_with(Self::SYSTEM_PREFIX)
+    }
+}
+
+impl std::fmt::Display for Topic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::str::FromStr for Topic {
+    type Err = TopicError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::new(s)
+    }
+}
+
+/// Unique subscription identifier returned by the bus on subscribe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema, schemars::JsonSchema))]
+pub struct SubscriptionId(pub u64);
+
+/// Wire envelope for a bus message (compact form for transport).
+///
+/// The payload is serialized `Message` bytes to avoid circular type references.
+/// Serialized with postcard over QUIC streams. Layout:
+///
+///   [u32: payload_len] [u8: priority] [u16: topic_len] [topic_bytes] [postcard(Message)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema, schemars::JsonSchema))]
+pub struct BusMessageEnvelope {
+    /// Unique message identifier (for dedup and ack).
+    pub msg_id: Uuid,
+    /// Topic this message was published to.
+    pub topic: String,
+    /// Priority level — affects send ordering.
+    pub priority: ChannelPriority,
+    /// Timestamp when the message was created (sender wall-clock).
+    pub timestamp: DateTime<Utc>,
+    /// Node ID of the publisher.
+    pub source_node: Option<Uuid>,
+    /// If this is a reply, the msg_id of the original message.
+    pub reply_to: Option<Uuid>,
+    /// Serialized payload bytes (postcard-encoded `Message`).
+    pub payload_bytes: Vec<u8>,
+}
+
+/// Full bus message with deserialized payload.
+///
+/// This is the in-memory representation used by the router and subscribers.
+/// The wire format uses `BusMessageEnvelope` (with `payload_bytes: Vec<u8>`).
+#[derive(Debug, Clone)]
+pub struct BusMessage {
+    /// Unique message identifier (for dedup and ack).
+    pub msg_id: Uuid,
+    /// Topic this message was published to.
+    pub topic: Topic,
+    /// Priority level — affects send ordering.
+    pub priority: ChannelPriority,
+    /// Timestamp when the message was created (sender wall-clock).
+    pub timestamp: DateTime<Utc>,
+    /// Node ID of the publisher.
+    pub source_node: Option<Uuid>,
+    /// If this is a reply, the msg_id of the original message.
+    pub reply_to: Option<Uuid>,
+    /// The application-level payload.
+    pub payload: Message,
+}
+
+impl BusMessage {
+    /// Create a new BusMessage.
+    pub fn new(topic: Topic, payload: Message, priority: ChannelPriority) -> Self {
+        Self {
+            msg_id: Uuid::new_v4(),
+            topic,
+            priority,
+            timestamp: Utc::now(),
+            source_node: None,
+            reply_to: None,
+            payload,
+        }
+    }
+
+    /// Create a BusMessage with an explicit source node.
+    pub fn with_source(mut self, node_id: Uuid) -> Self {
+        self.source_node = Some(node_id);
+        self
+    }
+
+    /// Create a BusMessage that is a reply to another message.
+    pub fn with_reply_to(mut self, original_msg_id: Uuid) -> Self {
+        self.reply_to = Some(original_msg_id);
+        self
+    }
+
+    /// Convert to wire envelope (serialize the payload).
+    pub fn to_envelope(&self) -> anyhow::Result<BusMessageEnvelope> {
+        Ok(BusMessageEnvelope {
+            msg_id: self.msg_id,
+            topic: self.topic.as_str().to_string(),
+            priority: self.priority,
+            timestamp: self.timestamp,
+            source_node: self.source_node,
+            reply_to: self.reply_to,
+            payload_bytes: postcard::to_allocvec(&self.payload)?,
+        })
+    }
+
+    /// Convert from wire envelope (deserialize the payload).
+    pub fn from_envelope(envelope: BusMessageEnvelope) -> anyhow::Result<Self> {
+        let payload: Message = postcard::from_bytes(&envelope.payload_bytes)?;
+        Ok(Self {
+            msg_id: envelope.msg_id,
+            topic: Topic::new(envelope.topic)?,
+            priority: envelope.priority,
+            timestamp: envelope.timestamp,
+            source_node: envelope.source_node,
+            reply_to: envelope.reply_to,
+            payload,
+        })
+    }
+}
+
+/// Configuration for the QUIC message bus.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema, schemars::JsonSchema))]
+pub struct BusConfig {
+    /// Maximum number of in-flight unacknowledged messages per connection.
+    /// Default: 1024.
+    pub max_inflight: u32,
+
+    /// Acknowledgment timeout in milliseconds. If no `Ack` is received
+    /// within this duration, the message is retried.
+    /// Default: 5000.
+    pub ack_timeout_ms: u64,
+
+    /// Maximum retry attempts for a message before it goes to the dead-letter queue.
+    /// Default: 3.
+    pub max_retries: u32,
+
+    /// Base retry delay in milliseconds (exponential backoff: delay * 2^attempt).
+    /// Default: 100.
+    pub retry_base_delay_ms: u64,
+
+    /// Per-subscriber inbox capacity (bounded mpsc channel size).
+    /// Default: 8192.
+    pub subscriber_buffer_size: usize,
+
+    /// Maximum number of subscribers per topic.
+    /// Default: 1000.
+    pub max_subscribers_per_topic: usize,
+
+    /// Whether to enable the dead-letter queue for failed messages.
+    /// Default: true.
+    pub dead_letter_enabled: bool,
+}
+
+impl Default for BusConfig {
+    fn default() -> Self {
+        Self {
+            max_inflight: 1024,
+            ack_timeout_ms: 5000,
+            max_retries: 3,
+            retry_base_delay_ms: 100,
+            subscriber_buffer_size: 8192,
+            max_subscribers_per_topic: 1000,
+            dead_letter_enabled: true,
+        }
+    }
 }
 
 #[cfg(test)]

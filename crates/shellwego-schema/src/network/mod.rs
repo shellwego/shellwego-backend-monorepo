@@ -12,7 +12,7 @@ pub mod quinn;
 pub use config::{NetworkConfig, NetworkSetup};
 pub use discovery::{DiscoveryError, ServiceInstance};
 pub use error::NetworkError;
-pub use quinn::{AgentConnection, ChannelPriority, Message, QuicConfig, ResourceLimits};
+pub use quinn::{AgentConnection, ChannelPriority, Message, QuicConfig, ResourceLimits, Topic, TopicError, SubscriptionId, BusMessage, BusMessageEnvelope, BusConfig};
 
 /// Generate deterministic MAC address from UUID
 pub fn generate_mac(uuid: &uuid::Uuid) -> String {

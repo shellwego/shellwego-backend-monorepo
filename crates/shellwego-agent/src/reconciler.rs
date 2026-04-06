@@ -179,6 +179,11 @@ impl Reconciler {
         Ok(())
     }
 
+    /// Prepare the root filesystem for a container.
+    ///
+    /// In production, this uses the `DistributionManager` from `shellwego-registry`
+    /// which coordinates P2P → mirror → upstream pull path. For Phase 1, this
+    /// checks local disk and falls back to a base image.
     async fn prepare_rootfs(&self, image: &str) -> anyhow::Result<std::path::PathBuf> {
         let safe_name = image.replace(|c: char| !c.is_alphanumeric(), "_");
         let image_path =

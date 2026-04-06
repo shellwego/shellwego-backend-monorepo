@@ -17,6 +17,7 @@ pub use zfs::ZfsManager;
 
 // Re-export OCI types from schema
 pub use oci::{OciClient, OciError};
+pub use shellwego_registry::pull::ImagePuller;
 pub use shellwego_schema::oci::{ConfigDescriptor, LayerDescriptor, Manifest, OciConfig, Platform};
 
 /// Storage backend trait for pluggability

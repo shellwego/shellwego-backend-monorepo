@@ -22,6 +22,7 @@ use crate::RegistryError;
 
 // Re-export types needed by pull module
 use crate::cache::LayerCache;
+use crate::mirror::MirrorChain;
 
 /// Image puller with progress tracking
 pub struct ImagePuller {
@@ -33,6 +34,8 @@ pub struct ImagePuller {
     token_cache: Arc<tokio::sync::RwLock<HashMap<String, AuthTokenInternal>>>,
     /// Cache reference for storage
     cache: Option<LayerCache>,
+    /// Mirror chain for fallback distribution
+    mirror_chain: Option<Arc<MirrorChain>>,
 }
 
 /// Internal auth token with expiration tracking
@@ -133,6 +136,7 @@ impl ImagePuller {
             auth_store: HashMap::new(),
             token_cache: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
             cache: None,
+            mirror_chain: None,
         }
     }
 
@@ -141,6 +145,17 @@ impl ImagePuller {
         let mut puller = Self::new();
         puller.cache = Some(cache);
         puller
+    }
+
+    /// Set the mirror chain for fallback distribution
+    pub fn with_mirror_chain(mut self, chain: MirrorChain) -> Self {
+        self.mirror_chain = Some(Arc::new(chain));
+        self
+    }
+
+    /// Check if a mirror chain is configured
+    pub fn has_mirrors(&self) -> bool {
+        self.mirror_chain.is_some() && !self.mirror_chain.as_ref().unwrap().is_empty()
     }
 
     /// Add authentication for a registry

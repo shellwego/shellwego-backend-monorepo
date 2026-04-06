@@ -32,6 +32,10 @@ pub struct Config {
     
     /// KMS configuration
     pub kms: KmsConfigEntry,
+
+    /// Registry mirror configuration (loaded from REGISTRY_MIRRORS env var)
+    #[serde(default)]
+    pub registry_mirrors: Option<Vec<shellwego_schema::oci::MirrorConfig>>,
 }
 
 /// Database configuration
@@ -199,6 +203,12 @@ impl Config {
         
         let default_region = std::env::var("DEFAULT_REGION")
             .unwrap_or_else(|_| "default".to_string());
+
+        // Load registry mirror configuration from env
+        let registry_mirrors: Option<Vec<shellwego_schema::oci::MirrorConfig>> =
+            std::env::var("REGISTRY_MIRRORS")
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok());
         
         Ok(Self {
             bind_addr,
@@ -239,6 +249,7 @@ impl Config {
                 vault_address: None,
                 vault_token: None,
             },
+            registry_mirrors,
         })
     }
     
@@ -290,6 +301,7 @@ impl Default for Config {
                 vault_address: None,
                 vault_token: None,
             },
+            registry_mirrors: None,
         }
     }
 }

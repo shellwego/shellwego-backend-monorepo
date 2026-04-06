@@ -1,0 +1,75 @@
+syntax = "proto3";
+
+package shellwego.registry.distribution;
+
+option go_package = "github.com/shellwego/shellwego/proto/distribution";
+
+// P2P piece distribution service
+service DistributionService {
+  // Request a piece from a peer
+  rpc GetPiece(PieceRequest) returns (PieceResponse);
+  // Announce piece availability to peers
+  rpc AnnounceAvailability(LayerAvailability) returns (AckResponse);
+  // Get the list of available peers
+  rpc ListPeers(PeerListRequest) returns (PeerListResponse);
+  // Register as a peer in the network
+  rpc RegisterPeer(PeerAnnouncement) returns (AckResponse);
+}
+
+// Request for a specific piece of a layer
+message PieceRequest {
+  string layer_digest = 1;  // e.g., "sha256:abc123..."
+  uint64 offset = 2;        // Byte offset within the layer
+  uint64 length = 3;        // Number of bytes to fetch
+}
+
+// Response containing piece data
+message PieceResponse {
+  bytes data = 1;           // Raw piece data
+  string layer_digest = 2;  // Echo the requested digest
+  uint64 offset = 3;        // Echo the requested offset
+  bool success = 4;         // Whether the piece was available
+  string error = 5;         // Error message if success is false
+}
+
+// Announce that a peer has pieces of a layer available
+message LayerAvailability {
+  string peer_id = 1;       // Announcing peer's ID
+  string layer_digest = 2;  // Layer digest
+  uint64 total_size = 3;    // Total layer size in bytes
+  repeated uint64 piece_offsets = 4; // Available piece offsets
+}
+
+// Acknowledgment response
+message AckResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// Request to list known peers
+message PeerListRequest {
+  string layer_digest = 1;  // Optional: filter peers that have this layer
+}
+
+// Response with peer list
+message PeerListResponse {
+  repeated PeerInfo peers = 1;
+}
+
+// Peer information
+message PeerInfo {
+  string peer_id = 1;       // Unique peer identifier
+  string address = 2;       // Network address (host:port)
+  uint64 bandwidth_bps = 3; // Estimated upload bandwidth
+  uint32 rtt_ms = 4;        // Round-trip time in milliseconds
+  uint32 max_concurrent = 5; // Max concurrent piece downloads
+  repeated string available_layers = 6; // Available layer digests
+}
+
+// Peer registration announcement
+message PeerAnnouncement {
+  string peer_id = 1;       // Registering peer's ID
+  string address = 2;       // Network address (host:port)
+  uint64 bandwidth_bps = 3; // Upload bandwidth
+  repeated string available_layers = 4; // Initially available layers
+}

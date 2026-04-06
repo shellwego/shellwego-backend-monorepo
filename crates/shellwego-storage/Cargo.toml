@@ -37,6 +37,7 @@ futures-util = "0.3"
 tokio-tar = "0.3"
 flate2 = "1.0"
 tempfile = "3.8"
+shellwego-registry = { path = "../shellwego-registry" }
 
 [dev-dependencies]
 tempfile = "3.8"

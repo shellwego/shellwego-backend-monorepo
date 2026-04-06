@@ -150,6 +150,7 @@ pub enum Table {
     Deployments,
     TeamMembers,
     ApiKeys,
+    AppInstances,
 }
 
 impl Table {
@@ -168,6 +169,7 @@ impl Table {
             "deployments" => Ok(Self::Deployments),
             "team_members" => Ok(Self::TeamMembers),
             "api_keys" => Ok(Self::ApiKeys),
+            "app_instances" => Ok(Self::AppInstances),
             _ => Err(DatabaseError::QueryError(format!("Unknown table: {}", s))),
         }
     }
@@ -187,9 +189,9 @@ impl Table {
             Self::Deployments => "deployments",
             Self::TeamMembers => "team_members",
             Self::ApiKeys => "api_keys",
+            Self::AppInstances => "app_instances",
         }
     }
-}
 
 impl FromStr for Table {
     type Err = DatabaseError;
@@ -385,6 +387,7 @@ impl Database {
             Table::Users => self.insert_user(&value).await,
             Table::TeamMembers => self.insert_team_member(&value).await,
             Table::ApiKeys => self.insert_api_key(&value).await,
+            Table::AppInstances => self.insert_app_instance(&value).await,
         }
     }
 
@@ -466,6 +469,7 @@ impl Database {
             Table::Domains => self.update_domain(id, &value).await,
             Table::ManagedDatabases => self.update_managed_database(id, &value).await,
             Table::Users => self.update_user(id, &value).await,
+            Table::AppInstances => self.update_app_instance(id, &value).await,
             _ => self.update_generic(table_enum, id, &value).await,
         }
     }
@@ -1079,6 +1083,43 @@ impl Database {
         .execute(&self.pool)
         .await
         .map_err(|e| DatabaseError::QueryError(format!("Update user failed: {}", e)))?;
+        Ok(())
+    }
+
+    async fn insert_app_instance(&self, v: &serde_json::Value) -> Result<(), DatabaseError> {
+        sqlx::query(
+            "INSERT INTO app_instances (id, app_id, node_id, deployment_id, status, internal_ip, started_at, health_checks_passed, health_checks_failed, last_health_check, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        .bind(str_val(v, "id"))
+        .bind(str_val(v, "app_id"))
+        .bind(str_val(v, "node_id"))
+        .bind(v["deployment_id"].as_str())
+        .bind(str_or(v, "status", "starting"))
+        .bind(str_or(v, "internal_ip", ""))
+        .bind(str_or_ts(v, "started_at"))
+        .bind(int_val(v, "health_checks_passed", 0))
+        .bind(int_val(v, "health_checks_failed", 0))
+        .bind(v["last_health_check"].as_str())
+        .bind(str_or_ts(v, "created_at"))
+        .execute(&self.pool)
+        .await
+        .map_err(|e| DatabaseError::QueryError(format!("Insert app_instance failed: {}", e)))?;
+        Ok(())
+    }
+
+    async fn update_app_instance(&self, id: &Uuid, v: &serde_json::Value) -> Result<(), DatabaseError> {
+        sqlx::query(
+            "UPDATE app_instances SET status = ?, internal_ip = ?, health_checks_passed = ?, health_checks_failed = ?, last_health_check = ? WHERE id = ?"
+        )
+        .bind(str_or(v, "status", "starting"))
+        .bind(str_or(v, "internal_ip", ""))
+        .bind(int_val(v, "health_checks_passed", 0))
+        .bind(int_val(v, "health_checks_failed", 0))
+        .bind(v["last_health_check"].as_str())
+        .bind(id.to_string())
+        .execute(&self.pool)
+        .await
+        .map_err(|e| DatabaseError::QueryError(format!("Update app_instance failed: {}", e)))?;
         Ok(())
     }
 

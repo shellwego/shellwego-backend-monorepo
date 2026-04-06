@@ -1,5 +1,7 @@
 # Plan 02: Scheduler, Deploy Pipeline & Guardian
 
+**Status: ✅ Done** (Implemented 2026-04-06)
+
 ## 1. Title & Overview
 
 **Scheduler, Deploy Pipeline & Guardian** — Implement the three core runtime subsystems that are entirely missing from the codebase despite being described in the README as foundational: (A) a scheduler that assigns apps to available worker nodes, (B) a deploy pipeline that actually provisions microVMs on agents (not just creates a DB record), and (C) a guardian/watchdog that monitors running instances and triggers automatic healing (restart on unhealthy, reschedule on node loss). Additionally, this plan fixes the log streaming stub, wires start/stop/restart handlers to real agent commands, and replaces the hardcoded node capacity in `list_nodes` with data from heartbeat reports.

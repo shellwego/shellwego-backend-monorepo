@@ -14,6 +14,7 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::vmm::{MicrovmConfig, VmmManager};
+use shellwego_storage::zfs::ZfsCli;
 
 // Re-export types from schema
 pub use shellwego_schema::{AgentSnapshotInfo, AgentSnapshotType};
@@ -41,15 +42,26 @@ struct SnapshotMetadata {
 struct ZfsSnapshotManager {
     pool: String,
     base_dataset: String,
+    cli: ZfsCli,
 }
 
 impl ZfsSnapshotManager {
     async fn new(pool: &str) -> anyhow::Result<Self> {
+        let cli = ZfsCli::new();
         let base_dataset = format!("{}/shellwego/snapshots", pool);
         Ok(Self {
             pool: pool.to_string(),
             base_dataset,
+            cli,
         })
+    }
+
+    async fn is_zfs_available(&self) -> bool {
+        self.cli.check_prereqs().await.is_ok()
+    }
+
+    async fn dataset_exists(&self, dataset: &str) -> anyhow::Result<bool> {
+        self.cli.dataset_exists(dataset).await.map_err(Into::into)
     }
 
     async fn create_disk_snapshot(
@@ -57,7 +69,6 @@ impl ZfsSnapshotManager {
         app_id: Uuid,
         snapshot_name: &str,
     ) -> anyhow::Result<Option<String>> {
-        // Check if ZFS is available
         if !self.is_zfs_available().await {
             debug!("ZFS not available, skipping disk snapshot");
             return Ok(None);
@@ -65,7 +76,6 @@ impl ZfsSnapshotManager {
 
         let app_dataset = format!("{}/shellwego/apps/{}", self.pool, app_id);
 
-        // Check if the app dataset exists
         if !self.dataset_exists(&app_dataset).await? {
             debug!(
                 "App dataset {} does not exist, skipping disk snapshot",
@@ -76,19 +86,15 @@ impl ZfsSnapshotManager {
 
         let snapshot_full = format!("{}@{}", app_dataset, snapshot_name);
 
-        // Create ZFS snapshot
-        let output = tokio::process::Command::new("zfs")
-            .args(["snapshot", &snapshot_full])
-            .output()
-            .await?;
-
-        if output.status.success() {
-            info!("Created ZFS disk snapshot: {}", snapshot_full);
-            Ok(Some(snapshot_full))
-        } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            warn!("Failed to create ZFS snapshot: {}", stderr);
-            Ok(None)
+        match self.cli.create_snapshot(&app_dataset, snapshot_name).await {
+            Ok(()) => {
+                info!("Created ZFS disk snapshot: {}", snapshot_full);
+                Ok(Some(snapshot_full))
+            }
+            Err(e) => {
+                warn!("Failed to create ZFS snapshot: {}", e);
+                Ok(None)
+            }
         }
     }
 
@@ -101,33 +107,21 @@ impl ZfsSnapshotManager {
             return Ok(None);
         }
 
-        // Parse snapshot path to get dataset and snapshot name
         let parts: Vec<&str> = snapshot_path.split('@').collect();
         if parts.len() != 2 {
             anyhow::bail!("Invalid snapshot path format: {}", snapshot_path);
         }
 
-        let _source_dataset = parts[0];
-        let _snap_name = parts[1];
-
-        // Create new dataset for the cloned app
         let target_dataset = format!("{}/shellwego/apps/{}", self.pool, new_app_id);
 
-        // Clone the snapshot
-        let output = tokio::process::Command::new("zfs")
-            .args(["clone", snapshot_path, &target_dataset])
-            .output()
-            .await?;
-
-        if output.status.success() {
-            info!(
-                "Cloned ZFS snapshot {} to {}",
-                snapshot_path, target_dataset
-            );
-            Ok(Some(target_dataset))
-        } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("Failed to clone ZFS snapshot: {}", stderr)
+        match self.cli.clone_snapshot(snapshot_path, &target_dataset).await {
+            Ok(()) => {
+                info!("Cloned ZFS snapshot {} to {}", snapshot_path, target_dataset);
+                Ok(Some(target_dataset))
+            }
+            Err(e) => {
+                anyhow::bail!("Failed to clone ZFS snapshot: {}", e)
+            }
         }
     }
 
@@ -136,48 +130,31 @@ impl ZfsSnapshotManager {
             return Ok(());
         }
 
-        let output = tokio::process::Command::new("zfs")
-            .args(["destroy", snapshot_path])
-            .output()
-            .await?;
-
-        if output.status.success() {
-            info!("Deleted ZFS snapshot: {}", snapshot_path);
-        } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            warn!("Failed to delete ZFS snapshot: {}", stderr);
+        match self.cli.destroy_dataset(snapshot_path, false).await {
+            Ok(()) => {
+                info!("Deleted ZFS snapshot: {}", snapshot_path);
+            }
+            Err(e) => {
+                warn!("Failed to delete ZFS snapshot: {}", e);
+            }
         }
 
         Ok(())
     }
 
-    async fn is_zfs_available(&self) -> bool {
-        tokio::process::Command::new("which")
-            .arg("zfs")
-            .output()
-            .await
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    }
-
-    async fn dataset_exists(&self, dataset: &str) -> anyhow::Result<bool> {
-        let output = tokio::process::Command::new("zfs")
-            .args(["list", "-H", "-o", "name", dataset])
-            .output()
-            .await?;
-
-        Ok(output.status.success())
-    }
-
     async fn get_snapshot_size(&self, snapshot_path: &str) -> anyhow::Result<u64> {
-        let output = tokio::process::Command::new("zfs")
-            .args(["list", "-H", "-p", "-o", "used", snapshot_path])
-            .output()
-            .await?;
+        if !self.is_zfs_available().await {
+            return Ok(0);
+        }
 
+        // Use zfs list to get the used space of the snapshot
+        let mut cmd = tokio::process::Command::new("zfs");
+        cmd.args(["list", "-H", "-p", "-o", "used", snapshot_path])
+            .kill_on_drop(true);
+
+        let output = cmd.output().await?;
         if output.status.success() {
-            let size_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            Ok(size_str.parse().unwrap_or(0))
+            Ok(String::from_utf8_lossy(&output.stdout).trim().parse().unwrap_or(0))
         } else {
             Ok(0)
         }

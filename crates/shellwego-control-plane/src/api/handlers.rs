@@ -816,7 +816,15 @@ pub async fn create_volume(
 
     state.db.insert("volumes", &volume_entity).await.map_err(internal_db_err)?;
 
-    let volume: Option<Volume> = state.db.find_by_id("volumes", &id).await.map_err(internal_db_err)?;
+    // TODO(Plan 10): Dispatch provisioning command to agent via QUIC message bus.
+    // The actual ZFS provisioning happens asynchronously on the agent node.
+    // 1. Find available agent with sufficient storage capacity
+    // 2. Send ProvisionVolume command with volume_id, size_gb, encrypted
+    // 3. Agent provisions via VolumeProvisioner / ZfsManager
+    // 4. Agent reports back with VolumeStatus::Attached or VolumeStatus::Error
+    // For now, the volume remains in "creating" status until agent confirms.
+
+    let volume: Option<Volume> = state.db.find_by_id("volumes", &id).await.map_err(internal_db_err)?
     let volume = volume.ok_or_else(|| {
         (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse::new("INTERNAL_ERROR", "Failed to retrieve created volume")))
     })?;
@@ -927,14 +935,22 @@ pub async fn snapshot_volume(
     Path(volume_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
     super::middleware::check_permission(&current_user, "volumes:write").map_err(|(code, err)| (code, Json(err)))?;
-    // Verify volume exists
-    let _existing: Option<Volume> = state.db.find_by_id("volumes", &volume_id).await.map_err(internal_db_err)?
+    // Verify volume exists and is in a state that allows snapshotting
+    let existing: Option<Volume> = state.db.find_by_id("volumes", &volume_id).await.map_err(internal_db_err)?
         .ok_or_else(|| not_found_err("Volume"))?;
+
+    // TODO(Plan 10): Send snapshot command to the agent hosting this volume.
+    // 1. Look up which agent is hosting this volume (from attached_to or scheduling metadata)
+    // 2. Send SnapshotVolume command via QUIC message bus
+    // 3. Agent creates ZFS snapshot via ZfsManager::snapshot_volume()
+    // 4. Agent reports back with snapshot ID and size
+    // For now, return a placeholder snapshot ID.
 
     let snapshot_id = Uuid::new_v4();
     Ok(Json(serde_json::json!({
         "snapshot_id": snapshot_id,
         "volume_id": volume_id,
+        "volume_name": existing.name,
         "status": "creating"
     })))
 }

@@ -20,6 +20,8 @@ use hmac::{Hmac, Mac as _};
 use rand::RngCore;
 use sha2::Sha256;
 use std::fmt;
+use crate::zfs::ZfsManager;
+use std::sync::Arc;
 use thiserror::Error;
 
 const DEK_SIZE: usize = 32;
@@ -161,7 +163,7 @@ impl EncryptionProvider {
         self.decrypt_block(&ciphertext_with_gcm_tag, &self.master_key, iv)
     }
 
-    fn generate_iv(&self) -> Vec<u8> {
+    pub fn generate_iv(&self) -> Vec<u8> {
         let mut iv = vec![0u8; IV_SIZE];
         OsRng.fill_bytes(&mut iv);
         iv
@@ -173,6 +175,97 @@ impl EncryptionProvider {
         mac.update(data);
         let result = mac.finalize().into_bytes();
         result.to_vec()
+    }
+}
+
+/// Manages volume-level encryption operations
+pub struct VolumeEncryptor {
+    provider: Arc<EncryptionProvider>,
+    zfs: Arc<ZfsManager>,
+    keys_dir: std::path::PathBuf,
+}
+
+impl VolumeEncryptor {
+    pub fn new(
+        provider: Arc<EncryptionProvider>,
+        zfs: Arc<ZfsManager>,
+        keys_dir: std::path::PathBuf,
+    ) -> Self {
+        Self { provider, zfs, keys_dir }
+    }
+
+    /// Encrypt a volume using ZFS native encryption
+    pub async fn encrypt_volume(
+        &self,
+        volume_id: uuid::Uuid,
+    ) -> Result<EncryptionStatus, StorageError> {
+        // 1. Generate raw ZFS encryption key
+        let mut raw_key = vec![0u8; 32];
+        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut raw_key);
+
+        // 2. Wrap with master key
+        let dek = self.provider.generate_dek().await
+            .map_err(|e| StorageError::Encryption(format!("DEK generation: {}", e)))?;
+
+        // 3. Store wrapped key
+        tokio::fs::create_dir_all(&self.keys_dir).await?;
+        let wrapped_path = self.keys_dir.join(format!("{}.wrapped", volume_id));
+        let encoded = dek.to_base64();
+        tokio::fs::write(&wrapped_path, &encoded).await?;
+
+        // 4. Write raw key to temp file
+        let temp_key_path = self.keys_dir.join(format!("{}.raw.tmp", volume_id));
+        tokio::fs::write(&temp_key_path, &raw_key).await?;
+
+        // 5. Load key into ZFS
+        let dataset = self.zfs.full_path(&format!("volumes/{}", volume_id));
+        let result = self.zfs.cli().load_key(&dataset, temp_key_path.to_str().unwrap()).await;
+
+        // 6. Secure-delete temp key
+        tokio::fs::write(&temp_key_path, vec![0u8; 32]).await.ok();
+        tokio::fs::remove_file(&temp_key_path).await.ok();
+
+        result.map(|()| EncryptionStatus::ZfsNative)
+    }
+
+    /// Unlock an encrypted volume
+    pub async fn unlock_volume(&self, volume_id: uuid::Uuid) -> Result<(), StorageError> {
+        let wrapped_path = self.keys_dir.join(format!("{}.wrapped", volume_id));
+        let encoded = tokio::fs::read_to_string(&wrapped_path).await
+            .map_err(|_| StorageError::NotFound(format!("wrapped key for {}", volume_id)))?;
+
+        let dek = DataKey::from_base64(&encoded)
+            .map_err(|e| StorageError::Encryption(format!("DEK parse: {}", e)))?;
+
+        let raw_key = self.provider.decrypt_dek(&dek.ciphertext, &dek.iv).await
+            .map_err(|e| StorageError::Encryption(format!("Key unwrap: {}", e)))?;
+
+        let temp_key_path = self.keys_dir.join(format!("{}.raw.tmp", volume_id));
+        tokio::fs::write(&temp_key_path, &raw_key).await?;
+
+        let dataset = self.zfs.full_path(&format!("volumes/{}", volume_id));
+        let result = self.zfs.cli().load_key(&dataset, temp_key_path.to_str().unwrap()).await;
+
+        tokio::fs::write(&temp_key_path, vec![0u8; 32]).await.ok();
+        tokio::fs::remove_file(&temp_key_path).await.ok();
+
+        result
+    }
+
+    /// Lock (unload key) for a volume
+    pub async fn lock_volume(&self, volume_id: uuid::Uuid) -> Result<(), StorageError> {
+        let dataset = self.zfs.full_path(&format!("volumes/{}", volume_id));
+        self.zfs.cli().unload_key(&dataset).await
+    }
+
+    /// Check encryption status of a volume
+    pub async fn get_encryption_status(&self, volume_id: uuid::Uuid) -> Result<EncryptionStatus, StorageError> {
+        let dataset = self.zfs.full_path(&format!("volumes/{}", volume_id));
+        if self.zfs.cli().is_encrypted(&dataset).await? {
+            Ok(EncryptionStatus::ZfsNative)
+        } else {
+            Ok(EncryptionStatus::Unencrypted)
+        }
     }
 }
 
@@ -251,6 +344,30 @@ impl DataKey {
             iv,
             master_key_id,
         })
+    }
+}
+
+/// Encryption status for a volume
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum EncryptionStatus {
+    /// No encryption applied
+    Unencrypted,
+    /// ZFS native encryption (encryption=on, keyformat=raw/passphrase)
+    ZfsNative,
+    /// LUKS2 container (cryptsetup)
+    Luks2,
+    /// Application-level envelope encryption (DEK/KEK)
+    ApplicationLevel,
+}
+
+impl std::fmt::Display for EncryptionStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EncryptionStatus::Unencrypted => write!(f, "unencrypted"),
+            EncryptionStatus::ZfsNative => write!(f, "zfs_native"),
+            EncryptionStatus::Luks2 => write!(f, "luks2"),
+            EncryptionStatus::ApplicationLevel => write!(f, "application_level"),
+        }
     }
 }
 

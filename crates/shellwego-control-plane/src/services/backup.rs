@@ -182,6 +182,13 @@ impl BackupService {
         backup.status = BackupStatus::InProgress { progress_percent: 0 };
         self.update_backup(backup.clone()).await;
 
+        // TODO(Plan 10): Replace simulated backup with real ZFS + S3 integration.
+        // Real implementation:
+        // 1. If ResourceType::Volume, dispatch ZFS snapshot to the hosting agent
+        // 2. Stream snapshot data to S3 backend (shellwego-storage::S3Backend)
+        // 3. Update backup.size_bytes from ZFS snapshot used space
+        // 4. For now, simulate with placeholder sizes
+
         // Simulate backup phases
         for progress in [25, 50, 75, 100] {
             tokio::time::sleep(Duration::from_millis(50)).await;

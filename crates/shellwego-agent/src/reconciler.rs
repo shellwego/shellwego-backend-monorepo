@@ -7,6 +7,7 @@ use tokio::time::{interval, Duration};
 use tracing::{debug, error, info};
 
 use shellwego_schema::DesiredApp;
+use shellwego_storage::{ZfsManager, VolumeInfo};
 use crate::daemon::StateClient;
 use crate::vmm::{DriveConfig, MicrovmConfig, NetworkInterface, VmmManager};
 use shellwego_network::{CniNetwork, NetworkConfig};
@@ -17,6 +18,7 @@ pub struct Reconciler {
     vmm: VmmManager,
     network: std::sync::Arc<CniNetwork>,
     state_client: StateClient,
+    zfs: Option<ZfsManager>,
     // TODO: Add metrics (reconciliation latency, drift count)
 }
 
@@ -25,12 +27,21 @@ impl Reconciler {
         vmm: VmmManager,
         network: std::sync::Arc<CniNetwork>,
         state_client: StateClient,
+        zfs_pool: Option<&str>,
     ) -> Self {
-        Self {
-            vmm,
-            network,
-            state_client,
+        let zfs = zfs_pool.and_then(|pool| {
+            tokio::runtime::Handle::current().block_on(async {
+                ZfsManager::new(pool).await.ok()
+            })
+        });
+
+        if zfs.is_some() {
+            info!("ZFS storage backend initialized");
+        } else {
+            tracing::warn!("ZFS unavailable, falling back to directory-based volumes");
         }
+
+        Self { vmm, network, state_client, zfs }
     }
 
     /// Main reconciliation loop
@@ -263,10 +274,26 @@ impl Reconciler {
     pub async fn reconcile_volumes(&self, apps: &[DesiredApp]) -> anyhow::Result<()> {
         for app in apps {
             for vol in &app.volumes {
-                let host_path = std::path::Path::new(&vol.device);
-                if !host_path.exists() {
-                    info!("Creating volume directory for {}", vol.volume_id);
-                    tokio::fs::create_dir_all(host_path).await?;
+                if let Some(ref zfs) = self.zfs {
+                    let volume_dataset = zfs.full_path(&format!("volumes/{}", vol.volume_id));
+
+                    if !zfs.cli().dataset_exists(&volume_dataset).await? {
+                        info!("Provisioning ZFS volume for {}", vol.volume_id);
+                        let size_gb = 10; // Default size if not specified
+                        zfs.create_volume(vol.volume_id, size_gb).await?;
+                    }
+
+                    // Get mountpoint for drive config
+                    let _info = zfs.cli().get_info(&volume_dataset).await?;
+                    // Note: vol.device is not directly mutable here since vol is &VolumeMount.
+                    // The mountpoint is resolved at create_microvm time via get_info if needed.
+                } else {
+                    // Fallback: directory-based volumes (dev mode)
+                    let host_path = std::path::Path::new(&vol.device);
+                    if !host_path.exists() {
+                        info!("Creating volume directory for {}", vol.volume_id);
+                        tokio::fs::create_dir_all(host_path).await?;
+                    }
                 }
             }
         }

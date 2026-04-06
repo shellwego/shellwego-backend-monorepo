@@ -279,10 +279,17 @@ pub async fn init(config: &ObservabilityConfig) -> Result<ObservabilityHandle, O
 fn init_metrics(config: &ObservabilityConfig) -> Result<Arc<MetricsRegistry>, ObservabilityError> {
     let registry = Arc::new(MetricsRegistry::new());
 
-    // Register built-in ShellWeGo metrics
+    // Register process collector (RSS, CPU, file descriptors, etc.)
+    if config.metrics.enable_process_metrics {
+        let pc = prometheus::ProcessCollector::for_self();
+        registry.inner_registry()
+            .register(Box::new(pc))
+            .map_err(|e| ObservabilityError::MetricsError(e.to_string()))?;
+    }
+
+    // Register built-in ShellWeGo metrics on the actual registry
     if config.metrics.enable_builtin_metrics {
-        let builtin_registry = prometheus::Registry::new();
-        builtin::register_builtin(&builtin_registry)?;
+        builtin::register_builtin(registry.inner_registry())?;
     }
 
     Ok(registry)
@@ -337,6 +344,22 @@ mod tests {
         assert!(handle.metrics().export_text().is_ok());
 
         // Cleanup
+        handle.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_init_default_config_exports_builtin_metrics() {
+        let mut config = ObservabilityConfig::default();
+        config.tracing.otlp_endpoint = "disabled".to_string();
+        config.metrics.serve_endpoint = false;
+        let handle = init(&config).await.unwrap();
+
+        let exported = handle.metrics().export_text().unwrap();
+        assert!(exported.contains("shellwego_microvm_spawn_duration_seconds"));
+        assert!(exported.contains("shellwego_node_memory_pressure"));
+        assert!(exported.contains("shellwego_network_dropped_packets_total"));
+        assert!(exported.contains("shellwego_storage_pool_usage"));
+
         handle.shutdown().await.unwrap();
     }
 

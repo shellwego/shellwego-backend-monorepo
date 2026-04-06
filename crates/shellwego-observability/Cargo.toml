@@ -29,7 +29,9 @@ serde_json = { workspace = true }
 
 # HTTP for exporters
 reqwest = { workspace = true }
-hyper = { version = "0.14", features = ["full"] }
+hyper = { workspace = true, features = ["server", "http1", "runtime"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = { workspace = true }
 
 # Tracing integration
 tracing = { workspace = true }

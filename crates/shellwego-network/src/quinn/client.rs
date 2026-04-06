@@ -1,4 +1,4 @@
-use shellwego_schema::{Message, QuicConfig};
+use shellwego_schema::{BusConfig, BusMessage, ChannelPriority, Message, QuicConfig, SubscriptionId, Topic};
 use anyhow::{Context, Result};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -68,7 +68,6 @@ impl QuinnClient {
         let quinn_config = quinn::ClientConfig::new(Arc::new(crypto));
 
         // Use the hostname from the socket address as the TLS server name (SNI).
-        // This can be overridden by callers who need a specific name.
         let server_name = "shellwego";
 
         let connecting = endpoint
@@ -127,6 +126,7 @@ impl QuinnClient {
         Ok(())
     }
 
+    /// Send a raw `Message` to the QUIC server.
     pub async fn send(&self, message: Message) -> Result<()> {
         let connection = self.connection.as_ref().context("Not connected")?;
         let data = postcard::to_allocvec(&message).context("Serialize")?;
@@ -136,6 +136,7 @@ impl QuinnClient {
         Ok(())
     }
 
+    /// Receive a raw `Message` from the QUIC server.
     pub async fn receive(&self) -> Result<Message> {
         let connection = self.connection.as_ref().context("Not connected")?;
         let (_send_stream, mut recv_stream) =
@@ -145,6 +146,92 @@ impl QuinnClient {
             .await
             .context("Read")?;
         postcard::from_bytes(&data).context("Deserialize")
+    }
+
+    // -----------------------------------------------------------------------
+    // Bus-aware methods (Plan 03)
+    // -----------------------------------------------------------------------
+
+    /// Publish a message to a topic on the bus.
+    ///
+    /// Creates a `BusMessage` envelope and sends it as a `Message::Publish` variant.
+    /// Returns the `msg_id` of the published message.
+    pub async fn publish(
+        &self,
+        topic: &str,
+        payload: Message,
+        priority: ChannelPriority,
+    ) -> Result<uuid::Uuid> {
+        let connection = self.connection.as_ref().context("Not connected")?;
+
+        let topic = Topic::new(topic).context("Invalid topic name")?;
+        let bus_msg = BusMessage::new(topic, payload, priority);
+        let msg_id = bus_msg.msg_id;
+
+        let envelope = bus_msg.to_envelope().context("Failed to create envelope")?;
+        let msg = Message::Publish {
+            bus_message: envelope,
+        };
+
+        let data = postcard::to_allocvec(&msg).context("Serialize publish message")?;
+        let (mut send_stream, _recv_stream) = connection.open_bi().await.context("Open stream")?;
+        send_stream.write_all(&data).await.context("Write")?;
+        send_stream.finish().context("Finish")?;
+
+        Ok(msg_id)
+    }
+
+    /// Subscribe to a topic pattern.
+    ///
+    /// Sends a `Message::Subscribe` to the server. After subscribing,
+    /// the server will forward matching messages to this connection.
+    pub async fn subscribe(&self, subscription_id: SubscriptionId, topic_pattern: &str) -> Result<()> {
+        let msg = Message::Subscribe {
+            subscription_id,
+            topic_pattern: topic_pattern.to_string(),
+        };
+        self.send(msg).await
+    }
+
+    /// Unsubscribe from a topic.
+    ///
+    /// Sends a `Message::Unsubscribe` to the server.
+    pub async fn unsubscribe(&self, subscription_id: SubscriptionId) -> Result<()> {
+        let msg = Message::Unsubscribe {
+            subscription_id,
+        };
+        self.send(msg).await
+    }
+
+    /// Send an acknowledgment for a received message.
+    pub async fn ack(&self, msg_id: uuid::Uuid) -> Result<()> {
+        let msg = Message::Ack { msg_id };
+        self.send(msg).await
+    }
+
+    /// Send a negative acknowledgment for a failed message.
+    pub async fn nack(&self, msg_id: uuid::Uuid, reason: &str) -> Result<()> {
+        let msg = Message::Nack {
+            msg_id,
+            reason: reason.to_string(),
+        };
+        self.send(msg).await
+    }
+
+    /// Send a Ping to the server and wait for a Pong response.
+    ///
+    /// Returns the round-trip time as a `Duration`.
+    pub async fn ping(&self) -> Result<std::time::Duration> {
+        let start = std::time::Instant::now();
+        let msg = Message::Ping {
+            timestamp: chrono::Utc::now(),
+        };
+        self.send(msg).await?;
+
+        match self.receive().await? {
+            Message::Pong { .. } => Ok(start.elapsed()),
+            other => anyhow::bail!("Expected Pong, got: {:?}", std::mem::discriminant(&other)),
+        }
     }
 
     pub fn is_connected(&self) -> bool {
@@ -207,6 +294,45 @@ mod tests {
         let client = QuinnClient::new(QuicConfig::default());
         let result = client.receive().await;
         // Should fail with "Not connected"
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_publish_when_not_connected() {
+        let client = QuinnClient::new(QuicConfig::default());
+        let result = client.publish(
+            "test.topic",
+            Message::Ping { timestamp: chrono::Utc::now() },
+            ChannelPriority::Command,
+        ).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_subscribe_when_not_connected() {
+        let client = QuinnClient::new(QuicConfig::default());
+        let result = client.subscribe(SubscriptionId(1), "agent.*").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_unsubscribe_when_not_connected() {
+        let client = QuinnClient::new(QuicConfig::default());
+        let result = client.unsubscribe(SubscriptionId(1)).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_ack_when_not_connected() {
+        let client = QuinnClient::new(QuicConfig::default());
+        let result = client.ack(uuid::Uuid::nil()).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_nack_when_not_connected() {
+        let client = QuinnClient::new(QuicConfig::default());
+        let result = client.nack(uuid::Uuid::nil(), "test reason").await;
         assert!(result.is_err());
     }
 }

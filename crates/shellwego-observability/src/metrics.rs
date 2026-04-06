@@ -16,6 +16,11 @@ use prometheus::{
 };
 use tokio::sync::broadcast;
 
+use hyper::server::conn::http1;
+use hyper_util::rt::TokioIo;
+use http_body_util::Full;
+use hyper::body::Bytes;
+
 use crate::ObservabilityError;
 
 /// Global metrics registry singleton
@@ -79,6 +84,11 @@ impl MetricsRegistry {
             gauges: RwLock::new(HashMap::new()),
             histograms: RwLock::new(HashMap::new()),
         }
+    }
+
+    /// Get reference to the inner Prometheus registry (for registering external collectors)
+    pub fn inner_registry(&self) -> &Registry {
+        &self.registry
     }
 
     /// Register custom counter
@@ -209,56 +219,64 @@ impl MetricsRegistry {
         let (shutdown_tx, mut shutdown_rx) = broadcast::channel::<()>(1);
         let registry = self.registry.clone();
 
-        // Create the server task
         let shutdown_tx_clone = shutdown_tx.clone();
         tokio::spawn(async move {
-            let make_svc = hyper::service::make_service_fn(move |_conn| {
-                let registry = registry.clone();
-                async move {
-                    Ok::<_, hyper::Error>(hyper::service::service_fn(move |req| {
-                        let registry = registry.clone();
-                        async move {
-                            match (req.method(), req.uri().path()) {
-                                (&hyper::Method::GET, "/metrics") => {
-                                    let encoder = TextEncoder::new();
-                                    let metric_families = registry.gather();
-                                    let mut buffer = Vec::new();
-                                    match encoder.encode(&metric_families, &mut buffer) {
-                                        Ok(()) => hyper::Response::builder()
-                                            .status(hyper::StatusCode::OK)
-                                            .header("Content-Type", "text/plain; version=0.0.4")
-                                            .body(hyper::Body::from(buffer))
-                                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string())),
-                                        Err(e) => hyper::Response::builder()
-                                            .status(hyper::StatusCode::INTERNAL_SERVER_ERROR)
-                                            .body(hyper::Body::from(format!("Encoding error: {}", e)))
-                                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string())),
+            let listener = match tokio::net::TcpListener::bind(&addr).await {
+                Ok(l) => l,
+                Err(e) => {
+                    tracing::error!("Metrics server bind failed: {}", e);
+                    return;
+                }
+            };
+
+            loop {
+                tokio::select! {
+                    accept_result = listener.accept() => {
+                        match accept_result {
+                            Ok((stream, _)) => {
+                                let registry = registry.clone();
+                                let io = TokioIo::new(stream);
+                                tokio::spawn(async move {
+                                    let service = hyper::service::service_fn(move |req: Request<hyper::body::Incoming>| {
+                                        let registry = registry.clone();
+                                        async move {
+                                            match (req.method(), req.uri().path()) {
+                                                (&hyper::Method::GET, "/metrics") => {
+                                                    let encoder = TextEncoder::new();
+                                                    let metric_families = registry.gather();
+                                                    let mut buffer = Vec::new();
+                                                    match encoder.encode(&metric_families, &mut buffer) {
+                                                        Ok(()) => Ok::<_, hyper::Error>(hyper::Response::new(Full::new(Bytes::from(buffer)))),
+                                                        Err(e) => Ok(hyper::Response::builder()
+                                                            .status(500)
+                                                            .body(Full::new(Bytes::from(format!("Encoding error: {}", e)))).unwrap()),
+                                                    }
+                                                }
+                                                (&hyper::Method::GET, "/health") => {
+                                                    Ok::<_, hyper::Error>(hyper::Response::new(Full::new(Bytes::from("OK"))))
+                                                }
+                                                _ => {
+                                                    Ok::<_, hyper::Error>(hyper::Response::builder()
+                                                        .status(404)
+                                                        .body(Full::new(Bytes::from("Not Found"))).unwrap())
+                                                }
+                                            }
+                                        }
+                                    });
+                                    if let Err(e) = http1::Builder::new().serve_connection(io, service).await {
+                                        tracing::error!("Metrics server connection error: {}", e);
                                     }
-                                }
-                                (&hyper::Method::GET, "/health") => hyper::Response::builder()
-                                    .status(hyper::StatusCode::OK)
-                                    .body(hyper::Body::from("OK"))
-                                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string())),
-                                _ => hyper::Response::builder()
-                                    .status(hyper::StatusCode::NOT_FOUND)
-                                    .body(hyper::Body::from("Not Found"))
-                                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string())),
+                                });
+                            }
+                            Err(e) => {
+                                tracing::error!("Metrics server accept error: {}", e);
                             }
                         }
-                    }))
-                }
-            });
-
-            let server = hyper::Server::bind(&addr).serve(make_svc);
-
-            tokio::select! {
-                result = server => {
-                    if let Err(e) = result {
-                        tracing::error!("Metrics server error: {}", e);
                     }
-                }
-                _ = shutdown_rx.recv() => {
-                    tracing::info!("Metrics server shutting down");
+                    _ = shutdown_rx.recv() => {
+                        tracing::info!("Metrics server shutting down");
+                        break;
+                    }
                 }
             }
         });
@@ -559,6 +577,24 @@ pub mod builtin {
             Opts::new("shellwego_active_connections", "Number of active connections"),
             &["node", "type"]
         ).expect("Failed to create ACTIVE_CONNECTIONS metric");
+
+        /// Node memory pressure ratio (0.0 - 1.0)
+        pub static ref NODE_MEMORY_PRESSURE: prometheus::GaugeVec = prometheus::GaugeVec::new(
+            Opts::new("shellwego_node_memory_pressure", "Node memory pressure ratio (used/total)"),
+            &["node"]
+        ).expect("Failed to create NODE_MEMORY_PRESSURE metric");
+
+        /// Network dropped packets counter
+        pub static ref NETWORK_DROPPED_PACKETS: prometheus::CounterVec = prometheus::CounterVec::new(
+            Opts::new("shellwego_network_dropped_packets_total", "Total network packets dropped"),
+            &["node", "interface", "direction"]
+        ).expect("Failed to create NETWORK_DROPPED_PACKETS metric");
+
+        /// Storage pool usage ratio (0.0 - 1.0)
+        pub static ref STORAGE_POOL_USAGE: prometheus::GaugeVec = prometheus::GaugeVec::new(
+            Opts::new("shellwego_storage_pool_usage", "Storage pool usage ratio (used/total)"),
+            &["node", "pool"]
+        ).expect("Failed to create STORAGE_POOL_USAGE metric");
     }
 
     /// Register all built-in metrics with a registry
@@ -584,7 +620,35 @@ pub mod builtin {
         registry
             .register(Box::new(ACTIVE_CONNECTIONS.clone()))
             .map_err(|e| ObservabilityError::MetricsError(e.to_string()))?;
+        registry
+            .register(Box::new(NODE_MEMORY_PRESSURE.clone()))
+            .map_err(|e| ObservabilityError::MetricsError(e.to_string()))?;
+        registry
+            .register(Box::new(NETWORK_DROPPED_PACKETS.clone()))
+            .map_err(|e| ObservabilityError::MetricsError(e.to_string()))?;
+        registry
+            .register(Box::new(STORAGE_POOL_USAGE.clone()))
+            .map_err(|e| ObservabilityError::MetricsError(e.to_string()))?;
         Ok(())
+    }
+
+    /// Update node memory pressure
+    pub fn set_memory_pressure(node: &str, ratio: f64) {
+        if let Err(e) = NODE_MEMORY_PRESSURE.with_label_values(&[node]).set(ratio) {
+            tracing::warn!("Failed to set memory pressure: {}", e);
+        }
+    }
+
+    /// Record dropped packets
+    pub fn inc_dropped_packets(node: &str, interface: &str, direction: &str, count: u64) {
+        NETWORK_DROPPED_PACKETS.with_label_values(&[node, interface, direction]).inc_by(count as f64);
+    }
+
+    /// Update storage pool usage
+    pub fn set_storage_usage(node: &str, pool: &str, ratio: f64) {
+        if let Err(e) = STORAGE_POOL_USAGE.with_label_values(&[node, pool]).set(ratio) {
+            tracing::warn!("Failed to set storage usage: {}", e);
+        }
     }
 }
 
@@ -660,5 +724,48 @@ mod tests {
         }).await;
         
         assert_eq!(result, 123);
+    }
+
+    #[test]
+    fn test_builtin_metrics_registered() {
+        let registry = MetricsRegistry::new();
+        builtin::register_builtin(registry.inner_registry()).unwrap();
+        let text = registry.export_text().unwrap();
+
+        // Verify all README-described metrics are present
+        assert!(text.contains("shellwego_microvm_spawn_duration_seconds"));
+        assert!(text.contains("shellwego_node_memory_pressure"));
+        assert!(text.contains("shellwego_network_dropped_packets_total"));
+        assert!(text.contains("shellwego_storage_pool_usage"));
+        assert!(text.contains("shellwego_apps_running"));
+        assert!(text.contains("shellwego_network_bytes_total"));
+        assert!(text.contains("shellwego_deployment_count_total"));
+        assert!(text.contains("shellwego_http_request_duration_seconds"));
+        assert!(text.contains("shellwego_active_connections"));
+    }
+
+    #[test]
+    fn test_memory_pressure_helpers() {
+        let registry = MetricsRegistry::new();
+        builtin::register_builtin(registry.inner_registry()).unwrap();
+
+        builtin::set_memory_pressure("test-node", 0.75);
+        let text = registry.export_text().unwrap();
+        assert!(text.contains("shellwego_node_memory_pressure{node=\"test-node\"} 0.75"));
+
+        builtin::inc_dropped_packets("test-node", "eth0", "ingress", 50);
+        builtin::set_storage_usage("test-node", "default", 0.82);
+
+        let text = registry.export_text().unwrap();
+        assert!(text.contains("shellwego_network_dropped_packets_total"));
+        assert!(text.contains("shellwego_storage_pool_usage"));
+    }
+
+    #[tokio::test]
+    async fn test_metrics_server_start_stop() {
+        let registry = Arc::new(MetricsRegistry::new());
+        let handle = registry.clone().serve_endpoint("127.0.0.1:0").await.unwrap();
+        handle.stop().await.unwrap();
+        // Verify no panic on double-stop (Drop impl handles this)
     }
 }

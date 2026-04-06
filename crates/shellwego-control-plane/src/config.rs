@@ -6,6 +6,10 @@ use serde::Deserialize;
 use std::path::Path;
 use tracing::info;
 
+use crate::services::scheduler::SchedulerConfig;
+use crate::services::deploy_pipeline::DeployPipelineConfig;
+use crate::services::guardian::GuardianConfig;
+
 /// Main configuration structure
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
@@ -32,6 +36,15 @@ pub struct Config {
     
     /// KMS configuration
     pub kms: KmsConfigEntry,
+
+    /// Scheduler configuration
+    pub scheduler: SchedulerConfig,
+    
+    /// Deploy pipeline configuration
+    pub deploy: DeployPipelineConfig,
+    
+    /// Guardian configuration
+    pub guardian: GuardianConfig,
 
     /// Registry mirror configuration (loaded from REGISTRY_MIRRORS env var)
     #[serde(default)]
@@ -249,6 +262,9 @@ impl Config {
                 vault_address: None,
                 vault_token: None,
             },
+            scheduler: SchedulerConfig::default(),
+            deploy: DeployPipelineConfig::default(),
+            guardian: GuardianConfig::default(),
             registry_mirrors,
         })
     }
@@ -301,6 +317,9 @@ impl Default for Config {
                 vault_address: None,
                 vault_token: None,
             },
+            scheduler: SchedulerConfig::default(),
+            deploy: DeployPipelineConfig::default(),
+            guardian: GuardianConfig::default(),
             registry_mirrors: None,
         }
     }
